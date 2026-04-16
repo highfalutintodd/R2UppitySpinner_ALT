@@ -1,31 +1,53 @@
-# R2 Uppity Spinner V3
+# R2 Uppity Spinner ALT (v3.3.4)
 
-ESP32-based periscope lifter and rotary controller for R2-D2 astromech droids. Supports the **Greg Hulette** and **IA-Parts** periscope lifter mechanisms with TB9051FTG motor drivers.
+A fork of [reeltwo/R2UppitySpinnerV3](https://github.com/reeltwo/R2UppitySpinnerV3) — the ESP32-based periscope lifter and rotary controller for R2-D2 astromech droids.
+
+This fork focuses on **robustness for real-world droid builds**: tighter lead-screw mechanisms, high-friction belt drives, metal dome EMI, and field recovery. All original Marcduino serial commands and web interfaces are fully preserved — this is a drop-in replacement for the stock firmware.
 
 [![Uppity Spinner](https://i.vimeocdn.com/video/1153816619-6fef8819cf32b562e0519537a46baed562bb51651010442a9ccdd9909c40952e-d_640x360)](https://vimeo.com/558277516)
 
-## Features
+## What's Different from Stock
 
-- Full web interface for control, calibration, diagnostics, and rescue
-- Serial (Marcduino) and WiFi command interfaces
-- Automatic safety maneuver on boot (home rotary, lower lifter)
-- Soft-stop pulsed drive for lead-screw deceleration
-- Encoder-based position tracking with drift correction
-- Lifter distance rejection to guard against EMI-corrupted measurements
-- Rescue page with 60-second safety override for field recovery
-- OTA firmware updates
-- Droid Remote (SMQ) wireless controller support
-- Multi-lifter ID addressing
-- Stored sequence playback (up to 100 sequences)
-- Random animation mode with configurable speed/intervals
+### Bug Fixes
 
-## Libraries Required
+**ESTOP actually stops everything now.** The stock web ESTOP (`/api/estop`) sets an abort flag, but rotary homing functions didn't check it — the rotary would keep spinning after ESTOP until it finished its homing sequence. This fork adds abort checks to `rotateUntilHome()`, `rotateLeftHome()`, `rotateRightHome()`, and `rotaryMotorAbsolutePosition()`. Additionally, the abort flag is now properly cleared after ESTOP so the next command isn't silently consumed.
 
-- [Reeltwo](https://github.com/reeltwo/Reeltwo) — Core droid framework (WiFi, web server, OTA, SMQ remote)
-- [Adafruit NeoPixel](https://github.com/adafruit/Adafruit_NeoPixel) — RGB status LED
-- [PCF8574](https://github.com/reeltwo/PCF8574) — I2C GPIO expander (optional)
+**Stall detection works on slow motors.** The stock `seekToBottom()` uses `LifterStatus` to detect stalls, which requires 20+ encoder ticks per 200ms. Greg Hulette lifters at 40% power produce only ~15 ticks/200ms, causing false stall aborts that skip encoder re-zeroing and corrupt position tracking. This fork replaces it with a 2-second position-change timeout — any movement resets the timer, so even slow motors work correctly.
+
+**Rotary precision creep actually varies with speed.** The stock `rotateUntilHome()` formula `0.1 * abs(speed)` squashes the input range so that `speed=0.01` and `speed=0.1` produce nearly identical motor speeds. This fork uses `ROTARY_MINIMUM_POWER/100.0 + abs(speed)` so low-speed homing commands produce meaningfully different approach speeds.
+
+### New Features
+
+**Breakaway boost.** Lead-screw mechanisms with tight belts or 3D-printed mounts can have significant static friction. The stock pulsed drive pattern (3ms on / 1ms off) may not overcome it from a standstill. This fork adds a two-phase startup:
+1. **Continuous burst** — runs the motor without pulsing until the encoder confirms real movement (default: 10 ticks or 500ms timeout).
+2. **Ramp to pulsed** — gradually transitions from continuous drive to the standard pulsed pattern over a distance proportional to the seek length.
+
+Short seeks (< 30 ticks) skip the boost entirely. The ramp scales to `min(80, seekDistance/3)` ticks, preventing momentum buildup on short moves while still providing enough kick for long ones. Breakaway is used in both UP and DOWN seek loops, with automatic re-boost if slow progress is detected mid-seek.
+
+**Firmware versioning.** A `FIRMWARE_VERSION` define (currently `"3.3.4"`) is displayed:
+- Serial boot banner: `R2UppitySpinner v3.3.4`
+- ALIVE heartbeat (every 60s): `ALIVE v3.3.4`
+- `#PCONFIG` output: `Firmware: 3.3.4`
+- Web page titles and status bar (6th column)
+- `/api/status` JSON: `"version":"3.3.4"`
+
+**Expanded web status bar.** The status bar is now 6 columns:
+| Height | Rotation | Safety | Motors | Last Command | Firmware |
+|--------|----------|--------|--------|-------------|----------|
+
+The rotary field shows degrees (0–359) or "home" when near 0°.
+
+### Enhanced Safety Systems
+
+**Pulsed drive for lead screws.** All vertical motion uses a 3ms ON / 1ms OFF pulse pattern instead of continuous PWM. Lead screws self-lock when power is removed, so each pulse moves ~1 encoder tick and the mechanism brakes mechanically in the off period. This prevents violent limit switch impacts that continuous drive causes when momentum builds up.
+
+**Distance rejection.** During calibration and safety maneuver, measured lifter distance is validated against the stored calibrated value. Measurements under 50 ticks or differing more than 20% from stored are rejected — this guards against EMI-corrupted encoder readings caused by metal domes.
+
+**Encoder drift correction.** After a seek completes, the firmware holds the target position. Every 5 seconds it checks if the encoder has drifted beyond a configurable threshold (default 5%, adjustable via `driftpct` preference, range 0–20%) and re-seeks if needed. Gives up after 3 consecutive failures to prevent infinite retry loops from persistent EMI.
 
 ## Hardware
+
+Same hardware as stock — no changes required.
 
 ### Microcontroller
 
@@ -75,68 +97,28 @@ When using the I2C GPIO expander (PCF8574 at address 0x20), limit switches and m
 
 Both are auto-detected during calibration.
 
+## Libraries Required
+
+**Important:** This fork requires a patched version of Reeltwo for ESP32 Arduino core 3.x / ESP-IDF v5.5 compatibility. The patched library is included in the libraries zip distribution.
+
+- [Reeltwo](https://github.com/reeltwo/Reeltwo) — Core droid framework (WiFi, web server, OTA, SMQ remote) — **use patched version from libraries zip**
+- [Adafruit NeoPixel](https://github.com/adafruit/Adafruit_NeoPixel) — RGB status LED
+- [PCF8574](https://github.com/reeltwo/PCF8574) — I2C GPIO expander (optional)
+
 ## Getting Started
 
 1. Wire the ESP32, motor drivers, encoders, and limit switches per the pin table above.
-2. Flash the firmware via USB or OTA.
-3. Connect to the WiFi access point (default SSID: `R2Uppity`, password: `Astromech`).
-4. Open `http://192.168.4.1/` in a browser.
-5. Run calibration from the Setup page or send `#PSC` over serial.
+2. Install the three required libraries into your Arduino `libraries/` folder.
+3. Flash the firmware via USB or OTA.
+4. Connect to the WiFi access point (default SSID: `R2Uppity`, password: `Astromech`).
+5. Open `http://192.168.4.1/` in a browser.
+6. Run calibration from the Setup page or send `#PSC` over serial.
 
 Default serial baud rate is **9600**. Default I2C address is **0x20**.
 
-## Web Interface
-
-Access the web UI at `http://192.168.4.1/` (AP mode) or `http://R2Uppity.local/` (station mode with mDNS).
-
-### Periscope Page (`/periscope`)
-
-Main control interface:
-- **Lift joystick** — raise/lower with real-time height percentage
-- **Rotary dial** — rotate periscope with live degree readout
-- **Speed sliders** — independent lift and rotary speed control
-- **Light kit selector** — modes 0–7 (full cycle, off, Obi Wan, Yoda, Sith, search light, Dagobah, sparkle)
-- **Preset buttons** — trigger stored sequences 0–9
-- **Action buttons** — Random Move, Home, etc.
-- **Status bar** — height, rotation, safety state, motor state, last command
-
-### Rescue Page (`/rescue`)
-
-Emergency manual control for field recovery:
-- **Raw lift/rotary joysticks** — direct motor jog, bypasses sequencing
-- **Safety override** — hold button 3 seconds to activate 60-second bypass of safety checks (allows descent when rotary not homed, rotary spin below safe height)
-- **Motor enable/disable** toggle
-- **Fault clearing**
-- **Rotary home set** and **safe spin height** adjustment
-
-### Log Page (`/log`)
-
-Live debug output from the ESP32 serial buffer, auto-refreshing every 500ms.
-
-### Setup Page (`/setup`)
-
-Configuration hub with links to:
-- **Calibrate** — guided lifter/rotary calibration wizard
-- **Marcduino** — command reference
-- **Parameters** — motor calibration parameter editor
-- **WiFi** — network mode and credentials
-- **Remote** — Droid Remote pairing
-- **Firmware** — OTA upload
-
-## Web API
-
-| Endpoint | Method | Parameters | Description |
-|----------|--------|------------|-------------|
-| `/api/status` | GET | — | JSON: height, ticks, rotation, safety/fault/motor/limit states, override timer, RSSI |
-| `/api/cmd` | GET | `c=<command>` | Execute a Marcduino command |
-| `/api/lift` | GET | `t=<-1.0 to 1.0>` | Raw lift jog throttle |
-| `/api/rotary` | GET | `s=<-1.0 to 1.0>` | Raw rotary spin speed |
-| `/api/estop` | GET | — | Emergency stop all motors |
-| `/api/action` | GET | `do=<action>` | Actions: `clearfault`, `enablemotors`, `homerotary`, `safety`, `sethome`, `setsafeheight`, `clearenc`, `override_on`, `override_off`, `clearprefs`, `reboot` |
-| `/api/log` | GET | `since=<index>` | Streaming log lines |
-| `/upload/firmware` | POST | multipart | OTA firmware upload |
-
 ## Serial Commands
+
+All stock Marcduino commands are supported with no changes to syntax.
 
 ### Lifter Commands
 
@@ -148,7 +130,7 @@ Commands start with `:P` followed by a subcommand. Multiple commands can be chai
 |---------|-------------|
 | `:PP<0-100>[,speed]` | Move lifter to position % (0=down, 100=up) |
 | `:PPR[,speed]` | Random position |
-| `:PH[speed]` | Home (rotate to 0°, lower to bottom) |
+| `:PH[speed]` | Home (rotate to 0deg, lower to bottom) |
 | `:PA<degrees>[,speed][,maxspeed]` | Rotate to absolute degrees |
 | `:PAR[,speed][,maxspeed]` | Random absolute rotation |
 | `:PD<degrees>[,speed][,maxspeed]` | Rotate relative degrees (+CCW, -CW) |
@@ -169,12 +151,12 @@ Commands start with `:P` followed by a subcommand. Multiple commands can be chai
 | `#PL` | List stored sequences |
 | `#PD<n>` | Delete sequence n |
 | `#PS<n>:<seq>` | Store sequence (e.g. `#PS1:H`) |
-| `#PID<n>` | Set lifter ID (0–255) for multi-lifter systems |
+| `#PID<n>` | Set lifter ID (0-255) for multi-lifter systems |
 | `#PBAUD<rate>` | Change baud rate (persistent, takes effect after reboot) |
 | `#PR` | Toggle rotary enable/disable (reboots) |
 | `#PNCL` / `#PNOL` | Set lifter limit switch normally closed / normally open |
 | `#PNCR` / `#PNOR` | Set rotary limit switch normally closed / normally open |
-| `#PCONFIG` | Display full configuration |
+| `#PCONFIG` | Display full configuration (now includes firmware version) |
 | `#PSTATUS` | Show WiFi/remote status |
 | `#PWIFI[0\|1]` | Enable/disable WiFi (toggle if no arg) |
 | `#PWIFIRESET` | Reset WiFi to defaults and reboot |
@@ -185,19 +167,6 @@ Commands start with `:P` followed by a subcommand. Multiple commands can be chai
 | `#PRUNPAIR` | Unpair all remotes (reboots) |
 | `#PDEBUG[0\|1]` | Enable/disable verbose debug output |
 | `#PRESTART` | Reboot |
-
-### Light Kit Modes
-
-| Mode | Name | Description |
-|------|------|-------------|
-| 0 | Full Cycle | Random color, pattern, and speed |
-| 1 | Off | All LEDs off |
-| 2 | Obi Wan | Blue top LEDs, blue sides, random white main |
-| 3 | Yoda | Green fade on/off |
-| 4 | Sith | Red flash |
-| 5 | Search Light | All white, center bright LED on |
-| 6 | Dagobah | Screen-accurate: white main, white sides, red lower, blinking red rear |
-| 7 | Sparkle | Random white flashing |
 
 ### Stored Sequence Examples
 
@@ -210,63 +179,35 @@ Commands start with `:P` followed by a subcommand. Multiple commands can be chai
     #PS7:P100:L5:R-30             (search light, spin CW)
     #PS8:H:P50:W2:P85,35:A90,25:W2:A270,20,100:W2:P100,100:L5:R50:W4:H  (sneaky periscope)
 
-### Multi-Lifter Addressing
+## Web Interface
 
-Assign each lifter a unique ID with `#PID<n>`. Prefix commands with the ID to target a specific lifter:
+Access the web UI at `http://192.168.4.1/` (AP mode) or `http://R2Uppity.local/` (station mode with mDNS).
 
-    :P1S1    (lifter #1: play sequence 1)
-    :PS1     (all lifters: play sequence 1)
-    #P1CONFIG (show config for lifter #1)
+All stock web pages are preserved. Key additions:
+- Status bar now has 6 columns (added firmware version)
+- `/api/status` JSON includes `"version"` field
+- Page titles include firmware version
 
-## Safety Systems
+## Troubleshooting
 
-### Safety Maneuver
+### EMI from Metal Dome
 
-Runs automatically on boot: lowers lifter to bottom limit, rotates to home (0°). Must complete before any motion commands are accepted. Prevents the periscope head from hitting the dome during rotation.
+Metal domes cause electromagnetic interference on encoder signals, leading to undercounted ticks, phantom negative positions, and false limit triggers. Mitigations:
 
-### Rotary Safe Height
+- **Hardware:** Twist encoder and limit switch wires tightly. Shield or route wires away from metal surfaces.
+- **Software (built-in):** Position clamping prevents negative values. Distance rejection guards against corrupted calibration. Double encoder reset with settling delay at limits. Drift correction with failure limit.
 
-Rotary commands are blocked unless the lifter is above 50% of full travel (configurable). This prevents the periscope head from colliding with the dome interior.
+### Periscope Won't Lower
 
-### Soft Stops (Pulsed Drive)
+If the rotary isn't homed, the safety system blocks descent. Use the Rescue page's safety override (3-second long-press) to bypass for 60 seconds.
 
-The lead-screw mechanism self-locks when power is removed but maintains momentum under continuous drive. Approaching limit switches, the firmware uses pulsed drive (3ms on / 1ms off) instead of continuous PWM to mechanically brake every 4ms, preventing violent limit switch impacts.
+### Lifter Stalls or Hesitates on Startup
 
-### Encoder Drift Correction
+If your lead screw has high static friction (tight belt, 3D-printed mount), the breakaway boost should handle it automatically. Check serial output for `BREAKAWAY` log lines — you should see Phase 1 (burst) and Phase 2 (ramp) completing successfully. If it consistently times out, your minimum power setting may need to be higher (adjustable on the Parameters web page).
 
-After a seek completes, the firmware holds the target position. Every 5 seconds it checks if the encoder has drifted more than 5% (configurable via `driftpct` preference) and re-seeks if needed. Gives up after 3 consecutive failures to prevent infinite retry loops.
+### Calibration Distance Seems Wrong
 
-### Distance Rejection
-
-During calibration and safety maneuver, the measured lifter distance is validated against the stored calibrated value. Measurements under 50 ticks or differing more than 20% from stored are rejected to guard against EMI-corrupted encoder readings.
-
-### Rescue Override
-
-When the periscope is stuck (e.g., rotary not homed, preventing descent), the rescue page provides a 60-second safety override activated by a 3-second long-press. During override, lifter descent and rotary spin are allowed regardless of safety state. Auto-cancels after 60 seconds.
-
-### Motor Fault Detection
-
-The TB9051FTG DIAG pins are monitored. A LOW signal indicates a driver fault (overcurrent, overtemperature). Faults block motor commands and are reported in the web status.
-
-## WiFi Configuration
-
-### Access Point Mode (Default)
-
-- **SSID:** `R2Uppity` (auto-suffixed with MAC on some builds)
-- **Password:** `Astromech`
-- **IP:** `192.168.4.1`
-
-### Station Mode
-
-Connect to an existing WiFi network. Configure via the `/wifi` web page or `#PWIFIRESET`.
-
-### mDNS
-
-When enabled, the board is reachable at `http://R2Uppity.local/` (or custom hostname).
-
-### Droid Remote
-
-Wireless controller via SMQ protocol (Reeltwo library). Pair with `#PRPAIR`, configure hostname with `#PRNAME`, secret with `#PRSECRET`.
+If the measured distance differs >20% from the previously stored value, it's automatically rejected. Run calibration with the dome removed to get a clean measurement, then the stored value will be used even under dome EMI.
 
 ## Assembling the PCB
 
@@ -276,19 +217,6 @@ Wireless controller via SMQ protocol (Reeltwo library). Pair with `#PRPAIR`, con
 ### Part 2
 [![Part2](https://img.youtube.com/vi/MdSRJsYx1T8/hqdefault.jpg)](https://www.youtube.com/watch?v=MdSRJsYx1T8)
 
-## Troubleshooting
+## License
 
-### EMI from Metal Dome
-
-Placing a metal dome over the droid can cause electromagnetic interference on encoder signals, leading to undercounted ticks, phantom negative positions, and false limit triggers. Mitigations:
-
-- **Hardware:** Twist encoder and limit switch wires tightly. Shield or route wires away from metal surfaces.
-- **Software (built-in):** Position clamping prevents negative values. Distance rejection guards against corrupted calibration. Double encoder reset with settling delay at limits. Drift correction with failure limit.
-
-### Periscope Won't Lower
-
-If the rotary isn't homed, the safety system blocks descent. Use the Rescue page's safety override (3-second long-press) to bypass for 60 seconds.
-
-### Calibration Distance Seems Wrong
-
-If the measured distance differs >20% from the previously stored value, it's automatically rejected. Run calibration with the dome removed to get a clean measurement, then the stored value will be used even under dome EMI.
+See [LICENSE](LICENSE) for details.
