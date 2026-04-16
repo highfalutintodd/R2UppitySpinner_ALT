@@ -99,16 +99,16 @@ Both are auto-detected during calibration.
 
 ## Libraries Required
 
-**Important:** This fork requires a patched version of Reeltwo for ESP32 Arduino core 3.x / ESP-IDF v5.5 compatibility. The patched library is included in the libraries zip distribution.
+**Important:** This fork requires a patched version of Reeltwo for ESP32 Arduino core 3.x / ESP-IDF v5.5 compatibility. All three required libraries are included in the `libraries/` folder of this repo — copy them to your Arduino `libraries/` folder (or symlink them).
 
-- [Reeltwo](https://github.com/reeltwo/Reeltwo) — Core droid framework (WiFi, web server, OTA, SMQ remote) — **use patched version from libraries zip**
-- [Adafruit NeoPixel](https://github.com/adafruit/Adafruit_NeoPixel) — RGB status LED
-- [PCF8574](https://github.com/reeltwo/PCF8574) — I2C GPIO expander (optional)
+- **Reeltwo** (patched) — Core droid framework (WiFi, web server, OTA, SMQ remote)
+- **Adafruit NeoPixel** — RGB status LED
+- **PCF8574** — I2C GPIO expander (optional)
 
 ## Getting Started
 
 1. Wire the ESP32, motor drivers, encoders, and limit switches per the pin table above.
-2. Install the three required libraries into your Arduino `libraries/` folder.
+2. Copy the three folders from `libraries/` in this repo into your Arduino `libraries/` folder (replacing any existing versions).
 3. Flash the firmware via USB or OTA.
 4. Connect to the WiFi access point (default SSID: `R2Uppity`, password: `Astromech`).
 5. Open `http://192.168.4.1/` in a browser.
