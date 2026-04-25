@@ -94,6 +94,8 @@ Both are auto-detected during calibration.
 
 6V motors give a snappier, faster periscope. 12V motors are slower and more deliberate.
 
+**The 19:1 lifter motor ([Pololu #4751](https://www.pololu.com/product/4751)) is now a fully tested and supported option in v3.5.0.** Select it from the first-run setup wizard or with `#PMOTOR1`. It ships with its own tuned profile — 0.75 throttle ceiling, 700ms stall timeout, 15% top-of-travel soft-approach ramp — that prevents the frame stress the higher gear ratio would otherwise cause. The 19:1 trades top speed for substantially more torque, which is helpful on stiff or high-friction lifter mechanisms where a 6.3:1 motor struggles to break free of static friction.
+
 ---
 
 ## Libraries Required
