@@ -129,6 +129,22 @@ All commands use the Marcduino protocol. Multiple commands can be chained with c
 :PP100:W2:P0    ← raise, wait 2 seconds, lower
 ```
 
+### Command Chain Ordering
+
+The dispatcher runs chained commands sequentially, but blocking actions (seeks, rotations) hold up everything queued behind them. A few practical rules:
+
+**Set lights before motion, not after.** `:PL<n>` is the only command that doesn't auto-cancel random/move mode and that completes instantly (it just writes GPIO pins). Anything after `:PM` or `:PH` in a chain has to wait for the current move action to finish before it fires.
+
+```
+:PL5:PM         ✓ light kit changes instantly, then random starts
+:PL5:PMA        ✓ lights, then aggressive random
+:PM:PL5         ✗ lights don't change until the first random move ends
+```
+
+**`:PH` turns off the light kit.** The home command explicitly clears the light kit (sends `kLightKit_Off`) before lowering, so any active light show ends when you home. If you want lights on after homing, send `:PH:W2:PL5` (home, wait, then re-light).
+
+**`:PH` does not pre-empt an in-progress motion.** `:PH` and `:PM`'s random actions both run on the same microcontroller core, so a queued `:PH` waits until the current `seekToPosition` or rotation finishes before it starts homing. There is currently no serial-side ESTOP that interrupts mid-motion. The web UI's E-STOP button (`/api/estop`) does work mid-motion because the web handlers run on the other core.
+
 ### Lifter / Rotary Commands
 
 | Command | Description |
