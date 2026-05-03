@@ -143,7 +143,17 @@ The dispatcher runs chained commands sequentially, but blocking actions (seeks, 
 
 **`:PH` turns off the light kit.** The home command explicitly clears the light kit (sends `kLightKit_Off`) before lowering, so any active light show ends when you home. If you want lights on after homing, send `:PH:W2:PL5` (home, wait, then re-light).
 
-**`:PH` does not pre-empt an in-progress motion.** `:PH` and `:PM`'s random actions both run on the same microcontroller core, so a queued `:PH` waits until the current `seekToPosition` or rotation finishes before it starts homing. There is currently no serial-side ESTOP that interrupts mid-motion. The web UI's E-STOP button (`/api/estop`) does work mid-motion because the web handlers run on the other core.
+**`:PH` does not pre-empt an in-progress motion.** `:PH` and `:PM`'s random actions both run on the same microcontroller core, so a queued `:PH` waits until the current `seekToPosition` or rotation finishes before it starts homing. To interrupt mid-motion, use `:PX` (Emergency Stop) or the web UI's E-STOP button — both fire from outside the motor-control loop and pre-empt seeks immediately.
+
+### Emergency Stop — `:PX`
+
+`:PX` is a true serial ESTOP: it aborts any seek, rotation, or random action mid-flight, ends move mode, and stops both motors. Use it as the "panic" command from a controller during a scream / event when something is going haywire and you don't have time to load the web UI.
+
+Two paths get the same end result:
+- **The fast path** is automatic. The UART RX callback scans incoming bytes for the `:PX` signature on a separate task from the motor-control loop. The instant `:PX<CR>` or `:PX<LF>` is detected, it sets the abort flag — so an in-progress seek bails out immediately, the same way the web `/api/estop` does. This works on USB Serial **and** the Marcduino UART2 input (`PIN_RXD2`).
+- **The dispatcher path** runs after the abort already happened. It logs `ESTOP` to the serial monitor and clears any leftover state.
+
+Because `:PX` is a standard Marcduino-style command, you can wire it to a button on any controller that already speaks Marcduino — just bind the button to the string `:PX\r`. It can also live inside a stored sequence (`#PS9:PX`) for one-tap panic.
 
 ### Lifter / Rotary Commands
 
@@ -159,6 +169,7 @@ The dispatcher runs chained commands sequentially, but blocking actions (seeks, 
 | `:PR<speed>` | Continuous spin (+ = CCW, − = CW; 0 = stop/home) |
 | `:PM[,liftSpd,rotSpd,minInt,maxInt]` | Safe random animation mode (uses default aggressiveness) |
 | `:PMG` / `:PMM` / `:PMA` | Random animation, one-shot Gentle / Medium / Aggressive override |
+| `:PX` | **Emergency stop** — aborts any in-progress motion (see below) |
 | `:PW[R]<seconds>` | Wait (R = randomize 1..N seconds) |
 | `:PL<0-7>` | Light kit mode |
 | `:PS<0-100>` | Play stored sequence |
@@ -218,6 +229,20 @@ For builders starting from scratch, the original assembly walkthroughs are still
 ---
 
 ## Changelog
+
+### v3.5.2 — Expert mode for the 19:1 lifter
+- **Optional 100% throttle on the 19:1 motor.** The Pololu 4751 19:1 profile ships with `fMaxCommandedThrottle = 0.75` and a calibration sweep cap of 85%, both there to keep mid-bring-up frames from cracking under full power. A new opt-in **Expert Mode** toggle lifts both ceilings to 1.0 / 100% — but only when the active motor is the 19:1. For every other motor profile, the toggle is a no-op (and the Parameters card hides itself).
+- **Three control surfaces:** Parameters page checkbox (with a frame-damage `confirm()` modal on enable + a re-calibration banner that links to `/calibrate`), `#PEXPERT0` / `#PEXPERT1` Marcduino command (with the same warning text on serial), and `expert` field in the `/api/params` JSON. State persists to flash.
+- **Wizard creep deliberately untouched.** `wizardCreepToLimit` still uses the profile-safe 0.75 ceiling so the breakaway-friction-validation step the wizard relies on doesn't get unstable at 100%. Only the user-commanded motion path, calibration sweep, and aggressive-random upper bound respect Expert Mode.
+- **Graceful re-calibration.** Enabling Expert Mode without re-running calibration is safe — seeks above 85% just fall back to the highest calibrated slot (from the v3.5.0 Speed=100 fallback work). The web UI surfaces a yellow re-cal banner so it's not a silent step.
+
+### v3.5.1 — Serial ESTOP (`:PX`) + chain & web fixes
+- **Real mid-motion ESTOP from serial.** New `:PX` command aborts any in-flight seek, rotation, or random action and stops both motors. Detection runs in the UART RX callback (separate task from the motor-control loop), so it fires the abort flag the moment the bytes arrive — even while a `seekToPosition` is blocking. Works on USB Serial and on the Marcduino UART2 input.
+- Dispatcher-path `:PX` (e.g. inside a stored sequence) logs `ESTOP` and ends move mode for clean state.
+- Refactored serial reading: bytes now flow UART → onReceive callback → software FIFO → `loop()` dispatcher. The callback scans for `:PX<EOL>` with a 4-state machine and sets the existing `sWebAbort` flag the same way the web E-STOP does.
+- **Chain dispatcher: dropped the safety-maneuver pre-gate.** Previously, every chained-after-the-first command was gated on `sSafetyManeuver==true`, which meant chains like `:PL7:PP100:...` aborted on a fresh boot because `:PL` (lights) doesn't trigger the maneuver and the chained `:PP100` was rejected before it could. Motion handlers already call `ensureSafetyManeuver()` themselves, so the pre-gate was redundant — and it was incorrectly blocking non-motion chained commands like `:PL` and `:W`.
+- **Web E-STOP now actually stops calibration.** The calibration sweep ran nested loops; the inner break consumed `sWebAbort`, but the outer speed-sweep `for (...; sCalibrating && ...)` kept right on going. `serialAbort()` now also clears `sCalibrating` so all nested loops bail in the same pass.
+- **Desktop nav rendered server-side.** The sidebar nav was being built by inline JS only when `window.innerWidth>=1024`. When that script didn't fire (some browser/timing setups), desktop users got an empty sidebar and the bottom tab bar was hidden by CSS — so no visible nav at all. The sidebar HTML is now emitted by the firmware directly; CSS alone toggles between bottom tab bar (phone/tablet) and sidebar (desktop). No JS, no race.
 
 ### v3.5.0 — Aggressiveness levels + Parameters page rebuild
 - **Selectable random aggressiveness.** The auto-move mode now has Gentle / Medium / Aggressive profiles that scale lift speed bands, rotary speed bands, action mix, and inter-action delay. Gentle skips the two highest-energy switch cases entirely. Rotary safety is preserved at every level — every descent path still homes the rotary first regardless of aggressiveness.

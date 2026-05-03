@@ -293,8 +293,20 @@ static void printPageHead(Print& out, const char* title)
     "<path d='M9 1.5v3M9 13.5v3M1.5 9h3M13.5 9h3" \
     "M3.9 3.9l2.12 2.12M12 12l2.1 2.1M3.9 14.1l2.12-2.12M12 6l2.1-2.1'/></svg>"
 
-// Writes the 5-cell status bar
-static void printStatusBar(Print& out)
+// Tab list shared by the bottom tab bar (printTabBar) and the desktop
+// sidebar (printStatusBar). Single source of truth.
+struct NavTab { const char* href; const char* id; const char* icon; const char* label; };
+static const NavTab kNavTabs[] = {
+    { "/periscope", "periscope", TAB_ICON_PERISCOPE, "periscope" },
+    { "/rescue",    "rescue",    TAB_ICON_RESCUE,    "rescue"    },
+    { "/log",       "log",       TAB_ICON_LOG,       "log"       },
+    { "/setup",     "setup",     TAB_ICON_SETUP,     "setup"     },
+};
+
+// Writes the 5-cell status bar + opens #shell + emits the desktop sidebar.
+// The sidebar HTML is rendered server-side (was previously built by inline JS,
+// which sometimes failed silently on desktop browsers, leaving no nav at all).
+static void printStatusBar(Print& out, const char* active)
 {
     out.print("<div id='sbar'>");
     out.print("<div class='ss'><div class='sv c-b' id='st_h'>--</div>"
@@ -312,23 +324,29 @@ static void printStatusBar(Print& out)
               "<div class='sl'>firmware</div></div>");
     out.print("</div>");
     // Shell opens here — on desktop it becomes the flex container for sidebar + content
-    out.print("<div id='shell'><div id='sidenav'></div>");
+    out.print("<div id='shell'><nav id='sidenav'>");
+    out.print("<div class='snav-title'>R2 Uppity</div>");
+    for (auto& t : kNavTabs) {
+        bool on = (strcmp(t.id, active) == 0);
+        out.print("<a class='snav-a"); if (on) out.print(" active");
+        out.print("' href='"); out.print(t.href); out.print("'>");
+        out.print(t.icon);
+        out.print("<span>"); out.print(t.label); out.print("</span>");
+        out.print("</a>");
+    }
+    out.print("</nav>");
 }
 
 static void printTabBar(Print& out, const char* active)
 {
-    struct { const char* href; const char* id; const char* icon; const char* label; } tabs[] = {
-        { "/periscope", "periscope", TAB_ICON_PERISCOPE, "periscope" },
-        { "/rescue",    "rescue",    TAB_ICON_RESCUE,    "rescue"    },
-        { "/log",       "log",       TAB_ICON_LOG,       "log"       },
-        { "/setup",     "setup",     TAB_ICON_SETUP,     "setup"     },
-    };
-    // Close #shell (each page function closes its own #page before calling us)
+    // Close #shell (each page function closes its own #page before calling us).
+    // The desktop sidebar is rendered server-side inside printStatusBar; here
+    // we just emit the phone/tablet bottom tab bar. CSS handles which one is
+    // visible at a given viewport width — no JS, no race condition.
     out.print("</div>"); // close #shell
 
-    // ── Phone: bottom tab bar ─────────────────────────────────────────────
     out.print("<nav id='tabs'>");
-    for (auto& t : tabs) {
+    for (auto& t : kNavTabs) {
         bool on = (strcmp(t.id, active) == 0);
         out.print("<a class='tab"); if (on) out.print(" active");
         out.print("' href='"); out.print(t.href); out.print("'>");
@@ -337,37 +355,6 @@ static void printTabBar(Print& out, const char* active)
         out.print("</a>");
     }
     out.print("</nav>");
-
-    // ── Desktop: sidebar nav (injected into #sidenav via JS on large screens) ─
-    // We emit a hidden template and the JS moves it into the sidebar at load time.
-    out.print("<script>");
-    out.print("(function(){");
-    out.print("var w=window.innerWidth;");
-    out.print("if(w<1024)return;");
-    // Build the sidebar
-    out.print("var sn=document.getElementById('sidenav');");
-    out.print("if(!sn)return;");
-    out.print("var links=[");
-    for (int i = 0; i < 4; i++) {
-        if (i) out.print(",");
-        out.print("{href:'"); out.print(tabs[i].href);
-        out.print("',icon:'"); out.print(tabs[i].icon);
-        out.print("',label:'"); out.print(tabs[i].label);
-        out.print("',active:"); out.print(strcmp(tabs[i].id, active) == 0 ? "true" : "false");
-        out.print("}");
-    }
-    out.print("];");
-    out.print("var title=document.createElement('div');");
-    out.print("title.className='snav-title';title.textContent='R2 Uppity';");
-    out.print("sn.appendChild(title);");
-    out.print("links.forEach(function(l){");
-    out.print("var a=document.createElement('a');");
-    out.print("a.className='snav-a'+(l.active?' active':'');");
-    out.print("a.href=l.href;");
-    out.print("a.innerHTML=l.icon+'<span>'+l.label+'</span>';");
-    out.print("sn.appendChild(a);});");
-    out.print("})();");
-    out.print("</script>");
 }
 
 // Shared status-bar poll JS block (used by setup + calibrate pages that have no other poll)
@@ -487,7 +474,7 @@ static void printUpdateChipsJS(Print& out)
 static void printPeriscopePage(Print& out)
 {
     printPageHead(out, "R2 Periscope");
-    printStatusBar(out);
+    printStatusBar(out, "periscope");
     out.print("<div id='page'>");
 
     // Position controls
@@ -826,7 +813,7 @@ static void printPeriscopePage(Print& out)
 static void printRescuePage(Print& out)
 {
     printPageHead(out, "R2 Rescue");
-    printStatusBar(out);
+    printStatusBar(out, "rescue");
     out.print("<div id='page'>");
 
     out.print("<button class='estop' "
@@ -1052,7 +1039,7 @@ static void printRescuePage(Print& out)
 static void printLogPage(Print& out)
 {
     printPageHead(out, "R2 Log");
-    printStatusBar(out);
+    printStatusBar(out, "log");
     out.print("<div id='page' style='padding-bottom:90px'>");
     out.print("<div style='display:flex;gap:10px;margin-bottom:10px'>");
     out.print("<button onclick=\"document.getElementById('lb').innerHTML=''\""
@@ -1109,7 +1096,7 @@ static void printLogPage(Print& out)
 static void printSetupPage(Print& out)
 {
     printPageHead(out, "R2 Setup");
-    printStatusBar(out);
+    printStatusBar(out, "setup");
     out.print("<div id='page'>");
     out.print("<div style='font-size:13px;color:#888;font-weight:600;"
               "padding:10px 0 12px;border-bottom:1px solid #e8eaed;"
@@ -1261,7 +1248,7 @@ static void printSetupPage(Print& out)
 static void printCalibratePage(Print& out)
 {
     printPageHead(out, "R2 Calibrate");
-    printStatusBar(out);
+    printStatusBar(out, "setup");
     out.print("<div id='page'>");
 
     // Motor type selector — lets users pick the motor without going through the wizard.
@@ -1378,7 +1365,7 @@ static void printCalibratePage(Print& out)
 static void printParametersPage(Print& out)
 {
     printPageHead(out, "R2 Parameters");
-    printStatusBar(out);
+    printStatusBar(out, "setup");
     out.print("<div id='page'>");
 
     // ── Lifter / rotary power thresholds ────────────────────────────────
@@ -1489,6 +1476,32 @@ static void printParametersPage(Print& out)
               "before lowering below the safe spin height.</p>");
     out.print("</div>");
 
+    // ── Expert mode (19:1 only; hidden via JS for other motors) ──────────
+    out.print("<div id='expertcard' style='display:none'>");
+    out.print("<div class='sec'>expert mode (19:1)</div>");
+    out.print("<div class='card' style='margin-bottom:14px;border-color:#fca5a5;"
+              "background:#fffaf9'>");
+    out.print("<label style='display:flex;align-items:center;gap:10px;cursor:pointer'>"
+              "<input type='checkbox' id='expert' "
+              "style='width:18px;height:18px;cursor:pointer'>"
+              "<span style='flex:1;font-size:14px;color:#444;font-weight:600'>"
+              "Unlock 100% throttle &mdash; expert mode</span></label>");
+    out.print("<p style='font-size:13px;color:#7c2d12;margin-top:10px;line-height:1.5'>"
+              "<strong>Frame damage risk.</strong> The 19:1 motor profile caps throttle "
+              "at 75% because the lifter frame can crack at higher powers during "
+              "early bring-up. Only enable this if your mechanism is reinforced "
+              "and you accept the risk.</p>");
+    out.print("<p id='expertrecal' style='display:none;font-size:13px;color:#92400e;"
+              "background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;"
+              "padding:10px 12px;margin-top:10px;line-height:1.5'>"
+              "<strong>Re-calibration recommended.</strong> Existing calibration only "
+              "covers up to 85%. Until you re-run calibration, commands above 85% "
+              "fall back to the 85% PWM limits. "
+              "<a href='/calibrate' style='color:#92400e;text-decoration:underline;"
+              "font-weight:600'>Run calibration &rarr;</a></p>");
+    out.print("</div>");
+    out.print("</div>");
+
     // ── Load defaults ────────────────────────────────────────────────────
     out.print("<div class='sec'>load defaults</div>");
     out.print("<div class='card' style='margin-bottom:14px'>");
@@ -1544,10 +1557,29 @@ static void printParametersPage(Print& out)
               "document.getElementById('driftpct_v').textContent=d.driftpct;"
               "document.getElementById('rotdisabled').checked=d.rotdisabled;"
               "document.getElementById('aggression').value=d.aggression;"
+              "document.getElementById('expert').checked=d.expert;"
+              "document.getElementById('expertcard').style.display="
+              "d.expertapplies?'':'none';"
+              "document.getElementById('expertrecal').style.display="
+              "(d.expert&&d.expertapplies)?'':'none';"
               "}).catch(function(){"
               "document.getElementById('paramsmsg').textContent='Failed to load parameters.';"
               "document.getElementById('paramsmsg').style.color='#dc2626';});}");
     out.print("loadParams();");
+
+    // Expert-mode confirm + live re-cal banner
+    out.print("document.getElementById('expert').addEventListener('change',function(){"
+              "var c=document.getElementById('expert');"
+              "if(c.checked){"
+              "if(!confirm('Enable expert mode?\\n\\n"
+              "This unlocks 100% throttle on the 19:1 lifter motor. "
+              "Frame damage is possible if your mechanism is not reinforced. "
+              "Re-run calibration after saving so the calibration table covers "
+              "the new range.\\n\\nProceed?')){"
+              "c.checked=false;return;}}"
+              "document.getElementById('expertrecal').style.display="
+              "c.checked?'':'none';"
+              "});");
 
     // Save handler
     out.print("function saveParams(){"
@@ -1559,7 +1591,8 @@ static void printParametersPage(Print& out)
               "'&minsafeheight='+document.getElementById('minsafeheight').value+"
               "'&driftpct='+document.getElementById('driftpct').value+"
               "'&rotdisabled='+(document.getElementById('rotdisabled').checked?1:0)+"
-              "'&aggression='+document.getElementById('aggression').value;"
+              "'&aggression='+document.getElementById('aggression').value+"
+              "'&expert='+(document.getElementById('expert').checked?1:0);"
               "document.getElementById('paramsmsg').textContent='Saving...';"
               "document.getElementById('paramsmsg').style.color='#888';"
               "fetch('/api/params/save?'+qs)"
@@ -2406,6 +2439,9 @@ WPage pages[] = {
             out.print(",\"driftpct\":"); out.print(sLifterParameters.fDriftCorrectionPct);
             out.print(",\"rotdisabled\":"); out.print(sSettings.fDisableRotary ? "true" : "false");
             out.print(",\"aggression\":"); out.print(sLifterParameters.fAggressiveness);
+            out.print(",\"expert\":"); out.print(sLifterParameters.fExpertMode ? "true" : "false");
+            out.print(",\"expertapplies\":"); out.print(expertModeApplies() ? "true" : "false");
+            out.print(",\"motortype\":"); out.print(sLifterParameters.fMotorType);
             out.print("}");
         }),
 
@@ -2430,6 +2466,7 @@ WPage pages[] = {
             int drift    = getInt("driftpct",      sLifterParameters.fDriftCorrectionPct);
             int rotDis   = getInt("rotdisabled",   sSettings.fDisableRotary ? 1 : 0);
             int aggro    = getInt("aggression",    sLifterParameters.fAggressiveness);
+            int expert   = getInt("expert",        sLifterParameters.fExpertMode ? 1 : 0);
 
             LIFTER_MINIMUM_POWER     = min(max(lftMin, 0), 100);
             LIFTER_SEEKBOTTTOM_POWER = min(max(lftBot, 0), 100);
@@ -2439,6 +2476,7 @@ WPage pages[] = {
                 ROTARY_MINIMUM_HEIGHT = min(max(safePct, 0), 100) * max(1, LIFTER_DISTANCE) / 100;
             sLifterParameters.fDriftCorrectionPct = min(max(drift, 0), 20);
             sLifterParameters.fAggressiveness     = min(max(aggro, 0), 2);
+            sLifterParameters.fExpertMode         = (expert != 0);
             sLifterParameters.save();
 
             bool wantDis = (rotDis != 0);

@@ -99,7 +99,7 @@ inline void _debugPrintln() { Serial.println(); sDebugSuppressNewClient = false;
 // Bump this string with each release so serial, web, and #PCONFIG all show
 // which build is running.
 ///////////////////////////////////
-#define FIRMWARE_VERSION "3.5.0"
+#define FIRMWARE_VERSION "3.5.2"
 
 ///////////////////////////////////
 // CONFIGURABLE OPTIONS
@@ -381,6 +381,7 @@ static const LifterMotorProfile* sMotor = &kProfileGreg6p3;
 #define DEFAULT_DRIFT_CORRECTION_PCT            5   // re-seek if drifted more than 5%
 #define PREFERENCES_PARAM_MOTOR_TYPE             "motortype"
 #define PREFERENCES_PARAM_WIZARD_STATE           "wizstate"
+#define PREFERENCES_PARAM_EXPERT_MODE            "expertmode"
 
 ///////////////////////////////////
 
@@ -666,6 +667,7 @@ struct LifterParameters
     int fAggressiveness;        // Auto-random level: 0=Gentle, 1=Medium, 2=Aggressive
     int fMotorType;             // LifterMotorType enum — selects the active LifterMotorProfile
     int fWizardState;           // WizardState enum — tracks first-run wizard progress
+    bool fExpertMode;           // 19:1 only — lifts the 0.75 throttle cap to 1.0 (frame damage risk)
 
     void load()
     {
@@ -683,6 +685,7 @@ struct LifterParameters
         // forcing a re-calibration on firmware upgrade. Fresh installs will see the
         // no-key default of 0 (WIZARD_NOT_STARTED); we force them to the wizard elsewhere.
         fWizardState = preferences.getInt(PREFERENCES_PARAM_WIZARD_STATE, WIZARD_NOT_STARTED);
+        fExpertMode = preferences.getBool(PREFERENCES_PARAM_EXPERT_MODE, false);
     }
 
     void save()
@@ -697,6 +700,7 @@ struct LifterParameters
         preferences.putInt(PREFERENCES_PARAM_AGGRESSIVENESS, fAggressiveness);
         preferences.putInt(PREFERENCES_PARAM_MOTOR_TYPE, fMotorType);
         preferences.putInt(PREFERENCES_PARAM_WIZARD_STATE, fWizardState);
+        preferences.putBool(PREFERENCES_PARAM_EXPERT_MODE, fExpertMode);
     }
 };
 
@@ -727,6 +731,34 @@ static void applyMotorProfileDefaults()
     sLifterParameters.fLifterMinSeekBotPower = sMotor->fDefaultSeekBotPower;
     sLifterParameters.fLifterDistance        = sMotor->fDefaultLifterDistance;
     // fRotaryMinPower / fRotaryMinHeight are not motor-lifter-specific.
+}
+
+// Expert mode (19:1 only) lifts the 0.75 throttle cap to 1.0 and the
+// calibration sweep cap from 85% to 100%. Greg cracked his frame at higher
+// powers, so this is a per-build opt-in: reinforced mounts, builder accepts
+// the risk. Other motor profiles already top out at 1.0 / 100, so the
+// override is a no-op for them. The wizard's low-power creep test and the
+// safety-maneuver speed are deliberately NOT raised — those are first-motion
+// validation steps and stay at their safe defaults regardless.
+static inline float effectiveMaxThrottle()
+{
+    if (sLifterParameters.fExpertMode && sLifterParameters.fMotorType == MOTOR_POLOLU_19_1)
+        return 1.0f;
+    return sMotor->fMaxCommandedThrottle;
+}
+
+static inline int effectiveCalibrationSweepCap()
+{
+    if (sLifterParameters.fExpertMode && sLifterParameters.fMotorType == MOTOR_POLOLU_19_1)
+        return 100;
+    return sMotor->fCalibrationMaxSweepPct;
+}
+
+// True iff the active motor is the one expert mode actually unlocks.
+// Used by UI/serial to decide whether to surface the toggle as meaningful.
+static inline bool expertModeApplies()
+{
+    return sLifterParameters.fMotorType == MOTOR_POLOLU_19_1;
 }
 
 ///////////////////////////////////
@@ -942,6 +974,92 @@ static char sBuffer[CONSOLE_BUFFER_SIZE];
 static char sCopyBuffer[sizeof(sBuffer)+4];    // Copy of last command, shown on the web diagnostics page
 static bool sCmdNextCommand;
 static char sCmdBuffer[COMMAND_BUFFER_SIZE];
+
+///////////////////////////////////
+// SERIAL ESTOP (:PX) — scanned in the UART RX callback so it can
+// pre-empt an in-progress seek even when the main loop is blocked.
+// Loop's serial dispatcher is unchanged; it reads bytes from a software
+// FIFO that the callback fills.
+///////////////////////////////////
+#define SERIAL_FIFO_SIZE 512
+
+struct SerialFifo
+{
+    char buf[SERIAL_FIFO_SIZE];
+    volatile size_t head;
+    volatile size_t tail;
+    void push(char c)
+    {
+        size_t next = (tail + 1) % SERIAL_FIFO_SIZE;
+        if (next != head)
+        {
+            buf[tail] = c;
+            tail = next;
+        }
+    }
+    bool available() const { return head != tail; }
+    int read()
+    {
+        if (head == tail)
+            return -1;
+        char c = buf[head];
+        head = (head + 1) % SERIAL_FIFO_SIZE;
+        return (uint8_t)c;
+    }
+};
+static SerialFifo sUsbFifo;
+#ifdef COMMAND_SERIAL
+static SerialFifo sCmdFifo;
+#endif
+
+// ESTOP signature scanner. State: 0=idle, 1=saw ':', 2=saw ":P", 3=saw ":PX"
+// Returns true on a complete ":PX" followed by CR or LF.
+static int sUsbEstopFsm;
+#ifdef COMMAND_SERIAL
+static int sCmdEstopFsm;
+#endif
+static bool advanceEstopFsm(int& state, char ch)
+{
+    switch (state)
+    {
+        case 0: state = (ch == ':') ? 1 : 0; break;
+        case 1: state = (ch == 'P') ? 2 : (ch == ':' ? 1 : 0); break;
+        case 2: state = (ch == 'X') ? 3 : (ch == ':' ? 1 : 0); break;
+        case 3:
+            if (ch == '\r' || ch == '\n') { state = 0; return true; }
+            state = (ch == ':') ? 1 : 0;
+            break;
+    }
+    return false;
+}
+
+// Runs on the UART driver task — independent of loop(). Drains the
+// HardwareSerial RX buffer, runs the ESTOP scanner, and forwards bytes
+// into the software FIFO loop() reads from.
+static void onUsbSerialReceive()
+{
+    while (Serial.available())
+    {
+        int ch = Serial.read();
+        if (ch < 0) break;
+        if (advanceEstopFsm(sUsbEstopFsm, (char)ch))
+            sWebAbort = true;
+        sUsbFifo.push((char)ch);
+    }
+}
+#ifdef COMMAND_SERIAL
+static void onCmdSerialReceive()
+{
+    while (COMMAND_SERIAL.available())
+    {
+        int ch = COMMAND_SERIAL.read();
+        if (ch < 0) break;
+        if (advanceEstopFsm(sCmdEstopFsm, (char)ch))
+            sWebAbort = true;
+        sCmdFifo.push((char)ch);
+    }
+}
+#endif
 static bool sRCMode;
 static bool sVerboseDebug;
 
@@ -1239,7 +1357,8 @@ public:
         // This is the single chokepoint every speed command passes through, so a
         // cap here protects the mechanism regardless of where the command came from
         // (web UI slider, Marcduino :PP command, seek loops, calibration).
-        float ceiling = sMotor->fMaxCommandedThrottle;
+        // Expert mode (19:1 only) lifts the 0.75 cap to 1.0 here.
+        float ceiling = effectiveMaxThrottle();
         throttle = min(max(abs(throttle), 0.0f), ceiling);
 
         if (throttle < 0.10)
@@ -1390,19 +1509,27 @@ public:
 
     // Returns true if an abort was requested (serial char during calibration,
     // or E-STOP from the web interface).
+    //
+    // Both abort paths clear sCalibrating. Without that, the nested
+    // calibration loops would consume sWebAbort in an inner break but the
+    // outer speed-sweep for-loop's `sCalibrating &&` test would still be
+    // true and step to the next speed level — i.e., the user pressed STOP
+    // and calibration kept right on going. Clearing sCalibrating here makes
+    // every nested loop bail in the same pass.
     static bool serialAbort()
     {
         if (sWebAbort)
         {
             DEBUG_PRINTLN("WEB ABORT");
             sWebAbort = false;
+            sCalibrating = false;
             return true;
         }
-        if (sCalibrating && Serial.available())
+        if (sCalibrating && sUsbFifo.available())
         {
             DEBUG_PRINTLN("SERIAL ABORT");
-            while (Serial.available())
-                Serial.read();
+            while (sUsbFifo.available())
+                sUsbFifo.read();
             sCalibrating = false;
             return true;
         }
@@ -2914,7 +3041,8 @@ public:
 
         long homePosition = getLifterPosition();
         int topSpeed = LIFTER_MINIMUM_POWER;
-        for (topSpeed = LIFTER_MINIMUM_POWER; topSpeed <= sMotor->fCalibrationMaxSweepPct; topSpeed += 5)
+        const int sweepCap = effectiveCalibrationSweepCap();
+        for (topSpeed = LIFTER_MINIMUM_POWER; topSpeed <= sweepCap; topSpeed += 5)
         {
             LifterStatus lifterStatus;
             lifterMotorMove(topSpeed / 100.0);
@@ -2933,7 +3061,7 @@ public:
         long targetDistance = sSettings.getLifterDistance();
 
         Serial.println("SEEK TO TOP");
-        for (; sCalibrating && topSpeed <= sMotor->fCalibrationMaxSweepPct; topSpeed += 5)
+        for (; sCalibrating && topSpeed <= sweepCap; topSpeed += 5)
         {
             unsigned tries = 0;
             if (!isRotaryAtRest())
@@ -3089,7 +3217,7 @@ public:
         }
         delay(500);
 
-        for (topSpeed = sSettings.fMinimumPower; sCalibrating && topSpeed <= sMotor->fCalibrationMaxSweepPct; topSpeed += 5)
+        for (topSpeed = sSettings.fMinimumPower; sCalibrating && topSpeed <= sweepCap; topSpeed += 5)
         {
             float limit;
             if (!getUpOutputLimit(topSpeed/100.0f, limit))
@@ -3275,7 +3403,7 @@ public:
         int lsLo, lsHi;
         if (level == 0) { lsLo = 30; lsHi = 50; }
         else if (level == 1) { lsLo = 65; lsHi = 85; }
-        else { lsLo = 80; lsHi = max(85, (int)(sMotor->fMaxCommandedThrottle * 100)); }
+        else { lsLo = 80; lsHi = max(85, (int)(effectiveMaxThrottle() * 100)); }
         // Floor by minimum power so we never command below breakaway threshold.
         lsLo = max(lsLo, (int)sSettings.fMinimumPower);
         lsHi = max(lsHi, lsLo);
@@ -4281,6 +4409,18 @@ bool processLifterCommand(const char* cmd)
             }
             break;
         }
+        case 'X':
+        {
+            // ESTOP — the UART RX callback already set sWebAbort the moment the
+            // ":PX" signature was scanned, so any in-progress seek aborted before
+            // this dispatcher handler ever ran. Here we just clean up: end move
+            // mode, clear the abort flag (it's been consumed by now anyway), and
+            // log it so the user can see in the serial monitor that ESTOP fired.
+            sWebAbort = false;
+            lifter.moveModeEnd();
+            Serial.println("ESTOP");
+            break;
+        }
         case 'M':
         {
             // stop move mode
@@ -4859,6 +4999,46 @@ void processConfigureCommand(const char* cmd)
             Serial.println(F(")"));
         }
     }
+    else if (startswith(cmd, "EXPERT"))
+    {
+        // #PEXPERT     - print current expert mode state
+        // #PEXPERT0    - disable
+        // #PEXPERT1    - enable (19:1 only — lifts 0.75 throttle cap to 1.0)
+        // Frame damage risk: Greg cracked his frame at higher powers. Re-calibrate
+        // after enabling so the calibration table actually covers the new range.
+        if (isdigit(*cmd))
+        {
+            uint32_t v = strtolu(cmd, &cmd);
+            if (v > 1)
+            {
+                Serial.println(F("Invalid. Valid: 0=off, 1=on"));
+            }
+            else
+            {
+                sLifterParameters.fExpertMode = (v == 1);
+                sLifterParameters.save();
+                Serial.print(F("Expert Mode: "));
+                Serial.println(sLifterParameters.fExpertMode ? F("ON") : F("OFF"));
+                if (sLifterParameters.fExpertMode && !expertModeApplies())
+                {
+                    Serial.println(F("Note: expert mode only affects the 19:1 motor profile. No-op for the active motor."));
+                }
+                else if (sLifterParameters.fExpertMode)
+                {
+                    Serial.println(F("WARNING: 0.75 throttle cap lifted to 1.0. Frame damage risk."));
+                    Serial.println(F("Re-run calibration so the calibration table covers the new range."));
+                }
+            }
+        }
+        else
+        {
+            Serial.print(F("Expert Mode: "));
+            Serial.print(sLifterParameters.fExpertMode ? F("ON") : F("OFF"));
+            if (!expertModeApplies())
+                Serial.print(F(" (no-op for active motor)"));
+            Serial.println();
+        }
+    }
     else if (startswith(cmd, "STATUS"))
     {
     #ifdef USE_WIFI
@@ -4887,6 +5067,9 @@ void processConfigureCommand(const char* cmd)
         Serial.print(F("Firmware:           ")); Serial.println(F(FIRMWARE_VERSION));
         Serial.print(F("Motor Type:         ")); Serial.print(sLifterParameters.fMotorType);
         Serial.print(F(" (")); Serial.print(sMotor->fName); Serial.println(F(")"));
+        Serial.print(F("Expert Mode:        ")); Serial.print(sLifterParameters.fExpertMode ? F("ON") : F("OFF"));
+        if (!expertModeApplies()) Serial.print(F(" (no-op for active motor)"));
+        Serial.println();
         Serial.print(F("Wizard State:       ")); Serial.print(sLifterParameters.fWizardState);
         Serial.println(wizardComplete() ? F(" (complete)") : F(" (INCOMPLETE — motion blocked)"));
         Serial.print(F("ID#:                ")); Serial.println(sSettings.fID);
@@ -5246,11 +5429,12 @@ bool processCommand(const char* cmd, bool firstCommand)
             Serial.println("Invalid");
             return false;
         }
-        if (!sSafetyManeuver)
-        {
-            Serial.println("Safety maneuver failed");
-            return false;
-        }
+        // No safety-maneuver pre-gate here on purpose: motion handlers
+        // (seekToPosition / rotaryMotor*) call ensureSafetyManeuver themselves
+        // (and it's idempotent), and gating chained commands at this level
+        // also incorrectly blocked non-motion commands like :PL and :W when
+        // the maneuver hadn't run yet — breaking chains like ":PL7:PP100:..."
+        // on a fresh boot because :PL doesn't trigger the maneuver.
         return processLifterCommand(cmd+1);
     }
     switch (cmd[0])
@@ -5413,6 +5597,10 @@ static int readInputHeaders()
 void setup()
 {
     REELTWO_READY();
+    // REELTWO_READY() calls Serial.begin() — register our RX callback now so any
+    // stray bytes typed during boot are captured into the software FIFO and the
+    // :PX ESTOP scanner is live as early as possible.
+    Serial.onReceive(onUsbSerialReceive);
 
     if (!preferences.begin("uppityspinner", false))
     {
@@ -5500,6 +5688,7 @@ void setup()
 
 #ifdef COMMAND_SERIAL
     COMMAND_SERIAL.begin(sSettings.fBaudRate, SERIAL_8N1, PIN_RXD2, PIN_TXD2);
+    COMMAND_SERIAL.onReceive(onCmdSerialReceive);
 #endif
 
     lifter.disableMotors();
@@ -5996,10 +6185,11 @@ void loop()
         }
     }
 
-    // append commands to command buffer
-    if (Serial.available())
+    // append commands to command buffer — bytes come from the software FIFOs
+    // populated by the UART RX callbacks (which also fast-path :PX as ESTOP)
+    if (sUsbFifo.available())
     {
-        int ch = RememberSerialChar(Serial.read());
+        int ch = RememberSerialChar(sUsbFifo.read());
         if (ch == 0x0A || ch == 0x0D)
         {
             runSerialCommand();
@@ -6012,9 +6202,9 @@ void loop()
     }
 #ifdef COMMAND_SERIAL
     // Serial commands are processed in the same buffer as the console serial
-    if (COMMAND_SERIAL.available())
+    if (sCmdFifo.available())
     {
-        int ch = RememberSerialChar(COMMAND_SERIAL.read());
+        int ch = RememberSerialChar(sCmdFifo.read());
         if (sPos != 0 || (ch == ':' || ch == '#'))
         {
             // Reduce serial noise by ignoring anything that doesn't start with : or #
