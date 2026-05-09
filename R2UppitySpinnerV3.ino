@@ -100,7 +100,7 @@ inline void _debugPrintln() { Serial.println(); sDebugSuppressNewClient = false;
 // Bump this string with each release so serial, web, and #PCONFIG all show
 // which build is running.
 ///////////////////////////////////
-#define FIRMWARE_VERSION "3.5.2"
+#define FIRMWARE_VERSION "3.5.3"
 
 ///////////////////////////////////
 // CONFIGURABLE OPTIONS
