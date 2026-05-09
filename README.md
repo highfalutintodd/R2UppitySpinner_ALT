@@ -195,12 +195,14 @@ All commands use the Marcduino protocol. Multiple commands can be chained with c
 
 The dispatcher runs chained commands sequentially, but blocking actions (seeks, rotations) hold up everything queued behind them. A few practical rules:
 
-**Set lights before motion, not after.** `:PL<n>` is the only command that doesn't auto-cancel random/move mode and that completes instantly (it just writes GPIO pins). Anything after `:PM` or `:PH` in a chain has to wait for the current move action to finish before it fires.
+**Set lights before blocking motion, not after.** `:PL<n>` is the only command that doesn't auto-cancel random/move mode and that completes instantly (it just writes GPIO pins). Blocking commands like `:PP` (seek), `:PA` / `:PD` (rotate), and `:PH` (home) hold up everything queued behind them until the motion finishes — so chain lights ahead of the seek if you want them visible during the move.
 
 ```
-:PL5:PM         ✓ light kit changes instantly, then random starts
+:PL5:PP100      ✓ lights change instantly, then lifter raises to 100%
+:PP100:PL5      ✓ but lights don't fire until the lifter finishes raising
+:PL5:PM         ✓ lights change instantly, then random mode starts
 :PL5:PMA        ✓ lights, then aggressive random
-:PM:PL5         ✗ lights don't change until the first random move ends
+:PM:PL5         ✓ random mode starts (non-blocking), lights change immediately after
 ```
 
 **`:PH` turns off the light kit.** The home command explicitly clears the light kit (sends `kLightKit_Off`) before lowering, so any active light show ends when you home. If you want lights on after homing, send `:PH:W2:PL5` (home, wait, then re-light).

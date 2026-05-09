@@ -3,6 +3,7 @@
  * R2UppitySpinnerV3 (https://github.com/reeltwo/R2UppitySpinnerV3)
  * --------------------------------------------------------------------
  * Written by Mimir Reynisson (skelmir)
+ * Forked by highfalutintodd (https://github.com/highfalutintodd/R2UppitySpinner_ALT)
  *
  * R2UppitySpinnerV3 is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -5424,7 +5425,7 @@ bool processCommand(const char* cmd, bool firstCommand)
         return true;
     if (!firstCommand)
     {
-        if (cmd[0] != ':')
+        if (cmd[0] != ':' || cmd[1] != 'P')
         {
             Serial.println("Invalid");
             return false;
@@ -5435,7 +5436,29 @@ bool processCommand(const char* cmd, bool firstCommand)
         // also incorrectly blocked non-motion commands like :PL and :W when
         // the maneuver hadn't run yet — breaking chains like ":PL7:PP100:..."
         // on a fresh boot because :PL doesn't trigger the maneuver.
-        return processLifterCommand(cmd+1);
+        //
+        // Skip ":P" and any optional ID, mirroring the firstCommand path
+        // below. Without this, processLifterCommand's switch consumes the
+        // 'P' as the command letter and silently mis-dispatches: e.g. the
+        // chained ":PP100" lands in case 'P' trying to parse "P100" as a
+        // position number, fails (not a digit), and no-ops. Same for every
+        // other chained ":P*" command — they all silently vanished.
+        cmd += 2;
+        if (isdigit(*cmd))
+        {
+            uint32_t id = 0;
+            while (isdigit(*cmd))
+            {
+                id = id*10L + (*cmd-'0');
+                cmd++;
+            }
+            if (id != sSettings.fID)
+            {
+                resetSerialCommand();
+                return true;
+            }
+        }
+        return processLifterCommand(cmd);
     }
     switch (cmd[0])
     {
