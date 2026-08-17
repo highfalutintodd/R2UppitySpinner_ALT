@@ -246,6 +246,7 @@ Because `:PX` is a standard Marcduino-style command, you can wire it to a button
 | `#PCONFIG` | Display full configuration (includes firmware version) |
 | `#PSTATUS` | Show WiFi/remote status |
 | `#PMOTOR<n>` | Query (no arg) or set lifter motor profile (0=6.3:1, 1=19:1, 2=IA-Parts) |
+| `#PROTARYMOTOR<n>` | Query (no arg) or set **rotary** motor profile (0=stock high-reduction, 1=Pololu 4841 4.4:1). Clears the learned revolution count and reboots |
 | `#PAGGRESSION[<0-2>]` | Query or set default random aggressiveness (0=Gentle, 1=Medium, 2=Aggressive) |
 | `#PFACTORY` | Factory reset (clear all preferences and sequences) |
 | `#PS<n>:<seq>` | Store sequence (e.g. `#PS1:H`) |

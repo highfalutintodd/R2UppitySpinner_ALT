@@ -100,7 +100,10 @@ inline void _debugPrintln() { Serial.println(); sDebugSuppressNewClient = false;
 // Bump this string with each release so serial, web, and #PCONFIG all show
 // which build is running.
 ///////////////////////////////////
-#define FIRMWARE_VERSION "3.5.3"
+// NOTE: branch build (claude/rotary-motor-profile-4841). The suffix makes it
+// obvious in the serial banner / web UI / #PCONFIG which image is flashed while
+// this is being tested on real hardware. Re-version properly if folded into main.
+#define FIRMWARE_VERSION "3.5.4-rotary1"
 
 ///////////////////////////////////
 // CONFIGURABLE OPTIONS
@@ -321,6 +324,78 @@ static const LifterMotorProfile kProfileIAParts = {
 // the user explicitly selects a different motor.
 static const LifterMotorProfile* sMotor = &kProfileGreg6p3;
 
+///////////////////////////////////
+// ROTARY MOTOR PROFILES
+///////////////////////////////////
+// The rotary drive learns its own "ticks per full revolution" during the safety
+// maneuver (see safetyManeuver()).  That measured count depends on three things
+// multiplied together:
+//
+//   1. encoder edges per motor-shaft revolution  (the firmware counts channel-A
+//      RISING edges only, so it sees 1/4 of the CPR figure Pololu quotes)
+//   2. the gearbox ratio
+//   3. whatever further reduction the periscope drive adds between the gearbox
+//      output shaft and the periscope itself
+//
+// The original code hard-coded a single "must be >= 1000 ticks" sanity floor,
+// which silently assumes a high-reduction rotary drivetrain.  A builder running
+// a low-reduction gearmotor measures a perfectly correct count well under 1000,
+// gets it rejected as a bad reading, and the safety maneuver aborts with
+// ABORT: FAILED SAFETY MANEUVER and no explanation.
+//
+// So the floor moves into the profile: each rotary motor declares the window of
+// revolution counts that are physically plausible for it.  Readings inside the
+// window are accepted and cached; readings outside it still mean "the home
+// switch lied to us" and are retried, which is what the check was really for.
+enum RotaryMotorType
+{
+    ROTARY_MOTOR_STOCK = 0,      // High-reduction original drive (>= 1000 ticks/rev)
+    ROTARY_MOTOR_POLOLU_4841,    // Pololu 4841, 25D 4.4:1 HP 12V, 48 CPR encoder
+    ROTARY_MOTOR_TYPE_COUNT
+};
+
+struct RotaryMotorProfile
+{
+    const char* fName;              // Display name for UI/serial
+    unsigned fMinCircleTicks;       // Reject measured revolutions below this
+    unsigned fMaxCircleTicks;       // ...or above this (0 = no upper bound)
+    int fDefaultMinPower;           // Throttle % floor applied when this motor is selected
+};
+
+// ---- Stock high-reduction rotary drive (original behavior) ----
+// Window keeps the historical >= 1000 floor so nothing changes for existing
+// builds.  No upper bound: the original code never had one.
+static const RotaryMotorProfile kRotaryProfileStock = {
+    /* fName             */ "Stock high-reduction rotary",
+    /* fMinCircleTicks   */ 1000,
+    /* fMaxCircleTicks   */ 0,
+    /* fDefaultMinPower  */ GREG_ROTARY_MINIMUM_POWER,
+};
+
+// ---- Pololu 4841 (25Dx63L HP 12V, 4.4:1, 48 CPR encoder) ----
+// 48 CPR on the motor shaft, but the ISR counts channel-A rising edges only:
+// 12 counts per motor revolution x 4.4 = ~53 counts per gearbox output rev.
+// Measured on a real build (Eric/olseer, 2026-08-16): 250, 250, 252 ticks per
+// full periscope revolution, i.e. roughly a further 4.7:1 in the periscope
+// drive.  The window below is that measurement with generous margin either
+// side, wide enough to cover a different periscope reduction but still far
+// under the stock drive's range so a truncated read is still caught.
+//
+// TORQUE/SPEED WARNING: at 12V this motor free-runs at 2200 RPM with only
+// 1.7 kg-cm of stall torque.  It is much faster and much weaker than the drive
+// this firmware was written for.  fDefaultMinPower is therefore dropped well
+// below the stock floor so the homing creep does not overshoot the home switch.
+// Expect to tune it further on real hardware.
+static const RotaryMotorProfile kRotaryProfile4841 = {
+    /* fName             */ "Pololu 4841 (25D 4.4:1, 48 CPR)",
+    /* fMinCircleTicks   */ 120,
+    /* fMaxCircleTicks   */ 600,
+    /* fDefaultMinPower  */ 20,
+};
+
+// Active rotary profile — set by setRotaryProfile() at boot and on change.
+static const RotaryMotorProfile* sRotaryMotor = &kRotaryProfileStock;
+
 // Internal PID constants — you should not need to change these.
 #define OUTPUT_LIMIT_PRESCALE               3.1
 #define DISTANCE_OUTPUT_SCALE               3
@@ -381,6 +456,7 @@ static const LifterMotorProfile* sMotor = &kProfileGreg6p3;
 #define PREFERENCES_PARAM_AGGRESSIVENESS         "aggression"
 #define DEFAULT_DRIFT_CORRECTION_PCT            5   // re-seek if drifted more than 5%
 #define PREFERENCES_PARAM_MOTOR_TYPE             "motortype"
+#define PREFERENCES_PARAM_ROTARY_MOTOR_TYPE      "rotmotortype"
 #define PREFERENCES_PARAM_WIZARD_STATE           "wizstate"
 #define PREFERENCES_PARAM_EXPERT_MODE            "expertmode"
 
@@ -667,6 +743,7 @@ struct LifterParameters
     int fDriftCorrectionPct;    // Re-seek if lifter drifts more than this % (0 = disabled)
     int fAggressiveness;        // Auto-random level: 0=Gentle, 1=Medium, 2=Aggressive
     int fMotorType;             // LifterMotorType enum — selects the active LifterMotorProfile
+    int fRotaryMotorType;       // RotaryMotorType enum — selects the active RotaryMotorProfile
     int fWizardState;           // WizardState enum — tracks first-run wizard progress
     bool fExpertMode;           // 19:1 only — lifts the 0.75 throttle cap to 1.0 (frame damage risk)
 
@@ -681,6 +758,7 @@ struct LifterParameters
         fDriftCorrectionPct = preferences.getInt(PREFERENCES_PARAM_DRIFT_CORRECTION_PCT, DEFAULT_DRIFT_CORRECTION_PCT);
         fAggressiveness = preferences.getInt(PREFERENCES_PARAM_AGGRESSIVENESS, 1);  // default Medium
         fMotorType = preferences.getInt(PREFERENCES_PARAM_MOTOR_TYPE, MOTOR_GREG_6_3_1);
+        fRotaryMotorType = preferences.getInt(PREFERENCES_PARAM_ROTARY_MOTOR_TYPE, ROTARY_MOTOR_STOCK);
         // Existing installs (upgrading from pre-wizard firmware) had no wizard state
         // but likely have working calibration — treat them as already-complete to avoid
         // forcing a re-calibration on firmware upgrade. Fresh installs will see the
@@ -700,6 +778,7 @@ struct LifterParameters
         preferences.putInt(PREFERENCES_PARAM_DRIFT_CORRECTION_PCT, fDriftCorrectionPct);
         preferences.putInt(PREFERENCES_PARAM_AGGRESSIVENESS, fAggressiveness);
         preferences.putInt(PREFERENCES_PARAM_MOTOR_TYPE, fMotorType);
+        preferences.putInt(PREFERENCES_PARAM_ROTARY_MOTOR_TYPE, fRotaryMotorType);
         preferences.putInt(PREFERENCES_PARAM_WIZARD_STATE, fWizardState);
         preferences.putBool(PREFERENCES_PARAM_EXPERT_MODE, fExpertMode);
     }
@@ -721,6 +800,42 @@ static void setMotorProfile(int motorType)
     DEBUG_PRINT("Motor profile: ");
     DEBUG_PRINTLN(sMotor->fName);
 }
+
+// Resolve the active rotary profile from sLifterParameters.fRotaryMotorType.
+// Call after sLifterParameters.load() at boot, and whenever the type changes.
+static void setRotaryProfile(int rotaryMotorType)
+{
+    switch (rotaryMotorType)
+    {
+        case ROTARY_MOTOR_POLOLU_4841: sRotaryMotor = &kRotaryProfile4841; break;
+        case ROTARY_MOTOR_STOCK:
+        default:                       sRotaryMotor = &kRotaryProfileStock; break;
+    }
+    DEBUG_PRINT("Rotary profile: ");
+    DEBUG_PRINTLN(sRotaryMotor->fName);
+}
+
+// True when a measured (or cached) ticks-per-revolution count is physically
+// plausible for the selected rotary motor.  Replaces the old hard-coded
+// ">= 1000" test everywhere it appeared, so all the call sites move together:
+// a count that is good enough to measure is also good enough to cache, to
+// restore at boot, and to enable the precision home re-approach.
+// Takes a signed count deliberately: fRotaryEncoderCount is an int read back
+// from preferences, and a negative value must not wrap to a huge unsigned and
+// sail through the lower bound.
+static inline bool rotaryCircleCountValid(long count)
+{
+    if (count <= 0)
+        return false;
+    if (count < (long)sRotaryMotor->fMinCircleTicks)
+        return false;
+    if (sRotaryMotor->fMaxCircleTicks && count > (long)sRotaryMotor->fMaxCircleTicks)
+        return false;
+    return true;
+}
+
+// (changeRotaryMotorType lives after the global state variables — it needs
+//  sRotaryCircleEncoderCount, which is declared there.)
 
 // Overwrite sLifterParameters with the active profile's default tuning.
 // Called when the user switches motor types — prior per-build calibration
@@ -961,6 +1076,30 @@ static volatile uint32_t sRescueOverrideExpiry;  // millis() timestamp when safe
 // Encoder ticks per full 360° rotation, measured during the safety maneuver.
 // volatile: written on core 1 (safety maneuver), read on core 0 (web API)
 static volatile unsigned sRotaryCircleEncoderCount;
+
+// Switch rotary motors.  The learned revolution count is drivetrain-specific,
+// so it is discarded here — keeping it would leave every angle command scaled
+// to the old motor.  The rotary min-power floor is reset to the new profile's
+// default for the same reason.  Caller is expected to reboot afterwards.
+static void changeRotaryMotorType(int newType)
+{
+    if (newType < 0 || newType >= ROTARY_MOTOR_TYPE_COUNT)
+        newType = ROTARY_MOTOR_STOCK;
+
+    Serial.print("ROTARY change motor type: ");
+    Serial.print(sLifterParameters.fRotaryMotorType);
+    Serial.print(" -> ");
+    Serial.println(newType);
+
+    sLifterParameters.fRotaryMotorType = newType;
+    setRotaryProfile(newType);
+
+    sLifterParameters.fRotaryMinPower = sRotaryMotor->fDefaultMinPower;
+    sLifterParameters.fRotaryEncoderCount = 0;   // force a fresh measurement
+    sLifterParameters.save();
+
+    sRotaryCircleEncoderCount = 0;
+}
 
 ///////////////////////////////////
 // COMMAND BUFFER — incoming serial characters accumulate here until a newline
@@ -2218,7 +2357,7 @@ public:
         // Third pass: back off the switch and re-approach at minimum speed for
         // a repeatable final position.  The first creep may overshoot by a
         // variable amount; this second touch at lower speed tightens the spread.
-        if (rotaryHomeLimit() && sRotaryCircleEncoderCount >= 1000)
+        if (rotaryHomeLimit() && rotaryCircleCountValid(sRotaryCircleEncoderCount))
         {
             // Back off: move away from the switch by a small amount
             float backoffSpeed = (ROTARY_MINIMUM_POWER/100.0) + 0.05;
@@ -2251,7 +2390,7 @@ public:
 
         // If the limit switch never triggered (unreliable hardware), accept the
         // encoder position as home rather than leaving the position unknown.
-        if (!rotaryHomeLimit() && sRotaryCircleEncoderCount >= 1000)
+        if (!rotaryHomeLimit() && rotaryCircleCountValid(sRotaryCircleEncoderCount))
         {
             DEBUG_PRINTLN("HOME (encoder only - limit switch did not trigger)");
             resetRotaryPosition();
@@ -2753,7 +2892,7 @@ public:
             {
                 setLightShow(kLightKit_Dagobah);
 
-                if (sRotaryCircleEncoderCount >= 1000)
+                if (rotaryCircleCountValid(sRotaryCircleEncoderCount))
                 {
                     // We have a cached encoder count from a previous run.
                     // Just find home — no need to measure a full revolution again.
@@ -2835,8 +2974,21 @@ public:
                             sRotaryCircleEncoderCount = abs(getRotaryPosition());
                             Serial.print("ROTARY ENCODER COUNT = ");
                             Serial.println(sRotaryCircleEncoderCount);
-                            if (sRotaryCircleEncoderCount < 1000)
+                            if (!rotaryCircleCountValid(sRotaryCircleEncoderCount))
                             {
+                                // Outside the plausible window for the selected
+                                // rotary motor — almost always a truncated read
+                                // from a bouncing home switch. Retry.
+                                Serial.print("ROTARY COUNT REJECTED (expected ");
+                                Serial.print(sRotaryMotor->fMinCircleTicks);
+                                Serial.print("..");
+                                if (sRotaryMotor->fMaxCircleTicks)
+                                    Serial.print(sRotaryMotor->fMaxCircleTicks);
+                                else
+                                    Serial.print("inf");
+                                Serial.print(" for ");
+                                Serial.print(sRotaryMotor->fName);
+                                Serial.println(")");
                                 sRotaryCircleEncoderCount = 0;  // bad reading, retry
                             }
                             else
@@ -5000,6 +5152,48 @@ void processConfigureCommand(const char* cmd)
             Serial.println(F(")"));
         }
     }
+    else if (startswith(cmd, "ROTARYMOTOR"))
+    {
+        // #PROTARYMOTOR     - print current rotary motor type
+        // #PROTARYMOTOR<n>  - set rotary motor (0=stock high-reduction, 1=Pololu 4841)
+        // Changing it discards the learned ticks-per-revolution count and resets
+        // the rotary min-power floor to the new profile's default. Reboots so the
+        // safety maneuver re-measures cleanly.
+        if (isdigit(*cmd))
+        {
+            uint32_t rotaryType = strtolu(cmd, &cmd);
+            if (rotaryType >= ROTARY_MOTOR_TYPE_COUNT)
+            {
+                Serial.println(F("Invalid. Valid: 0=Stock high-reduction, 1=Pololu 4841 (4.4:1)"));
+            }
+            else if ((int)rotaryType == sLifterParameters.fRotaryMotorType)
+            {
+                Serial.print(F("Rotary motor unchanged: "));
+                Serial.println(sRotaryMotor->fName);
+            }
+            else
+            {
+                lifter.lifterMotorStop();
+                lifter.rotaryMotorStop();
+                changeRotaryMotorType((int)rotaryType);
+                Serial.print(F("Rotary motor changed to: "));
+                Serial.println(sRotaryMotor->fName);
+                Serial.print(F("Rotary min power reset to: "));
+                Serial.println(sLifterParameters.fRotaryMinPower);
+                Serial.println(F("Revolution count cleared — will re-measure on next safety maneuver."));
+                Serial.flush(); delay(1000);
+                ESP.restart();
+            }
+        }
+        else
+        {
+            Serial.print(F("Rotary motor: "));
+            Serial.print(sLifterParameters.fRotaryMotorType);
+            Serial.print(F(" ("));
+            Serial.print(sRotaryMotor->fName);
+            Serial.println(F(")"));
+        }
+    }
     else if (startswith(cmd, "EXPERT"))
     {
         // #PEXPERT     - print current expert mode state
@@ -5080,6 +5274,22 @@ void processConfigureCommand(const char* cmd)
         Serial.print(F("Distance:           ")); Serial.println(sSettings.getLifterDistance());
         Serial.print(F("Lifter Limit:       ")); Serial.println(sSettings.fLifterLimitSetting);
         Serial.print(F("Rotary Limit:       ")); Serial.println(sSettings.fRotaryLimitSetting);
+        Serial.print(F("Rotary Motor:       ")); Serial.print(sLifterParameters.fRotaryMotorType);
+        Serial.print(F(" (")); Serial.print(sRotaryMotor->fName); Serial.println(F(")"));
+        // The learned ticks-per-revolution gates the whole safety maneuver, so
+        // surface it here rather than making builders dig through the boot log.
+        Serial.print(F("Rotary Ticks/Rev:   ")); Serial.print(sRotaryCircleEncoderCount);
+        if (!sRotaryCircleEncoderCount)
+            Serial.print(F(" (not measured yet)"));
+        else if (!rotaryCircleCountValid(sRotaryCircleEncoderCount))
+            Serial.print(F(" (OUT OF RANGE for this rotary motor)"));
+        Serial.print(F("  valid=")); Serial.print(sRotaryMotor->fMinCircleTicks);
+        Serial.print(F(".."));
+        if (sRotaryMotor->fMaxCircleTicks)
+            Serial.println(sRotaryMotor->fMaxCircleTicks);
+        else
+            Serial.println(F("inf"));
+        Serial.print(F("Rotary Cached Rev:  ")); Serial.println(sLifterParameters.fRotaryEncoderCount);
         Serial.print(F("Up Calibrated:      ")); Serial.println(sSettings.fUpLimitsCalibrated);
         Serial.print(F("Lifter Min Power:   ")); Serial.print(sLifterParameters.fLifterMinPower);
         Serial.print(F(" [")); Serial.print(sLifterParameters.fLifterMinSeekBotPower); Serial.println("]");
@@ -5665,10 +5875,11 @@ void setup()
 #endif
     sLifterParameters.load();
     setMotorProfile(sLifterParameters.fMotorType);
+    setRotaryProfile(sLifterParameters.fRotaryMotorType);
     // Restore the encoder count measured during a previous safety maneuver.
-    // If valid (>= 1000 ticks), the safety maneuver will skip the full-revolution
-    // measurement and only need to find home once.
-    if (sLifterParameters.fRotaryEncoderCount >= 1000)
+    // If it is plausible for the selected rotary motor, the safety maneuver will
+    // skip the full-revolution measurement and only need to find home once.
+    if (rotaryCircleCountValid(sLifterParameters.fRotaryEncoderCount))
         sRotaryCircleEncoderCount = sLifterParameters.fRotaryEncoderCount;
 
 #ifdef USE_WIFI
