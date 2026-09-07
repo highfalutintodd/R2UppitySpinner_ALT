@@ -251,6 +251,7 @@ Because `:PX` is a standard Marcduino-style command, you can wire it to a button
 | `#PS<n>:<seq>` | Store sequence (e.g. `#PS1:H`) |
 | `#PL` | List stored sequences |
 | `#PD<n>` | Delete sequence n |
+| `#PROTARYTEST[<1-10>]` | Measure the rotary drivetrain and home switch (default 3 revolutions) |
 | `#PDEBUG[0|1]` | Enable/disable verbose debug output |
 | `#PRESTART` | Reboot |
 
@@ -293,6 +294,60 @@ For builders starting from scratch, the original assembly walkthroughs are still
 ---
 
 ## Changelog
+
+### v3.6.0 — Rotary homing rebuilt around what the hardware can actually do
+
+Homing had become unreliable to the point where the periscope would not retract: a failed
+home blocks descent below the safe rotary height, so the mast parked at 66% and stayed
+there. Diagnosing it turned up several separate faults.
+
+**The home switch is a spherical cam.** A pointed set screw on the rotating head presses a
+ball bearing into a microswitch whose lever has been removed. Plunger depression peaks at
+the ball's apex and tapers off either side, so near the edges of the contact zone the switch
+sits right at its actuation threshold and chatters — around seven make/break events per
+pass. That is geometry, not a worn switch. It also means the switch only holds closed within
+a couple of encoder ticks of centre, which is **finer than the drivetrain's smallest
+movement** (a single pulse burst shifts the head 5–20 ticks).
+
+- **The switch is now an edge detector, not a resting state.** Homing succeeds when the
+  switch fires *while sweeping past it*; the encoder is zeroed at that moment and a
+  "homed" latch is set. "Are we at home?" is then answered from the encoder angle, which
+  measures 1184–1186 ticks/rev against a stored 1191 — inside 2%. Previously the code
+  demanded a live switch reading after stopping, which the mechanism cannot reliably give,
+  so good homes were thrown away. An un-homed droid still requires a real switch reading
+  before it will lower.
+- **The creep is closed-loop on the encoder.** It used to pulse 3ms on / 1ms off, which
+  produced 1–2 degrees per second on the test droid — the 10-second timeout expired after
+  about 10 degrees of arc and the switch was never reached. It now targets a fixed *angular*
+  step per pulse, derived from your own measured ticks-per-revolution, and adapts the pulse
+  width until it achieves it. **The rotary has no motor profile** (the `#PMOTOR` profiles are
+  lifter-only) and measured rotary revolutions across builds run from ~250 to 1191 ticks, so
+  nothing here is tuned to one droid.
+- **Home search gives up by distance, not by clock** — about 1.25 revolutions, so every
+  droid does the same amount of searching.
+- **Removed the "precision re-approach" third pass.** It backed off a home it had already
+  found and could not creep back, converting successes into failures.
+- **Pass 1 brakes instead of coasting**, so the head cannot drift off a switch it just
+  reached.
+- **Removed a hard-coded 1000-tick floor** on the rotary revolution count, present at five
+  sites. Builders whose rotary measures fewer than 1000 ticks/rev — one community build
+  measures ~250 — had the safety maneuver reject the reading as bad, retry, and abort. The
+  floor is now 100 ticks in one named constant.
+- **New `#PROTARYTEST[1-10]`.** Spins the head slowly and reports ticks per revolution and
+  its repeatability, the home switch's contact arc, raw contact-closure count, and whether
+  the creep step fits inside the contact window. **Run this first** if homing misbehaves.
+- **Command serial no longer trips over other boards' chatter.** Peers on the Marcduino bus
+  (SABE, Roam-A-Dome and similar) emit `&<NAME>,HB,...` heartbeats several times a second.
+  The old filter only ignored foreign bytes while the shared buffer was empty, so a
+  heartbeat arriving mid-command was appended to it — and its trailing carriage return then
+  executed whatever that produced. Foreign lines are now discarded whole, and the command
+  serial assembles into its own buffer so it can never mix with the console.
+- **Honest logs.** A failed home used to print `HOME (encoder only ...)`, which read like
+  success. Removed a leftover `ch: X [nn]` debug print that echoed every command byte.
+
+Verified on hardware: 21 consecutive homing attempts from a wide spread of starting angles,
+all successful, every retract reaching the bottom limit, including a sustained auto-mode
+soak at Medium and Aggressive.
 
 ### v3.5.3 — Chained `:P*` commands actually run
 - **Chain dispatcher fix.** Chained Marcduino lifter commands past the first one were silently no-op'ing — `:PL7:PP100` set the lights but never raised the periscope, `:PP100:PL5` raised the periscope but never changed the lights, and so on for every `:PA`, `:PD`, `:PH`, `:PW` chained after a first command. Root cause: the chained-command path stripped only the leading `:` before dispatching, but the dispatcher's switch consumes the next character as the command letter — so the `P` in `:PP100` got eaten as the verb, and the parser then tried (and failed) to read `P100` as a position number. The fix mirrors the firstCommand path: skip `:P`, parse the optional ID, then dispatch. The bug had been present since the original upstream code; this fork's earlier "chain refactor" only touched the safety-maneuver pre-gate and didn't fix this part. Behavior change is strictly additive — chains that worked still work; chains that previously vanished now execute.

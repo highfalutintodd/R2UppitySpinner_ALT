@@ -100,7 +100,7 @@ inline void _debugPrintln() { Serial.println(); sDebugSuppressNewClient = false;
 // Bump this string with each release so serial, web, and #PCONFIG all show
 // which build is running.
 ///////////////////////////////////
-#define FIRMWARE_VERSION "3.5.3"
+#define FIRMWARE_VERSION "3.6.0"
 
 ///////////////////////////////////
 // CONFIGURABLE OPTIONS
@@ -143,6 +143,55 @@ inline void _debugPrintln() { Serial.println(); sDebugSuppressNewClient = false;
 
 // Acceptable angular error before the rotary is considered "at target" (degrees).
 #define ROTARY_FUDGE_POSITION               5
+
+// --- Rotary home creep (see rotateUntilHome) ---
+// These are safety bounds, not tuning values: the creep measures what the drivetrain
+// actually does and adapts its own pulse width to suit.
+//
+// That matters more for the rotary than anywhere else in this firmware, because unlike
+// the lifter the rotary has NO motor profile. The LifterMotorProfile table below is
+// lifter-only - throttle floors, travel distance, stall detection, top-of-travel approach.
+// Builders choose their own rotary motor (Pololu #4847 at 12V and #4807 at 6V are the
+// recommended pair, and 6V gives a snappier head) behind whatever reduction their
+// periscope ring uses, and some end up on something else entirely without meaning to.
+// The spread is wide: measured rotary revolutions run from about 250 encoder ticks on one
+// builder's droid to 1191 on another - nearly 5x. The only rotary settings are
+// fRotaryMinPower and fRotaryMinHeight; there is no gear ratio for the firmware to consult.
+//
+// So no fixed pulse width can be right for everyone. The old fixed 3ms/1ms produced
+// roughly 1-2 degrees per second of rotary output on the reference droid, erratically -
+// the head stick-slipped in place and the home switch was never reached. Run #PROTARYTEST
+// to measure your own hardware.
+#define ROTARY_CREEP_PULSE_MIN_MS            4     // shortest drive pulse
+#define ROTARY_CREEP_PULSE_MAX_MS           60     // longest; past this a motor is stuck
+#define ROTARY_CREEP_SETTLE_MS              12     // polled coast window between pulses
+#define ROTARY_CREEP_MAX_MS              25000     // hard backstop per creep attempt
+#define ROTARY_CREEP_STALL_PULSES           12     // no-move pulses in a row = stalled
+#define ROTARY_CREEP_STEP_DIVISOR          180     // target step = ticksPerRev/180 (~2 deg)
+#define ROTARY_BRAKE_MS                     50     // active brake duration on contact
+
+// Smallest ticks-per-revolution we will treat as a real calibration result. This was
+// hard-coded as 1000 at five sites - measurement reject/retry, save-to-flash, the cached
+// fast path, boot restore, and the encoder-only home fallback - which together silently
+// excluded any low-reduction rotary drivetrain. A builder measuring ~250 ticks/rev (real:
+// the head does turn a full circle) failed every one of those tests, so the safety
+// maneuver rejected the reading, retried, and aborted. They must all move together;
+// changing one leaves a droid half-working with no error explaining why. 100 ticks is
+// ~3.6 degrees of resolution - coarse but workable, and still far above a garbage read.
+#define ROTARY_MIN_VALID_CIRCLE_ENC        100
+
+// Home switch confirmation window. The trigger contact can be very narrow - measured at
+// 4 encoder ticks (~1.2 degrees) on the reference droid - and like any mechanical contact
+// it chatters as it makes and breaks. A single instantaneous read therefore says "not
+// home" perfectly often while the head is genuinely sitting on the switch, which used to
+// send homing off on another search from a position that was already correct. Decision
+// points sample across this window instead of taking one reading.
+#define ROTARY_HOME_DEBOUNCE_MS             30
+#define ROTARY_HOME_SETTLE_NUDGES            6     // dither steps when resting off-contact
+// How far off zero the head may sit and still count as home, once homing has zeroed the
+// encoder against the switch. See rotaryAtHome() for why this is an angle and not a switch
+// reading.
+#define ROTARY_HOME_TOLERANCE_DEG           10
 
 // --- Random movement mode ("M" command) timing ---
 #define MOVEMODE_MAX_INTERVAL               5
@@ -955,6 +1004,7 @@ static void initWizardStateFromBoot()
 static volatile bool sCalibrating;
 static volatile bool sSafetyManeuver;        // true once the startup safety maneuver succeeds
 static volatile bool sSafetyManeuverFailed;  // volatile: written on core 1, read on core 0 (web)
+static volatile bool sRotaryHomed;           // true once homing has zeroed the encoder against the switch
 static volatile bool sWebAbort;              // set by E-STOP from core 0; checked by seek loops on core 1
 static volatile uint32_t sRescueOverrideExpiry;  // millis() timestamp when safety override expires (0 = off)
 
@@ -1018,6 +1068,19 @@ static SerialFifo sCmdFifo;
 static int sUsbEstopFsm;
 #ifdef COMMAND_SERIAL
 static int sCmdEstopFsm;
+// True while the command-serial line currently being received opened with ':' or '#'.
+// Lines that did not - foreign telemetry such as the SABE and Roam-A-Dome
+// "&<NAME>,HB,..." heartbeats that share this bus on a real droid - are discarded byte
+// by byte, terminator included, so they can neither be executed nor dispatch whatever
+// the console had partly typed.
+static bool sCmdSerialAcceptLine;
+// The command serial assembles into its own line buffer rather than straight into
+// sBuffer. loop() drains one byte per source per iteration, so sharing sBuffer meant a
+// console command and a command-serial command being typed at the same time interleaved
+// byte by byte into one corrupt string. Assembling separately and handing over only a
+// finished line keeps the two sources from ever mixing.
+static char sCmdLineBuf[COMMAND_BUFFER_SIZE];
+static unsigned sCmdLinePos;
 #endif
 static bool advanceEstopFsm(int& state, char ch)
 {
@@ -1250,6 +1313,57 @@ public:
     #else
         bool limit = sSettings.fDisableRotary || (sPinManager.digitalRead(PIN_ROTARY_LIMIT) == sSettings.fRotaryLimitSetting);
         return limit;
+    #endif
+    }
+
+    // Home switch read that tolerates contact chatter: samples for a short window and
+    // reports home if the switch closed at any point in it. Use this wherever a FALSE
+    // reading would change what we do next - starting a fresh search, giving up on a
+    // home, or refusing to lower the periscope - because a bouncing contact reads open
+    // between bounces even when the head is squarely on the trigger. Keep using the plain
+    // rotaryHomeLimit() inside tight polling loops and progress logging, where a single
+    // sample is what is wanted.
+    static bool rotaryHomeLimitConfirm(uint16_t windowMs = ROTARY_HOME_DEBOUNCE_MS)
+    {
+        uint32_t until = millis() + windowMs;
+        do
+        {
+            if (rotaryHomeLimit())
+                return true;
+        } while (millis() < until);
+        return false;
+    }
+
+    // Is the head at home? Answered from the encoder, not from the live switch.
+    //
+    // The home switch is a reliable EDGE detector while the head is turning and an
+    // unreliable STATE at rest. The trigger is a pointed set screw pressing a ball bearing
+    // into a lever-less microswitch plunger, so depression peaks at the ball's apex and
+    // tapers off either side: it only holds closed within a couple of encoder ticks of
+    // centre. That is finer than this drivetrain's minimum movement - a single pulse burst
+    // shifts the head 5-20 ticks - so after a perfectly good home the head normally comes
+    // to rest just off contact. Asking the switch "are we home?" then answers no, and the
+    // periscope refuses to lower.
+    //
+    // So use the switch for what it is good at (spotting the reference as we sweep past)
+    // and the encoder for what it is good at (holding position between references). The
+    // encoder measures 1188 ticks/rev against a stored 1191, inside 2%.
+    //
+    // Falls back to demanding a live switch reading if homing has not succeeded this
+    // session, so an un-homed droid can never talk itself into lowering.
+    static bool rotaryAtHome()
+    {
+    #ifdef DISABLE_ROTARY
+        return true;
+    #else
+        if (sSettings.fDisableRotary)
+            return true;
+        if (rotaryHomeLimit())
+            return true;                 // switch agrees: definitive
+        if (!sRotaryHomed)
+            return false;                // no trusted reference yet
+        int deg = (int)rotaryMotorCurrentPosition();
+        return (deg <= ROTARY_HOME_TOLERANCE_DEG || deg >= 360 - ROTARY_HOME_TOLERANCE_DEG);
     #endif
     }
 
@@ -1544,7 +1658,7 @@ public:
 
         // ensure position is in the range of 0.0 [bottom] - 1.0 [top]
         pos = min(max(abs(pos), 0.0f), 1.0f);
-        if (isRotarySpinning() || !rotaryHomeLimit())
+        if (isRotarySpinning() || !rotaryAtHome())
         {
             // Cannot go below safe rotary height if spinning or not at home position
             float minSafePos = (float)ROTARY_MINIMUM_HEIGHT / (float)sSettings.getLifterDistance();
@@ -2198,6 +2312,14 @@ public:
         // First pass: encoder-based move to 0°. This gets us very close to home
         // and is reliable once sRotaryCircleEncoderCount is known.
         rotaryMotorAbsolutePosition(0, 0.5);
+        // Pass 1 finishes by coasting - rotaryMotorStop just opens the bridge - and on a
+        // low-friction head that drift can be several degrees, enough to slide back off a
+        // home switch it had only just reached. That was observed turning a good pass 1
+        // (home=1) into a failed pass 2 (home=0). Brake instead, so the reading handed to
+        // pass 2 is the position we are actually going to keep.
+        rotaryMotorBrake();
+        delay(ROTARY_BRAKE_MS);
+        rotaryMotorStop();
         if (sWebAbort) { rotaryMotorStop(); return; }
         Serial.print("  pass1 done: deg=");
         Serial.print(rotaryMotorCurrentPosition());
@@ -2213,104 +2335,247 @@ public:
         Serial.print("  pass2 done: deg=");
         Serial.print(rotaryMotorCurrentPosition());
         Serial.print(" home=");
-        Serial.println(rotaryHomeLimit() ? "1" : "0");
+        Serial.println(rotaryAtHome() ? "1" : "0");
 
-        // Third pass: back off the switch and re-approach at minimum speed for
-        // a repeatable final position.  The first creep may overshoot by a
-        // variable amount; this second touch at lower speed tightens the spread.
-        if (rotaryHomeLimit() && sRotaryCircleEncoderCount >= 1000)
-        {
-            // Back off: move away from the switch by a small amount
-            float backoffSpeed = (ROTARY_MINIMUM_POWER/100.0) + 0.05;
-            // Determine which direction moves away from the switch
-            // (opposite of whichever direction brought us here)
-            if (shortestDistance(rotaryMotorCurrentPosition(), 0) >= 0)
-                backoffSpeed = -backoffSpeed;
-            uint32_t backoffEnd = millis() + 300;
-            while (millis() < backoffEnd && rotaryHomeLimit() && !sWebAbort)
-            {
-                rotaryMotorMove(backoffSpeed);
-                delay(sMotor->fPulseOnMs);
-                rotaryMotorStop();
-                delay(sMotor->fPulseOffMs);
-            }
-            rotaryMotorStop();
-            if (sWebAbort) return;
-            delay(100);
-            // Re-approach at minimum creep speed
-            if (!rotaryHomeLimit())
-            {
-                rotateUntilHome(-backoffSpeed < 0 ? -0.01 : 0.01);
-                if (rotaryHomeLimit())
-                {
-                    resetRotaryPosition();
-                    DEBUG_PRINTLN("HOME (precision re-approach)");
-                }
-            }
-        }
+        // A third "precision re-approach" pass used to run here: back off the switch,
+        // then creep back onto it at minimum speed to tighten the spread of the final
+        // resting angle.  Removed — the back-off reliably left the switch, but the
+        // return creep (the same pulsed drive as above, which barely turned the rotary at
+        // all) could not get back to it.  The net effect was to take a *successful*
+        // home and turn it into a failed one, every time.
 
-        // If the limit switch never triggered (unreliable hardware), accept the
-        // encoder position as home rather than leaving the position unknown.
-        if (!rotaryHomeLimit() && sRotaryCircleEncoderCount >= 1000)
+        // Limit switch never triggered.  Fall back to accepting the current encoder
+        // position as home.  This is a poor substitute, not a success: the pulsed creep
+        // above barely turned the rotary at all, and its switching injects phantom
+        // encoder ticks, so the count here is part real motion and part noise (measured
+        // net +21 to +113 degrees while the motor was driving net *negative*).  Zeroing
+        // anyway at least pins the frame to roughly where pass 1's accurate continuous-
+        // drive move left the head, which is near home; leaving it alone instead lets the
+        // phantom ticks accumulate and pushes the *next* pass 1 off home by that amount.
+        // The real fix is to make the creep actually move the head so the switch gets
+        // used at all — see the pulse timings in rotateUntilHome().
+        if (!rotaryAtHome() && sRotaryCircleEncoderCount >= ROTARY_MIN_VALID_CIRCLE_ENC)
         {
-            DEBUG_PRINTLN("HOME (encoder only - limit switch did not trigger)");
+            DEBUG_PRINTLN("HOME FAILED (limit switch did not trigger - using encoder position)");
             resetRotaryPosition();
         }
     #endif
     }
 
     // Inch the motor until the home limit switch fires.
+    //
+    // Closed-loop on the encoder rather than fixed-timing. A fixed pulse width cannot
+    // work across drivetrains (see the ROTARY_CREEP_* notes at the top of this file), so
+    // instead we aim for a fixed ANGULAR step per pulse, derived from the builder's own
+    // measured ticks-per-revolution, and grow or shrink the pulse width until we actually
+    // achieve it. That self-tunes to whatever motor, gearbox, linkage and supply voltage
+    // a given droid happens to have. Run #PROTARYTEST to see the measured numbers.
+    //
+    // The give-up condition is encoder-based too: stop after sweeping about 1.25
+    // revolutions without seeing the switch. The old wall-clock timeout meant wildly
+    // different amounts of travel on different hardware - on the reference droid it
+    // expired after roughly 10 degrees of rotary arc, so a home switch sitting anywhere
+    // else on the circle was simply never reached.
+    //
     // Uses active braking on limit contact for minimal overshoot.
-    static void rotateUntilHome(float speed)
+    static bool rotateUntilHome(float speed)
     {
     #ifndef DISABLE_ROTARY
         if (sSettings.fDisableRotary)
-            return;
+            return false;
         bool neg = (speed < 0);
         // Add the caller's speed above the minimum power floor.
-        // Previously 0.1*abs(speed) squashed the range so 0.01 and 0.1
-        // produced nearly identical speeds (0.401 vs 0.41).  Now 0.01
-        // gives 0.41 and 0.1 gives 0.50 — a meaningful difference for
-        // precision re-approach vs normal creep.
         speed = (ROTARY_MINIMUM_POWER/100.0) + abs(speed);
         if (neg)
             speed = -speed;
         DEBUG_PRINTLN(speed);
-        RotaryStatus rotaryStatus;
         encoder_rotary_stop_limit = true;
-        uint32_t homeTimeout = millis() + 10000;  // give up after 10 seconds
-        while (!rotaryHomeLimit() && millis() < homeTimeout && !sWebAbort)
+        bool found = false;
+
+        // Ticks per revolution comes from calibration. Fall back to a sane figure if this
+        // droid has not measured one yet, so the creep still terminates.
+        long ticksPerRev = (sRotaryCircleEncoderCount >= ROTARY_MIN_VALID_CIRCLE_ENC)
+                         ? (long)sRotaryCircleEncoderCount : 1000L;
+        long targetStep = ticksPerRev / ROTARY_CREEP_STEP_DIVISOR;
+        if (targetStep < 2)
+            targetStep = 2;
+        long searchLimit = (ticksPerRev * 5) / 4;   // ~1.25 revolutions
+
+        uint32_t pulseMs = ROTARY_CREEP_PULSE_MIN_MS;
+        long startTicks = getRotaryPosition();
+        int stalledPulses = 0;
+        uint32_t hardDeadline = millis() + ROTARY_CREEP_MAX_MS;
+
+        while (!rotaryHomeLimit() && millis() < hardDeadline && !sWebAbort)
         {
+            long before = getRotaryPosition();
+
+            // Drive phase - poll the switch continuously so a narrow contact window
+            // cannot slip past between samples.
             rotaryMotorMove(speed);
-            uint32_t startMillis = millis();
-            while (millis() < startMillis + 3)
+            uint32_t until = millis() + pulseMs;
+            while (millis() < until)
             {
                 if (rotaryHomeLimit())
+                {
+                    found = true;
                     goto home;
+                }
                 if (sWebAbort)
                 {
                     rotaryMotorStop();
-                    return;  // ESTOP: bail immediately, skip active brake
+                    return false;  // ESTOP: bail immediately, skip active brake
                 }
             }
             rotaryMotorStop();
-            startMillis = millis();
-            while (millis() < startMillis + 1 && !rotaryHomeLimit() && !sWebAbort)
-                ;
-            if (sWebAbort)
-                return;
-            if (!rotaryStatus.isMoving())
+
+            // Settle phase - keep polling. Stopping opens the bridge into a coast, and on
+            // a low-friction head the switch often closes during that drift.
+            until = millis() + ROTARY_CREEP_SETTLE_MS;
+            while (millis() < until)
             {
-                DEBUG_PRINTLN("ABORT");
+                if (rotaryHomeLimit())
+                {
+                    found = true;
+                    goto home;
+                }
+                if (sWebAbort)
+                    return false;
+            }
+
+            // Adapt the pulse width toward the target step, bounded at both ends: a
+            // stalled motor must not ramp itself into a continuous drive, and a quick
+            // one must not chatter down to nothing.
+            long moved = getRotaryPosition() - before;
+            if (moved < 0)
+                moved = -moved;
+            if (moved < targetStep / 2)
+            {
+                uint32_t grown = pulseMs + (pulseMs / 2) + 1;
+                pulseMs = (grown > (uint32_t)ROTARY_CREEP_PULSE_MAX_MS)
+                        ? (uint32_t)ROTARY_CREEP_PULSE_MAX_MS : grown;
+            }
+            else if (moved > targetStep * 2)
+            {
+                uint32_t shrunk = (pulseMs * 2) / 3;
+                pulseMs = (shrunk < (uint32_t)ROTARY_CREEP_PULSE_MIN_MS)
+                        ? (uint32_t)ROTARY_CREEP_PULSE_MIN_MS : shrunk;
+            }
+
+            // Stall guard, replacing the old RotaryStatus::isMoving() check. That one
+            // wanted 20 encoder ticks per 200ms and so false-tripped on any genuinely
+            // slow creep. Here "stalled" means the pulse width has already been raised
+            // and the head still will not move - a real jam, which is worth catching
+            // quickly when the head can bind against the dome ring.
+            if (moved < 2)
+            {
+                if (++stalledPulses >= ROTARY_CREEP_STALL_PULSES)
+                {
+                    DEBUG_PRINTLN("CREEP ABORT: rotary will not move (stalled)");
+                    break;
+                }
+            }
+            else
+            {
+                stalledPulses = 0;
+            }
+
+            if (rotaryMotorFault())
+            {
+                DEBUG_PRINTLN("CREEP ABORT: rotary driver fault");
+                break;
+            }
+
+            long swept = getRotaryPosition() - startTicks;
+            if (swept < 0)
+                swept = -swept;
+            if (swept > searchLimit)
+            {
+                DEBUG_PRINTLN("CREEP: swept a full revolution, no home switch seen");
                 break;
             }
         }
+        found = found || rotaryHomeLimit();
     home:
         // Active brake to minimize overshoot past the limit switch
         rotaryMotorBrake();
-        delay(50);
+        delay(ROTARY_BRAKE_MS);
         rotaryMotorStop();
         encoder_rotary_stop_limit = false;
+        return found;
+    #else
+        return false;
+    #endif
+    }
+
+    // Settle the head onto the home switch after the creep has already made contact.
+    //
+    // The contact zone is several degrees wide (measured ~15 encoder ticks) but a worn
+    // contact does not conduct everywhere inside it - #PROTARYTEST sees roughly seven
+    // make/break events per pass. rotateUntilHome() stops on first contact and brakes,
+    // and the head then comes to rest wherever the brake left it, which is open about as
+    // often as closed. When it rests open the caller sees "not home", starts another
+    // search, re-triggers immediately, brakes again, and the head inches along a degree
+    // at a time without ever settling - three search attempts moving 2 degrees in total.
+    //
+    // So dither across the contact zone: alternate direction with a growing amplitude and
+    // stop the moment the switch conducts. This is NOT the old "precision re-approach"
+    // third pass, which backed a head OFF a home it had already found and then could not
+    // creep back. This only runs when the switch reads open, moves about a degree at a
+    // time, and is bounded to a few degrees so it cannot wander off hunting a switch that
+    // is not there.
+    static bool settleOntoHome()
+    {
+    #ifndef DISABLE_ROTARY
+        if (rotaryHomeLimitConfirm())
+            return true;
+        long ticksPerRev = (sRotaryCircleEncoderCount >= ROTARY_MIN_VALID_CIRCLE_ENC)
+                         ? (long)sRotaryCircleEncoderCount : 1000L;
+        long step = ticksPerRev / 360;          // ~1 degree
+        if (step < 1)
+            step = 1;
+        float power = (ROTARY_MINIMUM_POWER/100.0);
+        for (int n = 1; n <= ROTARY_HOME_SETTLE_NUDGES && !sWebAbort; n++)
+        {
+            long want = step * n;               // 1, 2, 3 ... degrees out from the stop
+            float dir = (n & 1) ? power : -power;
+            long start = getRotaryPosition();
+            uint32_t deadline = millis() + 1200;
+            while (millis() < deadline && !sWebAbort)
+            {
+                long moved = getRotaryPosition() - start;
+                if (moved < 0)
+                    moved = -moved;
+                if (moved >= want)
+                    break;
+                rotaryMotorMove(dir);
+                uint32_t until = millis() + ROTARY_CREEP_PULSE_MIN_MS;
+                while (millis() < until)
+                {
+                    if (rotaryHomeLimit())
+                    {
+                        // Stop on the contact rather than braking through it, then make
+                        // sure it still conducts once everything has stopped moving.
+                        rotaryMotorStop();
+                        if (rotaryHomeLimitConfirm())
+                            return true;
+                        break;
+                    }
+                    if (sWebAbort)
+                    {
+                        rotaryMotorStop();
+                        return false;
+                    }
+                }
+                rotaryMotorStop();
+            }
+            rotaryMotorStop();
+            if (rotaryHomeLimitConfirm())
+                return true;
+        }
+        return rotaryHomeLimitConfirm();
+    #else
+        return true;
     #endif
     }
 
@@ -2321,21 +2586,21 @@ public:
         // Ensure lifter is higher than minimum
         if (rotaryAllowed())
         {
-            if (!rotaryHomeLimit() && !sWebAbort)
-            {
-                rotateUntilHome(-0.1);
-            }
+            // Success is "the switch fired while we swept past it", not "the switch is
+            // closed now" - see rotaryAtHome() for why the resting reading is unreliable.
+            bool found = rotaryHomeLimitConfirm();
+            if (!found && !sWebAbort)
+                found = rotateUntilHome(-0.1);
             if (sWebAbort) { rotaryMotorStop(); return false; }
             delay(200);
-            if (!rotaryHomeLimit() && !sWebAbort)
-            {
-                rotateUntilHome(0.1);
-            }
+            if (!found && !sWebAbort)
+                found = rotateUntilHome(0.1);
             if (sWebAbort) { rotaryMotorStop(); return false; }
-            if (rotaryHomeLimit())
+            if (found)
             {
-                // DEBUG_PRINTLN("FOUND HOME");
+                settleOntoHome();   // best effort: try to come to rest actually touching
                 resetRotaryPosition();
+                sRotaryHomed = true;
                 return true;
             }
         }
@@ -2352,22 +2617,25 @@ public:
         // Ensure lifter is higher than minimum
         if (rotaryAllowed())
         {
-            if (!rotaryHomeLimit() && !sWebAbort)
-            {
-                rotateUntilHome(0.1);
-            }
+            // Success is "the switch fired while we swept past it", not "the switch is
+            // closed now" - see rotaryAtHome() for why the resting reading is unreliable.
+            bool found = rotaryHomeLimitConfirm();
+            if (!found && !sWebAbort)
+                found = rotateUntilHome(0.1);
             if (sWebAbort) { rotaryMotorStop(); return false; }
             delay(200);
             // Try up to two passes in the reverse direction if the first attempt missed.
-            for (int attempt = 0; attempt < 2 && !rotaryHomeLimit() && !sWebAbort; attempt++)
+            for (int attempt = 0; attempt < 2 && !found && !sWebAbort; attempt++)
             {
-                rotateUntilHome(-0.1);
+                found = rotateUntilHome(-0.1);
             }
             if (sWebAbort) { rotaryMotorStop(); return false; }
-            if (rotaryHomeLimit())
+            if (found)
             {
-                DEBUG_PRINTLN("FOUND HOME");
+                settleOntoHome();   // best effort: try to come to rest actually touching
                 resetRotaryPosition();
+                sRotaryHomed = true;
+                DEBUG_PRINTLN("FOUND HOME");
                 return true;
             }
             else
@@ -2378,6 +2646,206 @@ public:
         return false;
     #else
         return true;
+    #endif
+    }
+
+    // Characterise the rotary drivetrain and home switch (#PROTARYTEST).
+    //
+    // Every periscope is different: gear ratio, encoder CPR, switch type and how
+    // precisely the trigger is mounted all vary between builds. Rather than ask builders
+    // to guess at tuning numbers, spin the head slowly and measure the two figures that
+    // actually decide whether homing can work - how many encoder ticks make one
+    // revolution, and how wide the home switch's contact window is - then say plainly
+    // what that means.
+    //
+    // Runs from the serial dispatcher, so it blocks while it sweeps. :PX still aborts.
+    static void rotaryHomeSelfTest(int revolutions)
+    {
+    #ifndef DISABLE_ROTARY
+        if (sSettings.fDisableRotary)
+        {
+            Serial.println(F("ROTARY TEST: rotary is disabled in settings"));
+            return;
+        }
+        if (!ensureSafetyManeuver())
+        {
+            Serial.println(F("ROTARY TEST: safety maneuver has not passed - aborting"));
+            return;
+        }
+        if (!rotaryAllowed())
+        {
+            Serial.println(F("ROTARY TEST: raising to safe spin height"));
+            seekToPosition(1.0, sSettings.fMinimumPower/100.0);
+        }
+        if (!rotaryAllowed())
+        {
+            Serial.println(F("ROTARY TEST: lifter not above rotary minimum height - aborting"));
+            return;
+        }
+
+        if (revolutions < 1)  revolutions = 1;
+        if (revolutions > 10) revolutions = 10;
+        Serial.print(F("ROTARY TEST: sampling "));
+        Serial.print(revolutions);
+        Serial.println(F(" revolution(s) - keep clear of the head"));
+
+        // Deliberately slow: quick enough to turn reliably, slow enough that even a
+        // narrow contact window spans many polling passes.
+        const float speed = (ROTARY_MINIMUM_POWER/100.0) + 0.10;
+        long arcTicks[12];
+        long revTicks[12];
+        int  arcCount = 0, revCount = 0;
+        long enterTicks = 0, lastEnter = 0, lastClosedTicks = 0;
+        bool wasHome = false, everClosed = false, rawWasClosed = false;
+        bool seenFirst = false;
+        uint32_t lastClosedMs = 0;
+        long rawClosures = 0;
+        uint32_t deadline = millis() + (uint32_t)revolutions * 20000UL + 10000UL;
+
+        enableMotors();
+        rotaryMotorMove(speed);
+        while (arcCount <= revolutions && millis() < deadline && !sWebAbort)
+        {
+            // Trailing-edge debounce. Mechanical contacts chatter as they make and break,
+            // and on a narrow trigger that chatter otherwise reads as several separate
+            // passes over home - which is exactly how an earlier version of this test
+            // produced a ticks-per-revolution of zero and then blamed the encoder. Hold
+            // "home" briefly after the last closure so one physical pass counts once, and
+            // report the raw closure count separately so real chatter stays visible.
+            bool rawClosed = rotaryHomeLimit();
+            if (rawClosed)
+            {
+                if (!rawWasClosed)
+                    rawClosures++;
+                lastClosedMs = millis();
+                lastClosedTicks = getRotaryPosition();
+                everClosed = true;
+            }
+            rawWasClosed = rawClosed;
+            bool nowHome = everClosed &&
+                (millis() - lastClosedMs < (uint32_t)ROTARY_HOME_DEBOUNCE_MS);
+
+            if (nowHome && !wasHome)
+            {
+                enterTicks = getRotaryPosition();
+            }
+            else if (!nowHome && wasHome)
+            {
+                // Measure the arc to the LAST confirmed closure, not to where the debounce
+                // window happened to expire, so the figure is the real contact span.
+                long arc = lastClosedTicks - enterTicks;
+                if (arc < 0) arc = -arc;
+                if (arcCount < 12)
+                    arcTicks[arcCount] = arc;
+                if (seenFirst && revCount < 12)
+                {
+                    long rev = enterTicks - lastEnter;
+                    if (rev < 0) rev = -rev;
+                    revTicks[revCount++] = rev;
+                }
+                lastEnter = enterTicks;
+                seenFirst = true;
+                arcCount++;
+            }
+            wasHome = nowHome;
+            if (rotaryMotorFault())
+            {
+                Serial.println(F("ROTARY TEST: rotary driver fault - aborting"));
+                break;
+            }
+        }
+        rotaryMotorBrake();
+        delay(ROTARY_BRAKE_MS);
+        rotaryMotorStop();
+
+        Serial.println(F("---- ROTARY SELF TEST ----"));
+        if (sWebAbort)
+            Serial.println(F("ABORTED by ESTOP - figures below may be incomplete"));
+        if (arcCount == 0)
+        {
+            Serial.println(F("Home switch NEVER triggered during the sweep."));
+            Serial.println(F("  -> check the switch, its wiring, and the trigger/cam alignment"));
+            Serial.println(F("  -> #PCONFIG shows 'Rotary Limit' polarity; try the other setting"));
+            Serial.println(F("--------------------------"));
+            return;
+        }
+        Serial.print(F("Home switch detections: "));
+        Serial.print(arcCount);
+        Serial.print(F("  (raw contact closures: "));
+        Serial.print(rawClosures);
+        Serial.println(F(")"));
+        if (rawClosures > (long)arcCount * 2)
+            Serial.println(F("  -> switch chatters on contact; homing debounces for this"));
+
+        int nArc = (arcCount < 12) ? arcCount : 12;
+        long arcMean = 0;
+        for (int i = 0; i < nArc; i++)
+            arcMean += arcTicks[i];
+        arcMean /= nArc;
+
+        long ticksPerRev = 0;
+        if (revCount > 0)
+        {
+            long revMean = 0, revMin = revTicks[0], revMax = revTicks[0];
+            for (int i = 0; i < revCount; i++)
+            {
+                revMean += revTicks[i];
+                if (revTicks[i] < revMin) revMin = revTicks[i];
+                if (revTicks[i] > revMax) revMax = revTicks[i];
+            }
+            revMean /= revCount;
+            ticksPerRev = revMean;
+            Serial.print(F("Ticks per revolution: mean "));   Serial.print(revMean);
+            Serial.print(F("  min "));                        Serial.print(revMin);
+            Serial.print(F("  max "));                        Serial.print(revMax);
+            Serial.print(F("  spread "));                     Serial.println(revMax - revMin);
+            Serial.print(F("Stored circleEnc: "));            Serial.println(sRotaryCircleEncoderCount);
+            long spreadPct = (revMean > 0) ? ((revMax - revMin) * 100 / revMean) : 0;
+            if (spreadPct > 5)
+            {
+                Serial.print(F("  -> encoder NOT repeatable ("));
+                Serial.print(spreadPct);
+                Serial.println(F("% spread): suspect EMI or a loose encoder"));
+            }
+            else
+            {
+                Serial.println(F("  -> encoder is repeatable"));
+            }
+        }
+        else
+        {
+            ticksPerRev = (long)sRotaryCircleEncoderCount;
+            Serial.println(F("Only one detection - run more revolutions for a ticks/rev figure"));
+        }
+
+        Serial.print(F("Home contact arc: "));
+        Serial.print(arcMean);
+        Serial.print(F(" ticks"));
+        if (ticksPerRev > 0)
+        {
+            Serial.print(F(" (~"));
+            Serial.print((int)(arcMean * 360 / ticksPerRev));
+            Serial.print(F(" deg)"));
+        }
+        Serial.println();
+
+        if (ticksPerRev > 0)
+        {
+            long creepStep = ticksPerRev / ROTARY_CREEP_STEP_DIVISOR;
+            if (creepStep < 2) creepStep = 2;
+            Serial.print(F("Creep step: "));
+            Serial.print(creepStep);
+            Serial.print(F(" ticks (~"));
+            Serial.print((int)(creepStep * 360 / ticksPerRev));
+            Serial.println(F(" deg)"));
+            if (arcMean < creepStep * 2)
+                Serial.println(F("  -> WARNING: contact window is narrow vs the creep step;"));
+            else
+                Serial.println(F("  -> creep step fits comfortably inside the contact window"));
+        }
+        Serial.println(F("--------------------------"));
+    #else
+        Serial.println(F("ROTARY TEST: rotary support is compiled out"));
     #endif
     }
 
@@ -2753,7 +3221,7 @@ public:
             {
                 setLightShow(kLightKit_Dagobah);
 
-                if (sRotaryCircleEncoderCount >= 1000)
+                if (sRotaryCircleEncoderCount >= ROTARY_MIN_VALID_CIRCLE_ENC)
                 {
                     // We have a cached encoder count from a previous run.
                     // Just find home — no need to measure a full revolution again.
@@ -2835,7 +3303,7 @@ public:
                             sRotaryCircleEncoderCount = abs(getRotaryPosition());
                             Serial.print("ROTARY ENCODER COUNT = ");
                             Serial.println(sRotaryCircleEncoderCount);
-                            if (sRotaryCircleEncoderCount < 1000)
+                            if (sRotaryCircleEncoderCount < ROTARY_MIN_VALID_CIRCLE_ENC)
                             {
                                 sRotaryCircleEncoderCount = 0;  // bad reading, retry
                             }
@@ -3801,7 +4269,7 @@ private:
 public:
     // Mark the current rotary position as home (encoder zero).
     // Called by the rescue page's "Set Home" button.
-    static void setRotaryHome() { resetRotaryPosition(); }
+    static void setRotaryHome() { resetRotaryPosition(); sRotaryHomed = true; }
 
     // Returns the current lifter height as a percentage of full travel (0–100).
     static int getLifterHeightPercent()
@@ -3998,7 +4466,7 @@ public:
         DEBUG_PRINT("SLOW: "); DEBUG_PRINT(speed);
         // ensure position is in the range of 0.0 [bottom] - 1.0 [top]
         pos = min(max(abs(pos), 0.0f), 1.0f);
-        if (isRotarySpinning() || !rotaryHomeLimit())
+        if (isRotarySpinning() || !rotaryAtHome())
         {
             // Cannot go below safe rotary height if spinning or not at home position
             float minSafePos = (float)ROTARY_MINIMUM_HEIGHT / (float)sSettings.getLifterDistance();
@@ -4701,7 +5169,7 @@ bool processLifterCommand(const char* cmd)
                 uint32_t speed = sSettings.fMinimumPower;
                 // If rotary can't move (lifter too low), raise to safe height first.
                 // But if rotary is already home, no need to raise — just skip to descent.
-                if (!lifter.rotaryAllowed() && !lifter.rotaryHomeLimit())
+                if (!lifter.rotaryAllowed() && !lifter.rotaryAtHome())
                 {
                     Serial.println(":PH raising to safe height for rotary");
                     lifter.seekToPosition(1.0, speed/100.0);
@@ -4938,6 +5406,17 @@ void processConfigureCommand(const char* cmd)
         }
     }
 #endif
+    else if (startswith(cmd, "ROTARYTEST"))
+    {
+        // #PROTARYTEST      - characterise the rotary drivetrain and home switch (3 revs)
+        // #PROTARYTEST<n>   - same, over n revolutions (1-10)
+        // Reports ticks/revolution, home-switch contact arc, and whether the adaptive
+        // creep step fits inside that arc. Run this before reporting a homing problem.
+        int revs = 3;
+        if (isdigit(*cmd))
+            revs = (int)strtolu(cmd, &cmd);
+        lifter.rotaryHomeSelfTest(revs);
+    }
     else if (startswith(cmd, "AGGRESSION"))
     {
         // #PAGGRESSION       - print current global aggressiveness level
@@ -5666,9 +6145,9 @@ void setup()
     sLifterParameters.load();
     setMotorProfile(sLifterParameters.fMotorType);
     // Restore the encoder count measured during a previous safety maneuver.
-    // If valid (>= 1000 ticks), the safety maneuver will skip the full-revolution
-    // measurement and only need to find home once.
-    if (sLifterParameters.fRotaryEncoderCount >= 1000)
+    // If it looks like a real measurement, the safety maneuver will skip the
+    // full-revolution step and only need to find home once.
+    if (sLifterParameters.fRotaryEncoderCount >= ROTARY_MIN_VALID_CIRCLE_ENC)
         sRotaryCircleEncoderCount = sLifterParameters.fRotaryEncoderCount;
 
 #ifdef USE_WIFI
@@ -6224,22 +6703,50 @@ void loop()
         }
     }
 #ifdef COMMAND_SERIAL
-    // Serial commands are processed in the same buffer as the console serial
+    // Command-serial bytes share sBuffer with the console serial. The old gate here was
+    // `sPos != 0 || ch == ':' || ch == '#'`, which let ANY byte through as soon as the
+    // shared buffer was non-empty - and a foreign line's trailing CR then dispatched
+    // whatever happened to be sitting in it. On a real droid this bus is shared with
+    // chatty peers (SABE and Roam-A-Dome each emit "&<NAME>,HB,..." heartbeats several
+    // times a second), so a console command could be truncated and fired mid-word.
+    //
+    // Decide per LINE instead: a line is ours only if it opened with ':' or '#'.
+    // Everything else is consumed and dropped, terminator included, so foreign traffic
+    // can neither enter the buffer nor trigger a dispatch. RememberSerialChar is called
+    // only for accepted bytes, so the web "last command" display shows real commands
+    // rather than whichever heartbeat arrived most recently.
     if (sCmdFifo.available())
     {
-        int ch = RememberSerialChar(sCmdFifo.read());
-        if (sPos != 0 || (ch == ':' || ch == '#'))
+        int ch = sCmdFifo.read();
+        if (ch == 0x0A || ch == 0x0D)
         {
-            // Reduce serial noise by ignoring anything that doesn't start with : or #
-            printf("ch: %c [%d]\n", ch, ch);
-            if (ch == 0x0A || ch == 0x0D)
+            if (sCmdSerialAcceptLine && sCmdLinePos > 0)
             {
-                runSerialCommand();
+                // Complete line, and it is addressed to us. Hand it to the dispatcher.
+                RememberSerialChar(ch);
+                if (sCmdLinePos < SizeOfArray(sBuffer))
+                {
+                    memcpy(sBuffer, sCmdLineBuf, sCmdLinePos);
+                    sBuffer[sCmdLinePos] = '\0';
+                    sPos = sCmdLinePos;
+                    runSerialCommand();
+                }
             }
-            else if (sPos < SizeOfArray(sBuffer)-1)
+            sCmdSerialAcceptLine = false;   // next line must announce itself again
+            sCmdLinePos = 0;
+        }
+        else
+        {
+            if (!sCmdSerialAcceptLine && (ch == ':' || ch == '#'))
+                sCmdSerialAcceptLine = true;
+            if (sCmdSerialAcceptLine)
             {
-                sBuffer[sPos++] = ch;
-                sBuffer[sPos] = '\0';
+                RememberSerialChar(ch);
+                if (sCmdLinePos < SizeOfArray(sCmdLineBuf)-1)
+                {
+                    sCmdLineBuf[sCmdLinePos++] = ch;
+                    sCmdLineBuf[sCmdLinePos] = '\0';
+                }
             }
         }
     }
