@@ -1,0 +1,242 @@
+#include "rig.h"
+using namespace uppity;
+using namespace uppity::rig;
+using namespace uppity::sim;
+
+// Lifter parked at the top (Known, above safe height), rotary enabled, no reference yet.
+static Rig* upRig(bool small = false) {
+    Rig* g = new Rig(gregConfig(false));
+    if (small) { g->hal.rotary.setParams(smallRotary()); MotionConfig c = gregConfig(false); c.rotary.ticksPerRev = 250.f; g->sup.setConfig(c); }
+    g->hal.lifter.setPosition(450);
+    return g;
+}
+
+// ---------------------------------------------------------------- homing
+
+TEST(home_finds_edge_from_every_start_angle_both_fixtures) {
+    for (int fixture = 0; fixture < 2; ++fixture) {
+        double tpr = fixture ? 250.0 : 1184.6;
+        for (int k = 0; k < 13; ++k) {
+            Rig* g = upRig(fixture == 1);
+            double frac = k / 12.0;                                   // 0 .. 360 degrees incl. on-switch
+            g->setRotaryAngleFromCentre(frac * tpr);
+            g->boot();
+            g->req(JobKind::RotaryHome);
+            g->runUntilIdle(120000);
+            bool done = g->snap().lastResult == JobResult::Done;
+            CHECK(done);
+            CHECK(g->sup.rotary().confidence == HomeConfidence::Latched || g->sup.rotary().confidence == HomeConfidence::SwitchLive);
+            Ticks err = g->homeErrorTicks();
+            CHECK(absl(err) <= (fixture ? 3 : 8));
+            if (!done || absl(err) > (fixture ? 3 : 8)) std::printf("   fixture=%d k=%d result=%d reason=%d err=%ld swept=%ld\n", fixture, k, (int)g->snap().lastResult, (int)g->snap().lastReason, (long)err, (long)g->sup.lastHome().swept);
+            delete g;
+        }
+    }
+}
+
+TEST(home_search_bound_is_distance_not_time) {
+    Rig* g = upRig(true);
+    g->hal.rotary.setSwitchDisconnected(true);
+    g->boot();
+    Ms t0 = g->hal.nowMs();
+    g->req(JobKind::RotaryHome);
+    g->runUntilIdle(120000);
+    CHECK(g->snap().lastResult == JobResult::Failed);
+    CHECK(g->snap().lastReason == static_cast<uint8_t>(Reason::NoEdge));
+    const Event* e = g->last(Ev::JobEnd);
+    CHECK(e != nullptr);
+    CHECK(g->sup.lastHome().swept == 0);                               // no home was recorded
+    CHECK(elapsed(g->hal.nowMs(), t0) < 50000u);                      // both sweeps done well inside the backstop
+    // it swept at least 1.25 rev in each direction: the head travelled ~2.5 rev in total
+    CHECK(g->hal.rotary.travelled() > 2.4 * 250.0);
+    CHECK(g->hal.rotary.travelled() < 3.2 * 250.0);
+    delete g;
+}
+
+TEST(home_zero_is_centred_for_both_approach_directions) {
+    Rig* g = upRig();
+    g->setRotaryAngleFromCentre(-60); g->boot();
+    g->req(JobKind::RotaryHome); g->runUntilIdle(120000);
+    CHECK(g->snap().lastResult == JobResult::Done);
+    Ticks e1 = g->homeErrorTicks();
+    // second home from the other side; pass 1 exists now (referenced) and always sweeps the same way
+    g->setRotaryAngleFromCentre(+60); g->runMs(5);
+    g->req(JobKind::RotaryHome); g->runUntilIdle(120000);
+    CHECK(g->snap().lastResult == JobResult::Done);
+    Ticks e2 = g->homeErrorTicks();
+    CHECK(absl(e1) <= 8); CHECK(absl(e2) <= 8);
+    CHECK(absl(e1 - e2) <= 4);
+    delete g;
+}
+
+TEST(failed_home_never_rezeroes) {
+    Rig* g = upRig();
+    g->setRotaryAngleFromCentre(200); g->boot();
+    g->hal.setEncoder(Axis::Rotary, 500);                             // some frame
+    g->runMs(2);
+    Ticks before = g->snap().rotaryTicks - g->hal.rotary.encoder();
+    g->hal.rotary.setSwitchDisconnected(true);
+    g->req(JobKind::RotaryHome); g->runUntilIdle(120000);
+    CHECK(g->snap().lastResult == JobResult::Failed);
+    Ticks after = g->snap().rotaryTicks - g->hal.rotary.encoder();
+    CHECK_EQ(before, after);
+    CHECK(g->sup.rotary().confidence != HomeConfidence::Latched);
+    delete g;
+}
+
+TEST(rest_contact_corrects_a_wrong_frame_loudly) {
+    Rig* g = upRig();
+    g->setRotaryAngleFromCentre(100); g->boot();
+    g->req(JobKind::RotaryHome); g->runUntilIdle(120000);
+    CHECK(g->snap().lastResult == JobResult::Done);
+    // corrupt the frame by 130 ticks (~40 degrees), then park the head on the switch
+    g->hal.setEncoder(Axis::Rotary, g->snap().rotaryTicks + 130); g->runMs(2);
+    CHECK(g->count(Ev::HomeFrameCorrected) == 0);
+    g->setRotaryAngleFromCentre(0.5); g->runMs(60);
+    CHECK(g->count(Ev::HomeFrameCorrected) == 1);
+    CHECK(absl(g->snap().rotaryTicks) <= 2);
+    CHECK(g->sup.rotary().confidence == HomeConfidence::SwitchLive);
+    delete g;
+}
+
+TEST(resting_open_read_does_not_block_descent) {
+    Rig* g = upRig();
+    g->setRotaryAngleFromCentre(150); g->boot();
+    g->req(JobKind::RotaryHome); g->runUntilIdle(120000);
+    CHECK(g->snap().lastResult == JobResult::Done);
+    g->setRotaryAngleFromCentre(5.0); g->runMs(60);                 // in the band, open at rest
+    CHECK(!g->snap().homeSwitch);
+    CHECK(g->sup.rotary().confidence == HomeConfidence::Latched);
+    g->seek(0, 700); g->runUntilIdle(30000);
+    CHECK(g->snap().lastResult == JobResult::DoneLimit || g->snap().lastResult == JobResult::DoneTarget);
+    CHECK(g->snap().lifterTicks <= 5);
+    CHECK_EQ(g->count(Ev::SeekClamped), 0);
+    delete g;
+}
+
+// ---------------------------------------------------------------- absolute / relative
+
+TEST(absolute_move_lands_within_tolerance_and_takes_shortest_path) {
+    Rig* g = upRig();
+    g->setRotaryAngleFromCentre(0.5); g->boot();                     // SwitchLive at boot: referenced
+    CHECK(g->sup.rotary().confidence == HomeConfidence::SwitchLive);
+    g->req(JobKind::RotaryAbsolute, 90, 500, 0); g->runUntilIdle(60000);
+    CHECK(g->snap().lastResult == JobResult::DoneTarget || g->snap().lastResult == JobResult::Done);
+    CHECK(circularDistance(g->snap().rotaryDeg, 90) <= 6);
+    double p1 = g->hal.rotary.position();
+    g->req(JobKind::RotaryAbsolute, 350, 500, 0); g->runUntilIdle(60000);   // shortest path: -100 deg, not +260
+    CHECK(circularDistance(g->snap().rotaryDeg, 350) <= 6);
+    CHECK(g->hal.rotary.position() < p1);
+    delete g;
+}
+
+TEST(pd_720_and_minus_720_rotate_two_full_revolutions_and_speed_is_honoured) {
+    Rig* g = upRig();
+    g->setRotaryAngleFromCentre(0.5); g->boot();
+    double p0 = g->hal.rotary.position();
+    Ms t0 = g->hal.nowMs();
+    g->req(JobKind::RotaryRelative, 720, 500, 0); g->runUntilIdle(120000);
+    Ms slow = elapsed(g->hal.nowMs(), t0);
+    CHECK(g->snap().lastResult == JobResult::DoneTarget || g->snap().lastResult == JobResult::Done);
+    CHECK(std::fabs((g->hal.rotary.position() - p0) - 2 * 1184.6) < 40);
+    t0 = g->hal.nowMs();
+    g->req(JobKind::RotaryRelative, -720, 900, 0); g->runUntilIdle(120000);
+    Ms fast = elapsed(g->hal.nowMs(), t0);
+    CHECK(std::fabs(g->hal.rotary.position() - p0) < 60);
+    CHECK(fast < slow);
+    CHECK(circularDistance(g->snap().rotaryDeg, 0) <= 12);           // frame still valid after 4 revs (two 5-degree landings)
+    delete g;
+}
+
+TEST(absolute_on_unreferenced_head_homes_first) {
+    Rig* g = upRig();
+    g->setRotaryAngleFromCentre(400); g->boot();
+    CHECK(g->sup.rotary().confidence == HomeConfidence::Unknown);
+    g->req(JobKind::RotaryAbsolute, 180, 500, 0); g->runUntilIdle(120000);
+    int homes = 0, abs = 0;
+    for (auto& e : g->log) if (e.code == Ev::JobStart) { if (e.a == (int)JobKind::RotaryHome) ++homes; if (e.a == (int)JobKind::RotaryAbsolute) ++abs; }
+    CHECK_EQ(homes, 1); CHECK_EQ(abs, 1);
+    CHECK(g->sup.rotary().confidence == HomeConfidence::Latched);
+    CHECK(circularDistance(g->snap().rotaryDeg, 180) <= 6);
+    delete g;
+}
+
+TEST(rotary_request_below_safe_height_auto_raises_then_rotates) {
+    Rig g(gregConfig(false)); g.hal.lifter.setPosition(100); g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks); g.boot();
+    g.seek(450, 0, true); g.runUntilIdle(20000);                     // reference the lifter
+    g.seek(100, 700); g.runUntilIdle(20000);
+    CHECK(g.snap().lifterTicks < 225);
+    g.req(JobKind::RotaryRelative, 90, 500, 0); g.runUntilIdle(120000);
+    int raises = 0; for (auto& e : g.log) if (e.code == Ev::JobStart && e.a == (int)JobKind::LifterSeek && e.b == 450) ++raises;
+    CHECK_EQ(raises, 2);                                              // the explicit one plus the auto-raise
+    CHECK_EQ(g.snap().lifterTicks, 450);
+    CHECK(g.snap().lastResult == JobResult::DoneTarget || g.snap().lastResult == JobResult::Done);
+    CHECK_EQ(g.count(Ev::Refused), 0);
+}
+
+// ---------------------------------------------------------------- spin / jog
+
+TEST(spin_runs_until_preempted_and_stalls_when_jammed) {
+    Rig* g = upRig(); g->boot();
+    g->req(JobKind::RotarySpin, 500); g->runMs(1500);
+    CHECK(g->sup.activeJob() == JobKind::RotarySpin);
+    double p = g->hal.rotary.position(); CHECK(p > 100);
+    g->req(JobKind::RotarySpin, -500); g->runMs(50);                  // pre-empts the first spin
+    CHECK(g->sup.activeJob() == JobKind::RotarySpin);
+    g->runMs(1500);
+    CHECK(g->hal.rotary.position() < p);
+    g->hal.rotary.setJammed(true); g->runMs(1000);
+    CHECK(g->sup.activeJob() == JobKind::None);
+    CHECK(g->snap().lastResult == JobResult::Stalled);
+    delete g;
+}
+
+TEST(jog_floors_at_12_percent_and_needs_override_below_safe_height) {
+    Rig g(gregConfig(false)); g.hal.lifter.setPosition(100); g.hal.rotary.setPosition(500); g.boot();
+    g.seek(450, 0, true); g.runUntilIdle(20000); g.seek(100, 700); g.runUntilIdle(20000);
+    g.queue.jogKeepalive(g.hal.nowMs());
+    g.req(JobKind::RotaryJog, 50); g.runMs(20);
+    const Event* e = g.last(Ev::Refused); CHECK(e != nullptr); if (e) CHECK_EQ(e->b, (int)Reason::BelowSafeHeight);
+    g.queue.setOverride(g.hal.nowMs() + CommandQueue::kOverrideMs);
+    g.queue.jogKeepalive(g.hal.nowMs());
+    g.req(JobKind::RotaryJog, 50); g.runMs(30);
+    CHECK(g.sup.activeJob() == JobKind::RotaryJog);
+    CHECK_EQ(g.hal.command(Axis::Rotary).duty, 120);                  // floored at 12 %
+    g.runMs(2500);
+    CHECK(g.sup.activeJob() == JobKind::None);                        // lease expired
+    CHECK(g.snap().lastReason == (uint8_t)Reason::LeaseExpired);
+}
+
+// ---------------------------------------------------------------- characterisation
+
+TEST(characterise_measures_ticks_per_rev_and_writes_back_when_confident) {
+    Rig* g = upRig();
+    MotionConfig c = gregConfig(false); c.rotary.ticksPerRev = 1191.f; c.rotary.confident = false;   // the stale v3 number
+    g->sup.setConfig(c);
+    g->setRotaryAngleFromCentre(300); g->boot();
+    g->req(JobKind::RotaryCharacterise, 3); g->runUntilIdle(120000);
+    CHECK(g->snap().lastResult == JobResult::Done);
+    const CharacteriseResult& r = g->sup.lastCharacterisation();
+    CHECK_EQ(r.revs, 3);
+    CHECK_EQ(r.detections, 4);
+    CHECK(r.closures > r.detections);                                 // chatter counted, not mistaken for revolutions
+    CHECK(std::fabs(r.meanTpr - 1184.6f) < 6.f);
+    CHECK(r.spreadPct < 2.f);
+    CHECK(r.confident);
+    CHECK(std::fabs(g->sup.config().rotary.ticksPerRev - 1184.6f) < 6.f);
+    CHECK(g->sup.takeCharacterisationUpdated());
+    CHECK(g->sup.rotary().confidence == HomeConfidence::Latched);
+    CHECK(absl(g->homeErrorTicks()) <= 8);
+    delete g;
+}
+
+TEST(characterise_reports_no_switch_and_writes_nothing) {
+    Rig* g = upRig();
+    g->hal.rotary.setSwitchDisconnected(true); g->boot();
+    g->req(JobKind::RotaryCharacterise, 2); g->runUntilIdle(120000);
+    CHECK(g->snap().lastResult == JobResult::Failed);
+    CHECK(g->snap().lastReason == (uint8_t)Reason::NoEdge);
+    CHECK(!g->sup.takeCharacterisationUpdated());
+    CHECK(std::fabs(g->sup.config().rotary.ticksPerRev - 1184.6f) < 0.01f);
+    delete g;
+}

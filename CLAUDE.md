@@ -1,137 +1,100 @@
 # R2 Uppity Spinner ALT — project guide for Claude Code
 
-ESP32 firmware for the **Uppity Spinner** periscope lifter PCB in an R2-D2 astromech
-dome. This repo (`highfalutintodd/R2UppitySpinner_ALT`) is a **community fork of
-[reeltwo/R2UppitySpinnerV3](https://github.com/reeltwo/R2UppitySpinnerV3)** — a drop-in
-replacement that preserves every original Marcduino serial command while adding a rebuilt
-web UI, safer rotary homing, pulsed soft-stops, aggressiveness levels, and a serial ESTOP.
+ESP32 firmware for the **Uppity Spinner** periscope lifter PCB in an R2-D2 astromech dome.
+Maintainer: **Todd Word** (GitHub `highfalutintodd`, Discord "Highfalutintodd").
 
-Maintainer: **Todd Word** (GitHub `highfalutintodd`, Discord "Highfalutintodd"). Current
-firmware: **v3.5.3** (`FIRMWARE_VERSION` in `R2UppitySpinnerV3.ino:103`).
+**This branch is the v4 clean-sheet rewrite.** Two trees coexist here:
 
----
-
-## ⚠️ Hard rules — read before touching anything
-
-1. **This is running production firmware on real, hard-to-tune hardware.** It took a long
-   time to get working and the owner does not want it broken. Do **not** make invasive
-   changes to working motion/serial code without an explicit, stated regression-risk
-   assessment and the owner's go-ahead. When in doubt, propose — don't edit.
-2. **Never write to files outside this repo without saying so.** In particular the patched
-   library at `~/Documents/Arduino/libraries/Reeltwo/` is load-bearing for the owner's
-   builds. For upstreaming work, operate in a throwaway clone under the scratchpad/`/tmp`,
-   never in the local library or this sketch's working tree.
-3. **Public actions need explicit per-action approval.** Opening PRs, pushing branches,
-   posting to Discord/GitHub — confirm first, every time. One approval does not carry to
-   the next action.
-4. **Motion-safety invariants are not cosmetic.** Every descent homes the rotary first
-   (`:PH` ordering); pulsed drive exists for lead-screw soft-stops; ESTOP checks live
-   inside movement loops. Don't "simplify" these away. See the pulsed-drive nuance in
-   memory — it is required for soft-stop deceleration but *harmful* for slow creep on
-   high-reduction motors.
-5. **Tone:** answer neutrally, no condescending closers, no "did you not realize" framings.
-6. Persistent working context (feedback, open bugs, backlog, this session's history) lives
-   in the **memory system** — see the bottom of this file. Check it; it auto-loads an index.
-
----
-
-## Repositories & where things live
-
-| Thing | Location | Notes |
+| Tree | What | Rule |
 |---|---|---|
-| **This sketch (ALT)** | `highfalutintodd/R2UppitySpinner_ALT` | **Not** a GitHub fork of reeltwo (standalone repo, no parent) — so no "Sync fork". Working dir is the local clone. |
-| Upstream sketch | `reeltwo/R2UppitySpinnerV3` | The stock firmware this forked from. New maintainer: `thePunderWoman` (in the reeltwo org). |
-| ReelTwo library (stock) | `reeltwo/Reeltwo` | Arduino library dependency. |
-| ReelTwo library (local, **patched**) | `~/Documents/Arduino/libraries/Reeltwo/src/` | Patched for ESP32 core 3.x / ESP-IDF 5.5. **Do not overwrite.** Status of each patch (some now upstream) is tracked in memory `project_reeltwo_esp32_fixes`. |
-| DroidNet command library | `travisccook/droidnet-command-library` | Shared board catalog; the ALT board file `r2uppityspinner-alt.json` was contributed via PR #1. |
+| `UppityFirmware/` | **v4** — the rewrite. Arduino sketch + `src/core` (pure C++), `src/sim` (mechanism simulator), `src/arduino` (glue), `test/native` (host tests). | All new work goes here. |
+| `R2UppitySpinnerV3.ino`, `WebPages.h`, `menus/`, `pin-map.h`, `libraries/` | **v3.6.0** — the patched-upstream firmware, frozen. Kept in the tree during the rewrite as the behavioural reference; removed at release (Phase 6). Tag `v3.6.0` and `main` are the shipping v3 line. | **Do not edit.** Read it, never patch it. |
 
-Working directory note: the repo lives under an iCloud path with **spaces** in it —
-always quote paths. `build/` and `.claude/` are gitignored.
-
----
-
-## Build & flash
-
-Two build systems are configured (use whichever the task calls for — neither has been
-run by Claude in-session, so treat first invocation as unverified):
-
-- **Makefile** (reeltwo Arduino.mk system): `make` / `make flash`. Targets ESP32,
-  `PORT=/dev/ttyUSB0`, deps `reeltwo/Reeltwo`, `adafruit/Adafruit_NeoPixel`,
-  `reeltwo/PCF8574`.
-- **PlatformIO** (`platformio.ini`): env `uppity-spinner`, board `esp32dev`,
-  `pio run` / `pio run -t upload`, monitor at 115200.
-
-**`arduino-cli` IS installed** (1.5.1 via Homebrew) with the `esp32:esp32` core and all
-three required libraries, so Claude *can and should* verify a build before handing code
-over:
-
-    arduino-cli compile --fqbn esp32:esp32:esp32 .
-
-Pass `--build-path` somewhere under the scratchpad to keep artifacts out of the repo, and
-re-use that path for fast incremental rebuilds. To confirm a change's size impact, compile
-the pre-change file the same way and diff the "Sketch uses N bytes" line.
-
-**Headroom is tight: a clean build sits at ~94% of program storage** (~1.24 MB of
-1.31 MB). Always check the size line on any change that adds code.
-
-Claude still cannot flash or test on hardware — the owner does that. Write test plans as
-"compiles clean; behaviour verified on the owner's hardware," never "CI-verified."
+Approved plan and the only design authority: **[docs/REWRITE-PLAN.md](docs/REWRITE-PLAN.md)**
+(Part 1 plain English, Part 2 technical, Appendix F motion core). Supporting references:
+[docs/MOTION-CORE-DESIGN.md](docs/MOTION-CORE-DESIGN.md), [docs/v3-inventory/](docs/v3-inventory/)
+(firmware inventory, web UI inventory and critique, ecosystem facts), and the older
+[docs/REWRITE-HANDOFF.md](docs/REWRITE-HANDOFF.md) (hardware reality and the September 2026
+debugging record). Read the plan's §1.1 decisions table before proposing anything.
 
 ---
 
-## Firmware orientation
+## Hard rules
 
-Single large sketch: `R2UppitySpinnerV3.ino` (~6.4k lines). Web assets in `WebPages.h`
-(~2.7k lines) + `web-images.h`; screen/menu bits in `Screens.h` / `menus/`; pin
-assignments in `pin-map.h`. Two TB9051FTG motor drivers (lifter + rotary), serial
-(Marcduino `:P*` / `#P*` grammar) and a WiFi web UI.
-
-**Serial command pipeline (this fork has diverged hard from upstream here):**
-- RX callbacks `onUsbSerialReceive` / `onCmdSerialReceive` run an **ESTOP FSM
-  (`advanceEstopFsm`) ahead of the buffer**, then push bytes into software FIFOs
-  (`sUsbFifo` / `sCmdFifo`). This is why a mid-chain `:PX` is caught even if the command
-  buffer is busy — a property upstream lacks.
-- `loop()` drains the FIFOs into `sBuffer`; `runSerialCommand()` dispatches.
-- Chained `:P*` commands: the programmatic chain path uses a **separate `sCmdBuffer`**
-  (added in v3.5.2/3.5.3 to fix chains silently no-op'ing after the first command); the
-  serial-triggered path still dispatches from `sBuffer`.
-- `sProcessing` is true for the whole life of a chain (including `:PW` waits).
-
-Full command reference and chain-ordering rules are in `README.md` ("Serial Command
-Reference"). Key safety commands: `:PX` (serial ESTOP), `:PH` (raise→home rotary→lower),
-`:PM[G/M/A]` (random mode + aggressiveness).
-
----
-
-## Conventions
-
-- **Versioning:** `FIRMWARE_VERSION` semver in the `.ino`; bump with the change, note it
-  in README/commit. Recent tags follow `vX.Y.Z — one-line summary`.
-- **Commits:** end firmware/library commits with the Co-Authored-By trailer for Claude
-  (see git log). Keep the README's plain, builder-facing voice — explain the *why*
-  (hardware reality), not just the *what*.
-- **Upstream contributions** (reeltwo/*): match the maintainer's house style — she keeps
-  **both** code paths behind `#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)` /
-  `ESP_ARDUINO_VERSION` guards and never drops the legacy branch. One file per PR,
-  independent branches off `master`, honest test plans.
-- **DroidNet board catalog:** new/unverified boards use `confidence: "community"`; bump
-  `libraryVersion` (minor for a new board) and keep `releases.json` in lockstep;
-  `npm run validate` + `npm test` before submitting.
+1. **No runaway periscope.** The head never descends into the dome unless the rotary is home; the
+   rotary never turns unless the head is above the safe-spin height; with unknown lifter position
+   only upward motion is allowed; any context may stop the motors, only the supervisor task may
+   drive them. These are implemented in one place (`SafetyPolicy`) and never bypassed by a script.
+2. **Pure core vs Arduino glue.** `src/core` and `src/sim` include no Arduino headers and compile on
+   the Mac. Hardware, FreeRTOS, `Wire`, NVS and `Serial` live only in `src/arduino` and the `.ino`.
+3. **Definition of done, every change:**
+   `make -C UppityFirmware/test/native test` passes and
+   `arduino-cli compile --profile uppity UppityFirmware` is clean, with the size line recorded.
+   Use `--build-path` under the session scratchpad; never leave build output in the repo.
+4. **Say what you actually tested.** "Host tests pass, compiled, not on hardware" is a complete
+   and welcome report. Claude cannot flash or run hardware; Todd does, from a written procedure.
+   Never write "verified" for something only the simulator ran.
+5. **Only the supervisor task writes a non-zero PWM. Only `I2cService` touches `Wire`. Only
+   `Persist` touches NVS, and never while motors are enabled.** RX callbacks flag or copy, nothing
+   else.
+6. **Settings are append-only** with a schema version and migrations; tuning defaults have one
+   source (Settings → sanitize → parser → `#PCONFIG` → COMMANDS.md, all or none).
+7. **Everything the board emits must parse as a silent no-op on every other board** (`KEY=VALUE`
+   lines, `&PERI,…`), never as a command or as "Invalid" spam.
+8. **Serial grammar is a contract.** Every v3 `:P*`/`#P*` command keeps its syntax; deltas are
+   additive and listed in the plan's Appendix A.
+9. **Public actions need explicit per-action approval:** pushes, PRs (reeltwo, DroidNet), Discord
+   or GitHub posts. One approval does not carry to the next action. Commit only when asked.
+10. **Tone:** neutral, no condescending closers, no "did you not realize" framings. Explain the
+    reasoning, not just the result; Todd is a capable builder, not a professional developer.
+11. **Never write outside this repo without saying so** (the patched ReelTwo library under
+    `~/Documents/Arduino/libraries/` is load-bearing for v3 builds).
 
 ---
 
-## Active cross-session work
+## Build and test
 
-The current thread of work is **upstreaming ALT improvements** back to reeltwo and the
-DroidNet catalog. Live status board: **[docs/UPSTREAMING.md](docs/UPSTREAMING.md)** —
-check it at the start of any session that continues this effort.
+```
+make -C UppityFirmware/test/native test            # host tests (UBSan on; `make asan` optional)
+arduino-cli compile --profile uppity UppityFirmware # ESP32, core 3.3.4 pinned in sketch.yaml
+```
+Profile `uppity` = `esp32:esp32:esp32:PartitionScheme=min_spiffs,FlashSize=4M`. Baseline at
+Phase 0: 314 KB of 1,966,080 (15 %). Paths under this repo contain spaces: always quote them.
+`arduino-cli` 1.5.1 is installed via Homebrew; the ESP32 core 3.3.4 is installed.
+
+Known local quirk: AddressSanitizer deadlocks in its own initialiser on this macOS build
+(Darwin 25, Apple clang 17), so the default test build uses UBSan only.
+
+---
+
+## Phase status (update as phases land)
+
+| Phase | Status |
+|---|---|
+| 0 Skeleton, simulator, tests, docs | **Done** 2026-09-07: tree, profile, core foundation, simulator, ESP32 HAL (PCNT + 10 kHz LEDC), TB9051FTG facts in docs/TB9051FTG-NOTES.md. |
+| 1 Motion core + USB console | **Code complete on host** 2026-09-07: policy, faults, lifter seek/creep/calibrate/hold, rotary move/spin/jog/home/characterise, composites (`:PH`, auto-raise), supervisor with programs, control task, I2C service, serial front with E-STOP scanner, console. 71 host tests pass; ESP32 build 367 KB. **Bench pending**: docs/BENCH-PHASE1.md. |
+| 2 Command layer + settings | not started |
+| 3 Network + minimal UI | not started |
+| 4 Full web UI | not started |
+| 5 Mesh + DroidNet | not started |
+| 6 Release | not started |
+
+Open items Todd owns: TB9051FTG datasheet check (PWM1=PWM2=low: coast or brake?) before
+Phase 1 motion tests; heartbeat tag `&PERI` vs `&UPPITY` before Phase 5.
+
+---
+
+## Ecosystem (see docs/v3-inventory/ECOSYSTEM.md for the facts)
+
+Sabé (private, local at `…/Control/Amidala Claude Project/Sabe`) and Roam-A-Dome ALT
+(`…/Roam-A-Dome/Roam-A-Dome_ALT`) are the architectural templates. WCB mesh via WCBClient
+(library index has 1.13.2; pin in `sketch.yaml` at Phase 5). DroidNet Signal Booster taps the WCB
+bus passively; the Command Library board file `r2uppityspinner-alt` is regenerated for 4.0 at
+Phase 5 against the current schema (the copy in this repo's root is stale and uses `group`).
 
 ---
 
 ## Memory
 
-Persistent context lives in the memory system at
-`~/.claude/projects/-Users-toddword-...-R2UppitySpinnerV3/memory/` (auto-loaded index in
-`MEMORY.md`). It holds: the ReelTwo library patch/upstream status, open periscope bugs,
-backlog items (seek-mode selector, rotary angle drift, `:PD` multi-rev clamp, dark mode),
-and working-style feedback. Prefer updating memory over duplicating that state here.
+Persistent context lives in the memory system (auto-loaded index `MEMORY.md`). The entry
+`project_v4_rewrite` holds the approved decisions and phase status; update it when a phase lands.

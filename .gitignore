@@ -18,3 +18,8 @@ requirements.txt
 
 .claude/
 .auto
+
+# v4 (UppityFirmware) build artefacts
+UppityFirmware/test/native/uppity_tests
+UppityFirmware/test/native/*.dSYM
+UppityFirmware/build/
