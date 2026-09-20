@@ -19,12 +19,16 @@ void SupervisorTask::taskFn(void* arg) {
     SupervisorTask* self = static_cast<SupervisorTask*>(arg);
     esp_task_wdt_add(nullptr);                       // no-op error if the TWDT is not initialised
     TickType_t last = xTaskGetTickCount();
+    bool first = true;
     for (;;) {
         uint32_t t0 = micros();
         self->sup_->tick(millis());
         uint32_t dt = micros() - t0;
         BaseType_t delayed = xTaskDelayUntil(&last, 1);   // pdFALSE = we were already late
-        self->sup_->reportTickStats(dt, delayed == pdFALSE);
+        // The first wake time is taken before the first tick runs, so a tick that straddles a
+        // 1 ms boundary reports "late" once at boot with nothing wrong (bench 2026-09-20).
+        self->sup_->reportTickStats(dt, delayed == pdFALSE && !first);
+        first = false;
         esp_task_wdt_reset();
     }
 }

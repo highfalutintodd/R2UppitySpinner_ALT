@@ -33,7 +33,7 @@ inline bool buildRequest(const Command& c, Ticks travel, RandomSource& rng, Moti
             int32_t deg = rnd ? (rel ? rng.range(-180, 180) : rng.range(0, 359)) : c.a;
             int32_t spd = c.hasB ? (c.b == -2 ? rng.range(40, 100) : c.b) * 10 : 0;
             int32_t mx = c.hasC ? (c.c == -2 ? rng.range(40, 100) : c.c) * 10 : 0;
-            if (!rel && deg == 0) { r.kind = JobKind::RotaryHome; return true; }
+            if (!rel && deg == 0) { r.kind = JobKind::RotaryHome; r.c = c.letter == 'S' ? 2 : 0; return true; }   // 'S': only if not already home (random director)
             r.kind = rel ? JobKind::RotaryRelative : JobKind::RotaryAbsolute; r.a = deg; r.b = spd; r.c = mx;
             return true;
         }

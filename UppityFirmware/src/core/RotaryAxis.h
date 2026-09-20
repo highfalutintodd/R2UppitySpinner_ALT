@@ -195,7 +195,10 @@ class RotaryHome {
         if (p.referenced && p.tpr > 0) {
             RotaryMoveParams m; m.rc = p.rc; m.floor = p.floor; m.speed = 500; m.maxSpeed = 500;
             Ticks offset = p.tpr * 10 / 360;                   // 10 degrees before zero, on the sweep's approach side
-            m.target = -sweepDir_ * offset; m.fudge = clampv<Ticks>(p.tpr * 3 / 360, 2, 1 << 20); m.stopDist = m.fudge; m.halfRev = p.tpr / 2;
+            // The count is unbounded after a spin (bench 2026-09-20: 8120 ticks = 6.85 turns). Every
+            // multiple of a revolution is a zero, so aim at the nearest one, never at count 0 itself.
+            Ticks nearestZero = current - signedTickDelta(0, current, p.tpr);
+            m.target = nearestZero - sweepDir_ * offset; m.fudge = clampv<Ticks>(p.tpr * 3 / 360, 2, 1 << 20); m.stopDist = m.fudge; m.halfRev = p.tpr / 2;
             move_.start(m, current, now); phase_ = Phase::Pass1;
         } else { beginSweep(current, now); }
         phaseChanged_ = true;

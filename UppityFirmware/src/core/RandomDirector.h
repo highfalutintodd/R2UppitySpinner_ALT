@@ -32,26 +32,38 @@ class RandomDirector {
         pMax_  = c.hasD ? clampv<int32_t>(c.d, pMin_, 600) : pMin_ + rng_->range(0, 4);
         out_->printf("RANDOM=on lift=%d rot=%d wait=%d..%ds", pLift_, pRot_, pMin_, pMax_);
     }
-    void stop(const char* why) { if (active_) out_->printf("RANDOM=off (%s)", why); active_ = false; running_ = false; }
+    // Returns true when random mode was actually on (the console then switches a managed light off).
+    bool stop(const char* why) { bool was = active_; if (was) out_->printf("RANDOM=off (%s)", why); active_ = false; running_ = false; return was; }
     bool active() const { return active_; }
+    // #PRANDOMLIGHT: 0 leave the light kit alone (v3 behaviour), 1-7 set that mode when random mode
+    // starts, 8 pick a new non-off mode with every action. The chains carry the light element.
+    void setLightPolicy(uint8_t p) { lightPolicy_ = p > 8 ? 0 : p; }
+    uint8_t lightPolicy() const { return lightPolicy_; }
     uint32_t actions() const { return actions_; }
 
     // Call every loop tick. Fills `out` with the next chain when one is due and the sequencer
     // is idle; returns the element count (0 = nothing to do yet).
     int next(Ms now, bool sequencerIdle, const Snapshot& s, const Limits& lim, Command* out, int cap) {
-        if (!active_ || cap < 12) return 0;
+        if (!active_ || cap < 13) return 0;
         if (running_) { if (!sequencerIdle) return 0; running_ = false; dueAt_ = now + nextDelayMs_; }
         if (!sequencerIdle || static_cast<int32_t>(now - dueAt_) < 0) return 0;
-        int n = param_ ? paramAction(s, lim, out) : levelAction(s, lim, out);
-        if (n > 0) { running_ = true; ++actions_; }
-        else dueAt_ = now + 1000;                       // nothing suitable (e.g. big lift too close): look again soon
-        return n;
+        int base = 0;
+        if (lightPolicy_ == 8 || (lightPolicy_ >= 1 && actions_ == 0)) {
+            Command l; if (lightPolicy_ == 8) l.verb = Verb::LightRandom; else { l.verb = Verb::Light; l.a = lightPolicy_; l.hasA = true; }
+            out[0] = l; base = 1;
+        }
+        int n = param_ ? paramAction(s, lim, out + base) : levelAction(s, lim, out + base);
+        if (n > 0) { running_ = true; ++actions_; return base + n; }
+        dueAt_ = now + 1000;                            // nothing suitable (e.g. big lift too close): look again soon
+        return 0;
     }
 
   private:
     // ---- element builders ----
     static Command lift(int pct, int spd) { Command c; c.verb = Verb::LiftTo; c.a = pct; c.hasA = true; c.b = spd; c.hasB = true; return c; }
-    static Command home() { Command c; c.verb = Verb::RotAbs; c.a = 0; c.hasA = true; return c; }
+    // "home if needed": a typed ":PA0" always runs the visible settle (Todd's choice); the director's
+    // homes exist for safety before a descent and are skipped when the head is already on the switch.
+    static Command home() { Command c; c.verb = Verb::RotAbs; c.a = 0; c.hasA = true; c.letter = 'S'; return c; }
     static Command angle(int deg, int spd) { Command c; c.verb = Verb::RotAbs; c.a = deg; c.hasA = true; c.b = spd; c.hasB = true; return c; }
     static Command spin(int spd) { Command c; c.verb = Verb::Spin; c.a = spd; c.hasA = true; return c; }
     static Command spinStop() { Command c; c.verb = Verb::SpinStop; return c; }
@@ -133,6 +145,7 @@ class RandomDirector {
 
     RandomSource* rng_ = nullptr; TextSink* out_ = nullptr;
     bool active_ = false, running_ = false, param_ = false;
+    uint8_t lightPolicy_ = 0;
     int level_ = 1;
     int pLift_ = 50, pRot_ = 45, pMin_ = 1, pMax_ = 5;
     Ms dueAt_ = 0, nextDelayMs_ = 2000;

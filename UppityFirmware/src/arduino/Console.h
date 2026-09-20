@@ -53,6 +53,7 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     void setKey(const Command& c);
     void importV3Now(bool forced);
     void pushOperatorJob(JobKind k, int32_t a);
+    void stopRandom(const char* why);
     bool refuseWhileMoving(const char* what);
     RandomDirector::Limits limits() const;
     void beginCmdSerial();

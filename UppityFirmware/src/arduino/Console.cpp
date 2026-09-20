@@ -44,6 +44,12 @@ void Console::applySettings(bool boot) {
     }
     d_.disp->setId(s_.marcId);
     d_.disp->setDedupMs(s_.dedupMs);
+    d_.dir->setLightPolicy(s_.randomLight);
+}
+
+// Random mode off, and the light kit off with it when the firmware was the one that put it on.
+void Console::stopRandom(const char* why) {
+    if (d_.dir->stop(why) && s_.randomLight != 0) onLight(1);
 }
 
 void Console::beginCmdSerial() {
@@ -112,7 +118,7 @@ void Console::handleEcosystemLine(const char* l) {
 }
 
 void Console::noteEstop(bool latched) {
-    if (latched) { d_.dir->stop("ESTOP"); d_.seq->clear("ESTOP"); }
+    if (latched) { stopRandom("ESTOP"); d_.seq->clear("ESTOP"); }
 }
 
 // ---------------------------------------------------------------- sequencer listener
@@ -129,7 +135,7 @@ void Console::onRandom(const Command& c) {
     else if (c.hasA || c.hasB || c.hasC || c.hasD) d_.dir->startParams(c, limits(), now);
     else d_.dir->startLevel(s_.aggressiveness, now);
 }
-void Console::onRandomStop() { d_.dir->stop("command"); }
+void Console::onRandomStop() { stopRandom("command"); }
 void Console::onEstop() { bool was = d_.estop->tripped(); d_.estop->trip(EstopLatch::Source::Sequence, millis()); line(was ? "ESTOP=latched" : "ESTOP=latched (stored sequence)"); }
 
 // ---------------------------------------------------------------- configuration commands
@@ -140,7 +146,7 @@ bool Console::refuseWhileMoving(const char* what) {
 }
 
 void Console::pushOperatorJob(JobKind k, int32_t a) {
-    d_.dir->stop("operator job"); d_.seq->clear("operator job");
+    stopRandom("operator job"); d_.seq->clear("operator job");
     MotionRequest r; r.kind = k; r.a = a; r.source = ReqSource::SerialUsb;
     uint32_t id = d_.q->push(r);
     if (id == 0) line("BUSY=queue_full"); else printf("QUEUED=%s id=%lu", jobName(static_cast<int>(k)), static_cast<unsigned long>(id));

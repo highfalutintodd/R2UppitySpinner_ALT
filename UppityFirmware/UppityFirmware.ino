@@ -62,7 +62,11 @@ static void drainEvents() {
     while (gEvents.pop(e)) {
         if (e.code == Ev::LightKit) gI2c.setLightKit(static_cast<uint8_t>(e.a));
         if (e.code == Ev::Estop) gConsole.noteEstop(e.b != 0);
-        if (e.code == Ev::Tick && e.b == 0 && e.a < 500 && !gConsole.settings().debug) continue;   // quiet unless the tick is stressed
+        if (e.code == Ev::Tick) {                                                   // quiet unless the tick is stressed
+            static int32_t lastLate = 0;
+            bool newLate = e.b != lastLate; lastLate = e.b;
+            if (!newLate && e.a < 500 && !gConsole.settings().debug) continue;
+        }
         formatEvent(e, line, sizeof line);
         gConsole.line(line);
     }

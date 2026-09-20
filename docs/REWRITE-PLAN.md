@@ -538,6 +538,10 @@ procedure `docs/BENCH-PHASE2.md`; hardware verification pending. Deviations from
 sequences number 0–100 as v3 did; `#PMOTOR` to a *different* profile resets commissioning,
 travel, safe-spin and min powers (same profile is a no-op); the builder's `#PTRAVEL` wins over
 the calibrated travel (0 hands back to the calibration); `#PS` waits clamp to 60 s at store time.
+Bench 2026-09-20 evening (Todd): passed except stored sequences / command UART / triggers, not
+run; four log findings fixed the same night (nearest-zero home after a spin, first-tick late
+artefact and TICK spam, director homes only if needed, full-travel already-there report) and
+`#PRANDOMLIGHT` added (settings schema 2). Results and the re-test list: `docs/BENCH-PHASE2.md`.
 
 ---
 

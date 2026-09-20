@@ -17,7 +17,7 @@
 //     their default when an older blob is loaded; nothing is ever moved or retyped.
 namespace uppity {
 
-constexpr uint16_t kSettingsSchema = 1;
+constexpr uint16_t kSettingsSchema = 2;
 
 struct Settings {
     // ---- 4-byte ----
@@ -54,7 +54,8 @@ struct Settings {
     uint8_t  debug = 0;              // verbose motion tracing
     uint8_t  v3Imported = 0;         // the one-shot v3 NVS import has run
     uint8_t  cmdTx = 0;              // echo responses on the command UART TX (GPIO0, only if wired)
-    uint8_t  reserved[36] = {};      // zero; new fields are carved from here
+    uint8_t  randomLight = 0;        // schema 2: light kit while random mode runs; 0 leave alone, 1-7 that mode, 8 shuffle per action; off when it ends
+    uint8_t  reserved[35] = {};      // zero; new fields are carved from here
 };
 static_assert(sizeof(Settings) == 80, "Settings layout changed: append inside reserved[] only and bump kSettingsSchema");
 
@@ -81,6 +82,7 @@ inline void sanitize(Settings& s) {
     if (s.wiggleDeg > 20) s.wiggleDeg = 2;
     if (s.aggressiveness > 2) s.aggressiveness = 1;
     if (s.commissioned > 2) s.commissioned = 0;
+    if (s.randomLight > 8) s.randomLight = 0;
 }
 
 // Load `stored` bytes (a blob written by this or an earlier schema) over defaults. Returns
@@ -92,8 +94,9 @@ inline uint16_t migrateSettings(Settings& out, const uint8_t* blob, size_t n) {
     size_t take = n < sizeof(Settings) ? n : sizeof(Settings);
     std::memcpy(&tmp, blob, take);
     if (tmp.schema == 0 || tmp.schema > kSettingsSchema) return 0;
-    // schema-specific defaults for fields that did not exist when the blob was written go here:
-    //   if (tmp.schema < 2) tmp.newField = <default>;
+    // schema-specific defaults for fields that did not exist when the blob was written go here
+    // (a reserve byte reads as 0, so a field whose default is 0 needs nothing):
+    if (tmp.schema < 2) tmp.randomLight = 0;
     out = tmp;
     out.schema = kSettingsSchema;
     sanitize(out);
@@ -225,6 +228,7 @@ inline const SettingKey kSettingKeys[] = {
     { "CMDTX",      [](const Settings& s) { return (int32_t)s.cmdTx; },           [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.cmdTx = (uint8_t)v; return true; }, "0/1 echo responses on the command UART TX" },
     { "LIFTERNC",   [](const Settings& s) { return (int32_t)s.lifterLimitsNC; },  [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.lifterLimitsNC = (uint8_t)v; return true; }, "0 limit switches normally open, 1 normally closed (after #PRESTART)" },
     { "ROTARYNC",   [](const Settings& s) { return (int32_t)s.rotaryHomeNC; },    [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.rotaryHomeNC = (uint8_t)v; return true; }, "0 home switch normally open, 1 normally closed (after #PRESTART)" },
+    { "RANDOMLIGHT", [](const Settings& s) { return (int32_t)s.randomLight; },   [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 8)) return false; s.randomLight = (uint8_t)v; return true; }, "light kit in random mode: 0 leave alone, 1-7 that mode, 8 a new one each action; off when it ends" },
     { "COMMISSIONED", [](const Settings& s) { return (int32_t)s.commissioned; },  [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 2)) return false; s.commissioned = (uint8_t)v; return true; }, "0 locked, 1 bench unlock, 2 commissioned" },
 };
 constexpr int kSettingKeyCount = static_cast<int>(sizeof(kSettingKeys) / sizeof(kSettingKeys[0]));

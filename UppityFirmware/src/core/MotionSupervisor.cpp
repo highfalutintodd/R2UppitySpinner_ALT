@@ -173,6 +173,8 @@ int MotionSupervisor::expandRequest(const MotionRequest& r, const TickInputs& in
         case JobKind::RotarySpin:
         case JobKind::RotaryHome:
         case JobKind::RotaryCharacterise:
+            // a "home if needed" request that is already home must not raise the lifter just to skip
+            if (r.kind == JobKind::RotaryHome && (r.c & kSkipHome) && (rotaryIsHome(policy(in)) || cfg_.rotaryDisabled)) { add(r.kind, r.a, r.b, r.c); break; }
             if (raiseFirst) add(JobKind::LifterSeek, travel(), 0, 1);
             if (r.kind == JobKind::RotaryRelative && tpr() <= 0) add(JobKind::RotaryCharacterise, 2, 0, 0);
             add(r.kind, r.a, r.b, r.c);
@@ -228,7 +230,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             { int slot = clampv<int>(p.speed / 50, 0, kSlots - 1); p.stopComp = dir > 0 ? cfg_.overshootUp[slot] : cfg_.overshootDown[slot]; }
             p.prof = prof_;
             if (!p.fullTravel && absl(target - in.lifterTicks) < 5) { lastReason_ = Reason::AlreadyThere; emit(Ev::JobEnd, static_cast<int32_t>(s.kind), static_cast<int32_t>(JobResult::Done), static_cast<int32_t>(Reason::AlreadyThere), in.nowMs); return 0; }
-            if (p.fullTravel && ((target == 0 && in.bottomLimit) || (target == travel() && in.topLimit))) { lastReason_ = Reason::AlreadyThere; return 0; }
+            if (p.fullTravel && ((target == 0 && in.bottomLimit) || (target == travel() && in.topLimit))) { lastReason_ = Reason::AlreadyThere; emit(Ev::JobEnd, static_cast<int32_t>(s.kind), static_cast<int32_t>(JobResult::Done), static_cast<int32_t>(Reason::AlreadyThere), in.nowMs); return 0; }
             seek_.start(p, in.lifterTicks, in.nowMs);
             job_ = JobKind::LifterSeek;
             emit(Ev::JobStart, static_cast<int32_t>(job_), target, static_cast<int32_t>(programId_), in.nowMs);

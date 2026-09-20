@@ -215,3 +215,47 @@ the `CONFIG ...` line from the boot after the power cycle (step 4), whether step
 `PERSIST=deferred` then `PERSIST=saved` came in that order, the `:PS8` run (step 12), and a few
 minutes of `:PMG` (step 14). If anything moved in a way you did not expect, the log line right
 before it is the one I need.
+
+## Results 2026-09-20 (Todd's periscope, 19:1)
+
+Run from the boot after the one-time lines. No crashes. Passed: settings across the power cycle
+(`CONFIG ... inverted=1 travel=1150 (#PTRAVEL) safespin=904 tpr=1185.5 ... commissioned=1`),
+`:PP100:PW2:PP0` three times, both v3 chain-order cases, the 60 s wait clamp, `:PX` mid-spin
+(chain cleared, random off, `#PRESUME`, `:PH` homed and lowered), `:PMG` for four minutes and `:PM`
+for three (gentle used only actions 1/3/4; every rotation above the 904-tick line; every descent
+below it homed first; about thirty homes all parked at count -6 to -8), light kit `:PL5 :PL0 :PLR
+:PL1`, and `#PSC` (travel 1179, spread 1.4 %, min power 25 % up / 15 % down; the calibration save was
+deferred while the drivers were on and landed two seconds after they switched off, which is the
+deferral rule working). Not run: stored sequences (Todd does not use them), the command UART (the
+rest of the droid was down), the trigger inputs.
+
+Found in the log and fixed in the next build: a home after a spin unwound every revolution
+(pass 1 aimed at count 0; it now aims at the nearest zero); one late tick at boot made the TICK
+line print every second (the first tick is exempt, and the line now prints only when the late
+count grows); random mode homed even when the head was already on the switch (the director's
+homes are now "home if needed"; a typed `:PA0` still does the full settle); `:PP0` at the bottom
+gave no completion line (`SEEK DONE ALREADY_THERE` now). New: `#PRANDOMLIGHT`.
+
+Two homes in the random run happened at 908–910 ticks, four to six above the 904 threshold: the
+rule as v3 defined it, but tight. `#PSAFESPIN920` (the height confirmed by eye) adds margin and
+costs nothing; Todd's call.
+
+## Re-test for the fix build (short)
+
+Same flash lines as above. Then:
+
+1. First boot prints `SETTINGS=migrated from schema 1 (80 bytes) to 2` once (the new light
+   setting took a spare byte); the `CONFIG ...` line must be unchanged. Later boots print
+   `SETTINGS=loaded schema 2`.
+2. Idle for a minute: **no** `TICK` lines. (One appears only if a tick is ever late again, and
+   then only once per new late tick.)
+3. `:PR50` (raises, spins), wait about five seconds, `:PA0`. `HOME phase 1 at <a few thousand>`
+   must be followed by `HOME phase 2` within about two seconds: the head goes to the nearest
+   home, not back through every turn.
+4. `:PP0` while already at the bottom → `SEEK DONE ALREADY_THERE`.
+5. `#PRANDOMLIGHT7`, then `:PMG`: `LIGHT=7` with the first action, and `LIGHT=1` (off) when `:PH`
+   ends random mode. `#PRANDOMLIGHT8`, `:PM`: a `LIGHT=n` line before every action, never 1.
+   `#PRANDOMLIGHT0` leaves the light kit alone, as v3 did. Whichever you pick is saved.
+6. During random mode, a `QUEUED=HOME` line with the head already home is followed straight by
+   the next step with no `HOME START`; after a "random angle" or "look around" the home runs.
+7. When the rest of the droid is up: the command UART (step 16 above).

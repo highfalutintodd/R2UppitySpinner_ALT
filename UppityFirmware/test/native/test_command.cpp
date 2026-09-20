@@ -38,6 +38,9 @@ TEST(settings_blob_round_trip_and_prefix_migration) {
     Settings d; CHECK_EQ(migrateSettings(d, blob, 4), 0); CHECK_EQ(d.travelTicks, 0);
     Settings f = a; f.schema = kSettingsSchema + 1; std::memcpy(blob, &f, sizeof f);
     CHECK_EQ(migrateSettings(d, blob, sizeof blob), 0);
+    // a schema-1 blob (randomLight did not exist: its byte was reserve, zero) migrates to schema 2
+    Settings e = a; e.schema = 1; e.randomLight = 0; std::memcpy(blob, &e, sizeof e);
+    Settings g; CHECK_EQ(migrateSettings(g, blob, sizeof blob), 1); CHECK_EQ(g.schema, kSettingsSchema); CHECK_EQ(g.randomLight, 0); CHECK_EQ(g.travelTicks, 1150);
 }
 
 TEST(settings_registry_set_get_format) {
@@ -162,6 +165,7 @@ struct CmdRig : Sequencer::Listener, Dispatcher::ConfigHandler {
     void onLight(int m) override { lights = m; ++lightSets; }
     void onRandom(const Command& c) override { if (c.verb == Verb::RandomLevel) dir.startLevel(c.letter == 'G' ? 0 : c.letter == 'M' ? 1 : 2, g.hal.nowMs()); else if (c.hasA || c.hasB || c.hasC || c.hasD) dir.startParams(c, limits(), g.hal.nowMs()); else dir.startLevel(1, g.hal.nowMs()); }
     void onRandomStop() override { if (dir.active()) ++randomStops; dir.stop("command"); }
+    int homeStarts() const { int n = 0; for (auto& e : g.log) if (e.code == Ev::JobStart && e.a == (int)JobKind::RotaryHome) ++n; return n; }
     void onEstop() override { ++estops; g.estop.trip(EstopLatch::Source::Sequence, g.hal.nowMs()); }
     void onConfig(const Command& c, const char*, ReqSource) override { ++configs; lastConfig = c; }
     RandomDirector::Limits limits() const { RandomDirector::Limits l; l.lifterMinPct = 65; l.lifterMaxPct = 100; l.rotaryMinPct = 40; return l; }
@@ -367,4 +371,69 @@ TEST(sequencer_spin_from_the_bottom_times_the_spin_not_the_raise) {
     lightAt = r.g.hal.nowMs();
     CHECK(spinStart > 0); CHECK(lightAt >= spinStart + 2000);
     r.line(":PH"); r.runUntilQuiet(120000); CHECK(r.g.snap().lifterTicks <= 5);
+}
+
+TEST(home_after_a_spin_goes_to_the_nearest_zero) {
+    CmdRig r;
+    r.line(":PA0"); r.runUntilQuiet(60000);                                    // referenced, head at the top and home
+    CHECK(r.g.sup.rotary().confidence == HomeConfidence::SwitchLive || r.g.sup.rotary().confidence == HomeConfidence::Latched);
+    r.line(":PD1080"); r.runUntilQuiet(60000);                                 // three turns on: count ~3550, head physically home
+    Ticks before = r.g.snap().rotaryTicks; CHECK(before > 3000);
+    double encAtStart = r.g.hal.rotary.encoder(), lo = encAtStart, hi = encAtStart;
+    r.line(":PA0");
+    for (int i = 0; i < 60000; ++i) { r.step(); double e = r.g.hal.rotary.encoder(); if (e < lo) lo = e; if (e > hi) hi = e; if (!r.seq.active() && r.g.sup.activeJob() == JobKind::None && r.g.queue.size() == 0) break; }
+    CHECK(r.g.snap().lastJob == JobKind::RotaryHome); CHECK(r.g.snap().lastResult == JobResult::Done);
+    CHECK(hi - lo < 0.75 * r.g.hal.rotary.params().ticksPerRev);               // never unwound the three turns (was ~3.1 turns before the fix)
+    CHECK(absl(r.g.snap().rotaryTicks) < 60);                                  // and the frame is back near zero
+}
+
+TEST(director_home_is_skipped_when_already_home_and_never_raises_for_it) {
+    CmdRig r;
+    r.line(":PA0"); r.runUntilQuiet(60000);                                    // raise and home the head
+    r.line(":PH"); r.runUntilQuiet(60000);                                     // mast down, head still on the switch
+    CHECK(r.g.sup.rotary().confidence == HomeConfidence::SwitchLive || r.g.sup.rotary().confidence == HomeConfidence::Latched);
+    CHECK(r.g.snap().lifterTicks <= 5);
+    int homes = r.homeStarts(); CHECK_EQ(homes, 1);
+    r.g.clearRecordsAndLog();
+    Command home; home.verb = Verb::RotAbs; home.a = 0; home.hasA = true; home.letter = 'S';
+    Command lift; lift.verb = Verb::LiftTo; lift.a = 40; lift.hasA = true;
+    Command chain[2] = { home, lift };
+    r.disp.submitDirector(chain, 2); r.runUntilQuiet(60000);
+    CHECK_EQ(r.homeStarts(), 0);                                               // no home ran (log cleared above)
+    int raises = 0; for (auto& e : r.g.log) if (e.code == Ev::JobStart && e.a == (int)JobKind::LifterSeek && e.b == 450) ++raises;
+    CHECK_EQ(raises, 0);                                                       // and the lifter was not raised just to skip it (log cleared above)
+    CHECK(absl(r.g.snap().lifterTicks - 180) <= 15);                           // the descent itself happened
+    r.line(":PA0"); r.runUntilQuiet(60000);                                    // a typed :PA0 still runs the full settle
+    CHECK_EQ(r.homeStarts(), 1);
+    // buildRequest carries the flag only when asked
+    MotionRequest q; CHECK(buildRequest(home, 450, r.rng, q)); CHECK(q.kind == JobKind::RotaryHome); CHECK_EQ(q.c, 2);
+    Command plain = home; plain.letter = 0; CHECK(buildRequest(plain, 450, r.rng, q)); CHECK_EQ(q.c, 0);
+}
+
+TEST(full_travel_seek_already_on_the_switch_reports_itself) {
+    CmdRig r;
+    r.line(":PH"); r.runUntilQuiet(60000);
+    int ends = 0; for (auto& e : r.g.log) if (e.code == Ev::JobEnd && e.a == (int)JobKind::LifterSeek) ++ends;
+    r.line(":PP0"); r.run(10);
+    int ends2 = 0; const Event* last = nullptr;
+    for (auto& e : r.g.log) if (e.code == Ev::JobEnd && e.a == (int)JobKind::LifterSeek) { ++ends2; last = &e; }
+    CHECK_EQ(ends2, ends + 1); CHECK(last && last->b == (int)JobResult::Done && last->c == (int)Reason::AlreadyThere);
+    CHECK_EQ(r.g.snap().lastProgramId, r.g.snap().lastProgramId);             // and the sequencer saw it complete
+    CHECK(!r.seq.active());
+}
+
+TEST(random_light_policy_sets_the_light_kit) {
+    CmdRig r;
+    r.dir.setLightPolicy(7);
+    r.line(":PMG"); r.run(30000);
+    CHECK_EQ(r.lights, 7); CHECK_EQ(r.lightSets, 1);                           // once, at the first action
+    r.line(":PH"); CHECK(!r.dir.active());                                     // (the console switches it off on stop; host rig has no console)
+    r.runUntilQuiet(60000);
+    CmdRig q;
+    q.dir.setLightPolicy(8);
+    q.line(":PM"); q.run(90000);
+    CHECK(q.lightSets >= 3); CHECK(q.lights != 1);                             // a new non-off mode with every action
+    CHECK_EQ(q.lightSets, (int)q.dir.actions());
+    CmdRig z;                                                                  // policy 0: never touched
+    z.line(":PM"); z.run(60000); CHECK_EQ(z.lightSets, 0);
 }

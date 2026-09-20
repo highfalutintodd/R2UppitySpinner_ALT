@@ -32,6 +32,7 @@ struct Rig {
         for (int i = 0; i < maxMs; ++i) { sup.tick(hal.nowMs()); hal.advance(1); drain(); if (sup.activeJob() == JobKind::None && queue.size() == 0) return; }
     }
     void drain() { Event e; while (events.pop(e)) log.push_back(e); }
+    void clearRecordsAndLog() { hal.clearRecords(); log.clear(); }
     uint32_t seek(Ticks target, int speedPermille = 0, bool fullTravel = false) {
         MotionRequest r; r.kind = JobKind::LifterSeek; r.a = target; r.b = speedPermille; r.c = fullTravel ? 1 : 0; r.source = ReqSource::Test; return queue.push(r);
     }
