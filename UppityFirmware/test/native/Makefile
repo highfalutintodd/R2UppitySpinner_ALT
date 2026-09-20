@@ -5,7 +5,7 @@
 #                      macOS builds — Darwin 25 with Apple clang 17 — hence not the default)
 CXX ?= c++
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -g -O1 -fsanitize=undefined -fno-omit-frame-pointer
-SRCS = test_main.cpp test_core.cpp test_sim.cpp test_motion.cpp test_rotary.cpp test_composite.cpp test_serial.cpp ../../src/core/MotionSupervisor.cpp
+SRCS = test_main.cpp test_core.cpp test_sim.cpp test_motion.cpp test_rotary.cpp test_composite.cpp test_serial.cpp test_command.cpp ../../src/core/MotionSupervisor.cpp
 HDRS = $(wildcard ../../src/core/*.h) $(wildcard ../../src/sim/*.h) uppity_test.h rig.h
 BIN = uppity_tests
 

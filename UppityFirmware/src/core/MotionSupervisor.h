@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include "Units.h"
 #include "Hal.h"
 #include "Profiles.h"
@@ -74,6 +75,11 @@ class MotionSupervisor {
     void tick(Ms now);
     void reportTickStats(uint32_t cycleUs, bool late);
     void requestClearFault() { clearFaultReq_ = true; }
+    // Persist sets this around an NVS commit (a flash erase stalls both cores): no new program
+    // starts while it is set; queued requests simply wait. Any context.
+    void setHoldIntake(bool hold) { holdIntake_.store(hold, std::memory_order_release); }
+    bool holdIntake() const { return holdIntake_.load(std::memory_order_acquire); }
+    uint32_t lastProgramId() const { return lastProgramId_; }
 
     // Read-only views for tests, the console and persistence.
     const Snapshot& current() const { return snap_; }
@@ -167,6 +173,8 @@ class MotionSupervisor {
     Ms idleSince_ = 0;
     bool wasStopped_ = false;
     bool clearFaultReq_ = false;
+    std::atomic<bool> holdIntake_{false};
+    uint32_t lastProgramId_ = 0;
     uint8_t enCycle_ = 0;
     Ms enCycleAt_ = 0;
     bool enableRequested_ = false;

@@ -2,8 +2,9 @@
  * Uppity Spinner ALT v4 — clean-sheet firmware for the Uppity Spinner periscope PCB.
  * https://github.com/highfalutintodd/R2UppitySpinner_ALT
  *
- * Phase 1: motion core + USB console. No WiFi, no persistence yet.
- * Read docs/REWRITE-PLAN.md and docs/BENCH-PHASE1.md before changing anything here.
+ * Phase 2: motion core + command layer (USB console and command UART, stored sequences,
+ * random mode, light kit, trigger inputs, status LED) + settings that survive a power cycle.
+ * No WiFi yet. Read docs/REWRITE-PLAN.md and docs/BENCH-PHASE2.md before changing anything here.
  *
  * Licensed under the GNU Lesser General Public License v2.1 (see LICENSE).
  */
@@ -17,11 +18,16 @@
 #include "src/core/EventLog.h"
 #include "src/core/EventFormat.h"
 #include "src/core/MotionSupervisor.h"
+#include "src/core/Sequencer.h"
+#include "src/core/RandomDirector.h"
+#include "src/core/Dispatcher.h"
 #include "src/arduino/Esp32Hal.h"
 #include "src/arduino/SupervisorTask.h"
 #include "src/arduino/I2cService.h"
 #include "src/arduino/SerialFront.h"
+#include "src/arduino/Persist.h"
 #include "src/arduino/Console.h"
+#include "src/arduino/StatusLed.h"
 
 using namespace uppity;
 
@@ -41,73 +47,75 @@ static EventLog          gEvents;
 static MotionSupervisor  gSup(gHal, gEstop, gQueue, gSnapshot, gEvents);
 static SupervisorTask    gTask;
 static I2cService        gI2c;
-static SerialFront       gSerial;
+static SerialFront       gUsb, gCmd;
+static Persist           gPersist;
+static Sequencer         gSeq;
+static RandomDirector    gDir;
+static Dispatcher        gDisp;
 static Console           gConsole;
+static StatusLed         gLed;
 
 static void panicHook(void*) { gHal.panicStop(); }
 
 static void drainEvents() {
     Event e; char line[160];
     while (gEvents.pop(e)) {
-        if (e.code == Ev::LightKit) { gI2c.setLightKit(static_cast<uint8_t>(e.a)); }
-        if (e.code == Ev::Tick && e.b == 0 && e.a < 500) continue;          // quiet unless the tick is stressed
+        if (e.code == Ev::LightKit) gI2c.setLightKit(static_cast<uint8_t>(e.a));
+        if (e.code == Ev::Estop) gConsole.noteEstop(e.b != 0);
+        if (e.code == Ev::Tick && e.b == 0 && e.a < 500 && !gConsole.settings().debug) continue;   // quiet unless the tick is stressed
         formatEvent(e, line, sizeof line);
-        Serial.println(line);
+        gConsole.line(line);
     }
     uint32_t d = gEvents.dropped();
     static uint32_t lastDropped = 0;
     if (d != lastDropped) { Serial.printf("EVENTS DROPPED=%lu\n", (unsigned long)(d - lastDropped)); lastDropped = d; }
 }
 
-static void updateStatusLed(const Snapshot& s, uint32_t now) {
-    bool blink = (now / 250) & 1;
-    uint8_t r = 0, g = 0, b = 0;
-    switch (s.state) {
-        case MotionState::Locked:  r = 2; g = 2; break;                                   // yellow: commissioning needed
-        case MotionState::Stopped: r = blink ? 6 : 0; break;                              // fast red blink: E-STOP latched
-        case MotionState::Fault:   if (blink) r = 4; else { r = 2; g = 2; } break;        // red / yellow
-        case MotionState::Moving:  if (blink) g = 3; else { r = 2; g = 2; } break;        // green / yellow
-        default:
-            if (s.homeConf == HomeConfidence::Latched || s.homeConf == HomeConfidence::SwitchLive || s.rotaryDisabled) g = 2; else r = 2;
-            break;
-    }
-    rgbLedWrite(board::kStatusLed, r, g, b);
-}
-
 void setup() {
     Serial.begin(115200);
     delay(200);
-    Serial.printf("\nUppity Spinner ALT v%s  phase 1 (%s %s)\n", UPPITY_FW_VERSION, __DATE__, __TIME__);
+    Serial.printf("\nUppity Spinner ALT v%s  phase 2 (%s %s)\n", UPPITY_FW_VERSION, __DATE__, __TIME__);
     gEstop.setPanic(panicHook, nullptr);
     bool halOk = gHal.begin();
     Serial.printf("HAL=%s%s\n", halOk ? "ok" : "FAILED ", halOk ? "" : gHal.lastError());
     bool i2cOk = gI2c.begin(gHal);
     Serial.printf("EXPANDER=%s\n", i2cOk ? "ok (drivers off, lights off)" : "NOT RESPONDING (motors cannot be enabled)");
-    gConsole.begin(gSup, gQueue, gEstop, gI2c, Serial);
-    MotionConfig& cfg = gConsole.config();
-    // Phase 1 has no saved settings, so boot with the most protective profile: the 19:1 caps
-    // throttle at 75 % and stalls out in 700 ms, which a 6.3:1 tolerates fine (its min power is
-    // 65 %). Bench 2026-09-19: Todd's 19:1 ran two 2 s full-power stalls under the 6.3:1
-    // profile before this was caught. #PMOTOR0 for a 6.3:1, #PMOTOR2 for IA-Parts, every boot.
-    cfg.motor = LifterMotor::Pololu4751_19;
-    cfg.commissioned = false;                                  // locked until #PUNLOCK (phase 1) or commissioning (phase 4)
-    cfg.rotary.driveSign = -1;                                 // v3 wiring convention; #PROTARYTEST will measure it in phase 2
-    gSup.setConfig(cfg);
+    gLed.begin();
+
+    Console::Deps d;
+    d.sup = &gSup; d.q = &gQueue; d.estop = &gEstop; d.pub = &gSnapshot; d.i2c = &gI2c; d.persist = &gPersist;
+    d.seq = &gSeq; d.disp = &gDisp; d.dir = &gDir; d.hal = &gHal; d.usb = &Serial; d.cmd = &Serial2;
+    gConsole.begin(d);
+    gSeq.begin(gQueue, gSnapshot, gPersist.sequences(), gConsole.rng(), gConsole, gConsole);
+    gDir.begin(gConsole.rng(), gConsole);
+    gDisp.begin(gSeq, gConsole, gConsole);
+    gConsole.boot();                                   // settings loaded (v3 imported once), applied, command UART open
+
     gSup.begin(millis());
-    gSerial.begin(gEstop);
+    gUsb.begin(Serial, gEstop, EstopLatch::Source::SerialUsb);
+    gCmd.begin(Serial2, gEstop, EstopLatch::Source::SerialCmd);
     bool taskOk = gTask.start(gSup);
     Serial.printf("CONTROL_TASK=%s\nREADY (type #PHELP)\n", taskOk ? "running core1 prio10 1kHz" : "FAILED");
     drainEvents();
 }
 
-void loop() {
-    static uint32_t lastLed = 0;
+static void pollSerial(SerialFront& front, ReqSource src) {
     LineAssembler::Kind kind;
     const char* line;
-    while ((line = gSerial.pollLine(kind)) != nullptr) gConsole.handleLine(line, kind);
+    while ((line = front.pollLine(kind)) != nullptr) {
+        if (kind == LineAssembler::Kind::Ecosystem) gConsole.handleEcosystemLine(line);
+        else gDisp.handleLine(line, src, millis());
+    }
+}
+
+void loop() {
+    uint32_t now = millis();
+    pollSerial(gUsb, ReqSource::SerialUsb);
+    pollSerial(gCmd, ReqSource::SerialCmd);
+    gSeq.tick(now);
+    gConsole.update(now);
     gI2c.update();
     drainEvents();
-    uint32_t now = millis();
-    if (now - lastLed >= 100) { lastLed = now; Snapshot s; if (gSnapshot.read(s)) updateStatusLed(s, now); }
+    { Snapshot s; if (gSnapshot.read(s)) gLed.update(s, gConsole.randomActive(), now); }
     delay(1);
 }

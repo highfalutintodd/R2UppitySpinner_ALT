@@ -40,7 +40,7 @@ line at a time from a serial monitor at 115200 baud, with a hand on the power sw
 
 ## Todd's hardware, as measured on 2026-09-19
 
-Send these after every boot until Phase 2 saves them: `#PINVERT1` (mechanism runs backwards),
+Phase 1 builds need these after every boot (Phase 2 saves them once; see `docs/BENCH-PHASE2.md`): `#PINVERT1` (mechanism runs backwards),
 `#PTRAVEL1150` (top switch closes at ~1150 ticks; the 19:1 profile guesses 1350),
 `#PSAFESPIN904` (v3's stored `minheight`, confirmed by eye at `:PP80` on 2026-09-20),
 `#PROTARYTPR11855` (measured 1185.5 ticks/rev; without it the first `:PD`/`:PH` of a boot runs

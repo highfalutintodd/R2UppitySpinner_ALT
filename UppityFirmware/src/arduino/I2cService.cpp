@@ -40,10 +40,16 @@ bool I2cService::begin(Esp32Hal& hal) {
     return ok;
 }
 
-void I2cService::setLightKit(uint8_t mode) { light_ = mode & 7; }
+void I2cService::setLightKit(uint8_t mode) {
+    mode &= 7;
+    // v3: ":PL0" writes Off first so a kit already in full-cycle restarts its cycle
+    if (mode == 0 && light_ == 0) { light_ = 1; pendingLight_ = 0; pendingAt_ = millis(); return; }
+    light_ = mode; pendingLight_ = -1;
+}
 
 void I2cService::update() {
     if (!hal_) return;
+    if (pendingLight_ >= 0 && millis() - pendingAt_ >= 20) { light_ = static_cast<uint8_t>(pendingLight_); pendingLight_ = -1; }
     bool want = hal_->enableRequested();
     uint8_t v = compose(want);
     if (v != shadow_ || want != enabledApplied_) {
@@ -54,7 +60,7 @@ void I2cService::update() {
     if (now - lastReadMs_ >= 20) {
         lastReadMs_ = now;
         uint8_t r;
-        if (readByte(r)) inputs_ = static_cast<uint8_t>(((r >> board::kExpInputA) & 1 ? 0 : 1) | ((r >> board::kExpInputB) & 1 ? 0 : 2) | ((r >> board::kExpInputC) & 1 ? 0 : 4));
+        if (readByte(r)) { inputs_ = static_cast<uint8_t>(((r >> board::kExpInputA) & 1 ? 0 : 4) | ((r >> board::kExpInputB) & 1 ? 0 : 2) | ((r >> board::kExpInputC) & 1 ? 0 : 1)); ++inputReads_; }
     }
 }
 

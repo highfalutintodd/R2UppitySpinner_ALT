@@ -55,6 +55,7 @@ struct Snapshot {
     Ms overrideRemainingMs = 0;  // rescue override lease
     JobKind activeJob = JobKind::None;
     uint32_t activeJobId = 0;
+    uint32_t lastProgramId = 0;  // id of the last program that ended (done, failed or refused); the sequencer waits on it
     JobKind lastJob = JobKind::None;
     JobResult lastResult = JobResult::None;
     uint8_t lastReason = 0;      // Reason code (see EventLog.h)

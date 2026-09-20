@@ -9,7 +9,7 @@ namespace uppity {
 
 class EstopLatch {
   public:
-    enum class Source : uint8_t { None = 0, SerialUsb, SerialCmd, Web, Mesh, Fault, Watchdog, Test };
+    enum class Source : uint8_t { None = 0, SerialUsb, SerialCmd, Web, Mesh, Fault, Watchdog, Test, Sequence };
     using PanicFn = void (*)(void* ctx);
 
     void setPanic(PanicFn fn, void* ctx) { panicFn_ = fn; panicCtx_ = ctx; }
@@ -49,6 +49,7 @@ class EstopLatch {
             case Source::Fault:     return "fault";
             case Source::Watchdog:  return "watchdog";
             case Source::Test:      return "test";
+            case Source::Sequence:  return "sequence";
             default:                return "none";
         }
     }

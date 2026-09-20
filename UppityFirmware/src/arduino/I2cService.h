@@ -10,9 +10,10 @@ class I2cService {
   public:
     bool begin(Esp32Hal& hal);
     void update();                              // call every loop()
-    void setLightKit(uint8_t mode);             // 0..7, applied on the next update
+    void setLightKit(uint8_t mode);             // 0..7, applied on the next update; 0 restarts the cycle via Off
     uint8_t lightKit() const { return light_; }
-    uint8_t inputs() const { return inputs_; }  // bit0 A, bit1 B, bit2 C (1 = grounded)
+    uint8_t inputs() const { return inputs_; }  // v3 numbering: A grounded = 4, B = 2, C = 1 (so jumpers select :PS1..:PS7)
+    uint32_t inputReads() const { return inputReads_; }   // bumps every 20 ms sample
     bool ok() const { return errors_ < 3; }
     uint32_t errors() const { return errors_; }
     bool enabledApplied() const { return enabledApplied_; }
@@ -25,7 +26,8 @@ class I2cService {
     uint8_t shadow_ = 0xFF;
     uint8_t inputs_ = 0;
     bool enabledApplied_ = false;
-    uint32_t errors_ = 0, lastReadMs_ = 0;
+    uint32_t errors_ = 0, lastReadMs_ = 0, inputReads_ = 0;
+    int8_t pendingLight_ = -1; uint32_t pendingAt_ = 0;
 };
 }
 #endif

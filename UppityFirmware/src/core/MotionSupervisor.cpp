@@ -485,6 +485,7 @@ void MotionSupervisor::endProgram(const StepOutcome& o, const TickInputs& in) {
         // program ("SAFE_LOWER FAILED HOME_FAILED"), not to the step that tripped it.
         if (programKind_ == JobKind::SafeLower) emit(Ev::JobEnd, static_cast<int32_t>(programKind_), static_cast<int32_t>(o.jobResult), static_cast<int32_t>(o.reason), in.nowMs);
     }
+    if (programId_ != 0) lastProgramId_ = programId_;
     stepCount_ = 0; stepIdx_ = 0; programKind_ = JobKind::None; programId_ = 0;
     idleSince_ = in.nowMs;
 }
@@ -501,6 +502,7 @@ void MotionSupervisor::refuseAll(Reason why, const TickInputs& in) {
     while (queue_.pop(r)) {
         emit(Ev::Refused, static_cast<int32_t>(r.kind), static_cast<int32_t>(why), static_cast<int32_t>(r.id), in.nowMs);
         lastJob_ = r.kind; lastResult_ = JobResult::Refused; lastReason_ = why;
+        if (r.id != 0) lastProgramId_ = r.id;
     }
 }
 
@@ -592,7 +594,8 @@ void MotionSupervisor::tick(Ms now) {
     // ---- program intake ----
     if (job_ == JobKind::None) {
         MotionRequest r;
-        if (queue_.pop(r)) {
+        if (holdIntake()) { /* NVS commit in progress: leave requests queued */ }
+        else if (queue_.pop(r)) {
             stepCount_ = expandRequest(r, in, steps_); stepIdx_ = 0; programId_ = r.id; programKind_ = r.kind;
             runProgram(in);
             if (job_ != JobKind::None) { arming_ = !enabled; armingSince_ = now; }
@@ -679,7 +682,7 @@ void MotionSupervisor::publish(const TickInputs& in, BridgeCommand lifterOut, Br
     s.estop = in.estop; s.estopSource = static_cast<uint8_t>(estop_.source());
     Ms u = queue_.overrideUntil();
     s.overrideRemainingMs = (u != 0 && static_cast<int32_t>(u - in.nowMs) > 0) ? (u - in.nowMs) : 0;
-    s.activeJob = job_; s.activeJobId = programId_;
+    s.activeJob = job_; s.activeJobId = programId_; s.lastProgramId = lastProgramId_;
     s.lastJob = lastJob_; s.lastResult = lastResult_; s.lastReason = static_cast<uint8_t>(lastReason_);
     s.lifterOut = lifterOut.mode == Bridge::Drive ? lifterOut.duty : 0;
     s.rotaryOut = rotaryOut.mode == Bridge::Drive ? rotaryOut.duty : 0;

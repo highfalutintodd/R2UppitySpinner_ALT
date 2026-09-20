@@ -2,6 +2,7 @@
 #include "../../src/core/LineAssembler.h"
 #include "../../src/core/Parser.h"
 #include "../../src/core/EventFormat.h"
+#include "../../src/core/Sequencer.h"
 #include <string>
 using namespace uppity;
 
@@ -73,21 +74,63 @@ TEST(parser_config_verbs_and_foreign_lines) {
     CHECK(parseLine("#PROTARYTEST5", c)); CHECK(c.verb == Verb::RotaryTest); CHECK_EQ(c.a, 5);
     CHECK(parseLine("#PROTARYTEST", c)); CHECK(c.verb == Verb::RotaryTest); CHECK(!c.hasA);
     CHECK(parseLine("#PSC", c)); CHECK(c.verb == Verb::Calibrate);
-    CHECK(parseLine("#PMOTOR1", c)); CHECK(c.verb == Verb::Motor); CHECK_EQ(c.a, 1);
-    CHECK(parseLine("#PINVERT1", c)); CHECK(c.verb == Verb::Invert); CHECK(c.hasA); CHECK_EQ(c.a, 1);
-    CHECK(parseLine("#PINVERT", c)); CHECK(c.verb == Verb::Invert); CHECK(!c.hasA);
-    CHECK(parseLine("#PTRAVEL1150", c)); CHECK(c.verb == Verb::Travel); CHECK_EQ(c.a, 1150);
-    CHECK(parseLine("#PSAFESPIN760", c)); CHECK(c.verb == Verb::SafeSpin); CHECK_EQ(c.a, 760);
+    CHECK(parseLine("#PMOTOR1", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "MOTOR"); CHECK_EQ(c.a, 1);
+    CHECK(parseLine("#PINVERT1", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "INVERT"); CHECK(c.hasA); CHECK_EQ(c.a, 1);
+    CHECK(parseLine("#PINVERT", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "INVERT"); CHECK(!c.hasA);
+    CHECK(parseLine("#PINVERT=1", c)); CHECK(c.verb == Verb::Set); CHECK(c.hasA); CHECK_EQ(c.a, 1);
+    CHECK(parseLine("#PTRAVEL1150", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "TRAVEL"); CHECK_EQ(c.a, 1150);
+    CHECK(parseLine("#PSAFESPIN=904", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "SAFESPIN"); CHECK_EQ(c.a, 904);
     CHECK(parseLine("#PV3", c)); CHECK(c.verb == Verb::V3Dump);
-    CHECK(parseLine("#PHOMEOFFSET-18", c)); CHECK(c.verb == Verb::HomeOffset); CHECK_EQ(c.a, -18);
-    CHECK(parseLine("#PROTARYTPR11855", c)); CHECK(c.verb == Verb::RotaryTpr); CHECK_EQ(c.a, 11855);
+    CHECK(parseLine("#PV3IMPORT", c)); CHECK(c.verb == Verb::V3Import);
+    CHECK(parseLine("#PHOMEOFFSET-18", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "HOMEOFFSET"); CHECK_EQ(c.a, -18);
+    CHECK(parseLine("#PROTARYTPR11855", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "ROTARYTPR"); CHECK_EQ(c.a, 11855);
     CHECK(parseLine("#PROTARYTEST3", c)); CHECK(c.verb == Verb::RotaryTest); CHECK_EQ(c.a, 3);
-    CHECK(parseLine("#PWIGGLE2", c)); CHECK(c.verb == Verb::Wiggle); CHECK_EQ(c.a, 2);
+    CHECK(parseLine("#PWIGGLE2", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "WIGGLE"); CHECK_EQ(c.a, 2);
     CHECK(parseLine("#PCLEARFAULT", c)); CHECK(c.verb == Verb::ClearFault);
-    CHECK(parseLine("#PBOGUS", c)); CHECK(c.verb == Verb::Invalid);
+    CHECK(parseLine("#PBOGUS", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "BOGUS");   // the console rejects unknown keys
+    CHECK(parseLine("#PL", c)); CHECK(c.verb == Verb::ListSeq);
+    CHECK(parseLine("#PLOCK", c)); CHECK(c.verb == Verb::Lock);
+    CHECK(parseLine("#PD7", c)); CHECK(c.verb == Verb::DelSeq); CHECK_EQ(c.a, 7);
+    CHECK(parseLine("#PDEBUG1", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "DEBUG");
+    CHECK(parseLine("#PR", c)); CHECK(c.verb == Verb::RotaryToggle);
+    CHECK(parseLine("#PRESTART", c)); CHECK(c.verb == Verb::Restart);
+    CHECK(parseLine("#PNCL", c)); CHECK(c.verb == Verb::LimitPolarity); CHECK_EQ(c.letter, 'C'); CHECK_EQ(c.a, 'L');
+    CHECK(parseLine("#PNOR", c)); CHECK(c.verb == Verb::LimitPolarity); CHECK_EQ(c.letter, 'O'); CHECK_EQ(c.a, 'R');
+    CHECK(parseLine("#PS3:P100:L5:R30", c)); CHECK(c.verb == Verb::StoreSeq); CHECK_EQ(c.a, 3); CHECK(std::string(c.text) == "P100:L5:R30");
+    CHECK(parseLine("#PSEQNAME3=Search", c)); CHECK(c.verb == Verb::SeqName); CHECK_EQ(c.a, 3); CHECK(std::string(c.text) == "Search");
+    CHECK(parseLine("#PSC", c)); CHECK(c.verb == Verb::Calibrate);
+    CHECK(parseLine("#PSTATUS", c)); CHECK(c.verb == Verb::Status);
+    CHECK(parseLine("#PZERO", c)); CHECK(c.verb == Verb::Zero);
+    CHECK(parseLine("#PFACTORY", c)); CHECK(c.verb == Verb::Factory);
+    CHECK(parseLine("#PID5", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "ID"); CHECK_EQ(c.a, 5);
+    CHECK(parseLine("#PBAUD9600", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "BAUD"); CHECK_EQ(c.a, 9600);
+    CHECK(parseLine("#PCAL", c)); CHECK(c.verb == Verb::Cal);
+    CHECK(parseLine(":PM", c)); CHECK(c.verb == Verb::Random); CHECK(!c.hasA);
+    CHECK(parseLine(":PM,80,80,2,4", c)); CHECK(c.verb == Verb::Random); CHECK_EQ(c.a, 80); CHECK_EQ(c.b, 80); CHECK_EQ(c.c, 2); CHECK_EQ(c.d, 4); CHECK(c.hasD);
+    CHECK(parseLine(":PWR5", c)); CHECK(c.verb == Verb::Wait); CHECK_EQ(c.b, 1); CHECK_EQ(c.a, 5);
     CHECK(!parseLine("&SABE,HB,1,2,3", c));
     CHECK(!parseLine("hello", c));
     CHECK(!parseLine(":Q1", c));
+}
+
+TEST(sequence_canonical_form_accepts_legacy_and_full) {
+    char out[256], bad[64];
+    CHECK_EQ(canonicalSequence("P100:L5:R30", out, sizeof out, bad, sizeof bad), 3); CHECK(std::string(out) == ":PP100:PL5:PR30");
+    CHECK_EQ(canonicalSequence(":PP100:PL5:PR30", out, sizeof out, bad, sizeof bad), 3); CHECK(std::string(out) == ":PP100:PL5:PR30");
+    CHECK_EQ(canonicalSequence("PP100:PL5", out, sizeof out, bad, sizeof bad), 2); CHECK(std::string(out) == ":PP100:PL5");
+    CHECK_EQ(canonicalSequence("H", out, sizeof out, bad, sizeof bad), 1); CHECK(std::string(out) == ":PH");
+    CHECK_EQ(canonicalSequence("X", out, sizeof out, bad, sizeof bad), 1); CHECK(std::string(out) == ":PX");
+    CHECK_EQ(canonicalSequence("P100,100:L7:M,80,80,2,4", out, sizeof out, bad, sizeof bad), 3); CHECK(std::string(out) == ":PP100,100:PL7:PM,80,80,2,4");
+    CHECK_EQ(canonicalSequence("H:P50:W2:P85,35:A90,25:W2:A270,20,100:W2:P100,100:L5:R50:W4:H", out, sizeof out, bad, sizeof bad), 13);
+    CHECK(std::string(out) == ":PH:PP50:PW2:PP85,35:PA90,25:PW2:PA270,20,100:PW2:PP100,100:PL5:PR50:PW4:PH");
+    CHECK_EQ(canonicalSequence("W600:P0", out, sizeof out, bad, sizeof bad), 2); CHECK(std::string(out) == ":PW60:PP0");     // waits clamp to 60 s
+    CHECK_EQ(canonicalSequence("P100:Q5", out, sizeof out, bad, sizeof bad), -1); CHECK(std::string(bad) == "Q5");
+    CHECK_EQ(canonicalSequence("P100:STATE", out, sizeof out, bad, sizeof bad), -1);                                         // config verbs are not chain elements
+    CHECK_EQ(canonicalSequence("", out, sizeof out, bad, sizeof bad), 0);
+    Command els[8];
+    CHECK_EQ(Sequencer::parseChain(":PP100:PL5:PR30", els, 8, nullptr), 3); CHECK(els[1].verb == Verb::Light); CHECK(els[2].verb == Verb::Spin);
+    CHECK_EQ(Sequencer::parseChain(":PP100:L5:P50", els, 8, nullptr), 3); CHECK(els[1].verb == Verb::Light); CHECK(els[2].verb == Verb::LiftTo); CHECK_EQ(els[2].a, 50);
+    CHECK_EQ(Sequencer::parseChain(":P3P100:P3L5", els, 8, nullptr), 2); CHECK_EQ(els[1].id, 3); CHECK(els[1].verb == Verb::Light);
 }
 
 TEST(chain_splitting) {

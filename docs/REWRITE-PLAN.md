@@ -525,6 +525,20 @@ return at floor power, brake on the first closure while moving) because the enco
 drive cannot be trusted tick by tick after the frame strike; the arc-centre-by-count park
 remains as `#PHOMEPARK0`.
 
+**Status 2026-09-20 (later):** Phase 2 implemented on `v4-rewrite`: `Settings`/`Calibration`
+blobs in NVS namespace `uppity` (append-only, prefix-copy migration, written only while
+disarmed with the supervisor's intake held), one-shot conservative import of v3's
+`uppityspinner` tunables, the KEY=VALUE registry behind `#P<KEY>[=]<value>` and a replayable
+`#PCONFIG`, the command UART with its own line assembler, cross-transport dedup, the
+non-blocking sequencer (`:PW` no longer blocks), stored sequences in namespace `uppityseq`
+(legacy and full forms accepted, canonical `:P` form stored), the random director as a
+script generator, `:PL0` restart pulse, debounced trigger inputs (baseline at boot, never a
+power-up fire), status LED module. 106 host tests; ESP32 build 407,511 bytes (20 %). Bench
+procedure `docs/BENCH-PHASE2.md`; hardware verification pending. Deviations from §3.5/A.2:
+sequences number 0–100 as v3 did; `#PMOTOR` to a *different* profile resets commissioning,
+travel, safe-spin and min powers (same profile is a no-op); the builder's `#PTRAVEL` wins over
+the calibrated travel (0 hands back to the calibration); `#PS` waits clamp to 60 s at store time.
+
 ---
 
 ## 6. Verification strategy

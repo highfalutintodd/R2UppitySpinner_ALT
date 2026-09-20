@@ -2,33 +2,67 @@
 #ifdef ARDUINO
 #include <Arduino.h>
 #include "../core/Parser.h"
-#include "../core/LineAssembler.h"
 #include "../core/MotionSupervisor.h"
 #include "../core/CommandQueue.h"
 #include "../core/EstopLatch.h"
+#include "../core/Settings.h"
+#include "../core/Sequencer.h"
+#include "../core/RandomDirector.h"
+#include "../core/Dispatcher.h"
+#include "../core/TextSink.h"
 #include "I2cService.h"
-// Phase 1 console: turns parsed ":P"/"#P" lines into motion requests and prints KEY=VALUE
-// answers. Configuration lives in RAM until Phase 2 adds persistence.
+#include "Persist.h"
+#include "Esp32Hal.h"
+// The operator's side of the firmware: owns the settings and the calibration in RAM, answers
+// every "#P" command, feeds the random director and the trigger inputs into the dispatcher,
+// pulls calibration/characterisation results back out of the supervisor so they persist, and
+// prints everything as KEY=VALUE lines on the USB console (and the command UART if #PCMDTX1).
 namespace uppity {
-class Console {
+
+struct EspRandom final : RandomSource { uint32_t next() override; };
+
+class Console final : public TextSink, public Sequencer::Listener, public Dispatcher::ConfigHandler {
   public:
-    void begin(MotionSupervisor& sup, CommandQueue& q, EstopLatch& estop, I2cService& i2c, Print& out);
-    void handleLine(const char* line, LineAssembler::Kind kind);
-    MotionConfig& config() { return cfg_; }
-    void printState();
-    void printConfig();
-    void printV3Prefs();
+    struct Deps {
+        MotionSupervisor* sup = nullptr; CommandQueue* q = nullptr; EstopLatch* estop = nullptr; SnapshotPublisher* pub = nullptr;
+        I2cService* i2c = nullptr; Persist* persist = nullptr; Sequencer* seq = nullptr; Dispatcher* disp = nullptr;
+        RandomDirector* dir = nullptr; Esp32Hal* hal = nullptr; HardwareSerial* usb = nullptr; HardwareSerial* cmd = nullptr;
+    };
+    void begin(const Deps& d);
+    void boot();                                   // load settings, one-shot v3 import, apply; before the supervisor starts
+    void update(Ms now);                           // every loop()
+    void handleEcosystemLine(const char* line);
+    void noteEstop(bool latched);
+    Settings& settings() { return s_; }
+    const Calibration& calibration() const { return cal_; }
+    bool randomActive() const;
+    RandomSource& rng() { return rng_; }
+    // TextSink
+    void line(const char* text) override;
+    // Sequencer::Listener
+    void onLight(int mode) override;
+    void onRandom(const Command& c) override;
+    void onRandomStop() override;
+    void onEstop() override;
+    // Dispatcher::ConfigHandler
+    void onConfig(const Command& c, const char* line, ReqSource src) override;
+
+    void printState(); void printConfig(); void printCal(); void printStatus(); void printHelp(); void printV3(); void printSequences();
   private:
-    void handleCommand(const Command& c);
-    bool push(JobKind k, int32_t a, int32_t b, int32_t c);
-    Ticks travel() const;
-    int32_t rnd(int32_t lo, int32_t hi) const;
-    MotionSupervisor* sup_ = nullptr;
-    CommandQueue* q_ = nullptr;
-    EstopLatch* estop_ = nullptr;
-    I2cService* i2c_ = nullptr;
-    Print* out_ = nullptr;
-    MotionConfig cfg_;
+    void applySettings(bool boot);
+    void setKey(const Command& c);
+    void importV3Now(bool forced);
+    void pushOperatorJob(JobKind k, int32_t a);
+    bool refuseWhileMoving(const char* what);
+    RandomDirector::Limits limits() const;
+    void beginCmdSerial();
+    Deps d_;
+    Settings s_; Calibration cal_;
+    EspRandom rng_;
+    TriggerInputs triggers_; uint32_t lastInputReads_ = 0;
+    bool restartPending_ = false; Ms restartAt_ = 0;
+    Ms bootMs_ = 0;
 };
-}
+
+} // namespace uppity
 #endif

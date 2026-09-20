@@ -2,161 +2,304 @@
 #include <Arduino.h>
 #include <esp_random.h>
 #include "Console.h"
-#include <Preferences.h>
 #include "../core/EventFormat.h"
 #include "../../Version.h"
+#include "../../Board.h"
 
 namespace uppity {
 
-void Console::begin(MotionSupervisor& sup, CommandQueue& q, EstopLatch& estop, I2cService& i2c, Print& out) {
-    sup_ = &sup; q_ = &q; estop_ = &estop; i2c_ = &i2c; out_ = &out;
+uint32_t EspRandom::next() { return esp_random(); }
+
+void Console::begin(const Deps& d) { d_ = d; }
+
+void Console::line(const char* text) {
+    d_.usb->println(text);
+    if (s_.cmdTx && d_.cmd) d_.cmd->println(text);
 }
 
-Ticks Console::travel() const { return sup_->current().lifterTravel > 0 ? sup_->current().lifterTravel : profileFor(cfg_.motor).defaultTravelTicks; }
-int32_t Console::rnd(int32_t lo, int32_t hi) const { return lo + static_cast<int32_t>(esp_random() % static_cast<uint32_t>(hi - lo + 1)); }
+// ---------------------------------------------------------------- boot / settings
 
-bool Console::push(JobKind k, int32_t a, int32_t b, int32_t c) {
-    MotionRequest r; r.kind = k; r.a = a; r.b = b; r.c = c; r.source = ReqSource::SerialUsb;
-    uint32_t id = q_->push(r);
-    if (id == 0) { out_->println("BUSY=queue_full"); return false; }
-    out_->printf("QUEUED=%s id=%lu\n", jobName(static_cast<int>(k)), static_cast<unsigned long>(id));
-    return true;
+void Console::boot() {
+    bootMs_ = millis();
+    bool had = d_.persist->begin(s_, cal_, *this);
+    if (!had || !s_.v3Imported) importV3Now(false);
+    sanitize(s_);
+    applySettings(true);
+    beginCmdSerial();
+    const MotionConfig& m = d_.sup->config();
+    (void)m;
+    printf("CONFIG motor=%u(%s) inverted=%u travel=%ld%s safespin=%u tpr=%.1f homepark=%u wiggle=%u offset=%d commissioned=%u id=%u baud=%lu",
+           s_.motor, profileFor(static_cast<LifterMotor>(s_.motor)).name, s_.inverted, static_cast<long>(effectiveTravel(s_, cal_)),
+           s_.travelTicks ? " (#PTRAVEL)" : calibrationApplies(s_, cal_) ? " (calibrated)" : " (profile guess)", s_.safeSpinTicks, s_.ticksPerRev,
+           s_.homePark, s_.wiggleDeg, s_.homeOffsetTicks, s_.commissioned, s_.marcId, static_cast<unsigned long>(s_.cmdBaud));
+    if (!had) d_.persist->requestSaveSettings();          // first boot: write the blob so the next boot finds it
 }
 
-void Console::handleLine(const char* line, LineAssembler::Kind kind) {
-    if (kind == LineAssembler::Kind::Ecosystem) {
-        if (std::strncmp(line, "&ESTOP,RESET", 12) == 0) { if (estop_->release(millis())) out_->println("ESTOP=released"); }
-        return;                                            // every other &-line is someone else's business
+void Console::applySettings(bool boot) {
+    d_.sup->setConfig(toMotionConfig(s_, cal_));
+    if (boot) {
+        d_.hal->setSwitchActiveLow(SwitchId::LifterTop, s_.lifterLimitsNC == 0);
+        d_.hal->setSwitchActiveLow(SwitchId::LifterBottom, s_.lifterLimitsNC == 0);
+        d_.hal->setSwitchActiveLow(SwitchId::RotaryHome, s_.rotaryHomeNC == 0);
     }
-    const char* cursor = line;
-    char el[LineAssembler::kMax];
-    bool first = true;
-    while (nextChainElement(cursor, el, sizeof el)) {
-        Command c;
-        const char* text = el;
-        char tmp[LineAssembler::kMax + 2];
-        // chained elements may omit the ":P" after the first (legacy stored-sequence form): normalise
-        if (!first && el[0] != ':' && el[0] != '#') { std::snprintf(tmp, sizeof tmp, ":P%.*s", LineAssembler::kMax - 3, el); text = tmp; }
-        first = false;
-        if (!parseLine(text, c)) continue;
-        handleCommand(c);
-    }
+    d_.disp->setId(s_.marcId);
+    d_.disp->setDedupMs(s_.dedupMs);
 }
 
-void Console::handleCommand(const Command& c) {
-    const Snapshot& s = sup_->current();
+void Console::beginCmdSerial() {
+    if (!d_.cmd) return;
+    d_.cmd->end();
+    // GPIO0 is a boot strap; it is only driven as TX when the builder has wired it and asked for it.
+    d_.cmd->begin(s_.cmdBaud, SERIAL_8N1, board::kCmdRx, s_.cmdTx ? board::kCmdTx : -1);
+}
+
+void Console::importV3Now(bool forced) {
+    V3Prefs v;
+    d_.persist->readV3(v);
+    ImportReport rep;
+    Settings before = s_;
+    importV3(s_, v, rep);
+    for (int i = 0; i < rep.n; ++i) line(rep.line[i]);
+    if (rep.taken > 0 || forced) printf("V3 import: %d value%s taken%s", rep.taken, rep.taken == 1 ? "" : "s", forced ? " (forced)" : "");
+    if (std::memcmp(&before, &s_, sizeof s_) != 0) { applySettings(false); d_.persist->requestSaveSettings(); }
+}
+
+RandomDirector::Limits Console::limits() const {
+    RandomDirector::Limits l;
+    const LifterMotorProfile& p = profileFor(static_cast<LifterMotor>(s_.motor));
+    l.lifterMinPct = s_.minPowerUpPct ? s_.minPowerUpPct : (calibrationApplies(s_, cal_) ? static_cast<uint8_t>(cal_.minUp / 10) : p.defaultMinPowerPct);
+    l.lifterMaxPct = static_cast<uint8_t>(effectiveMaxThrottle(static_cast<LifterMotor>(s_.motor), s_.expertMode != 0) / 10);
+    l.rotaryMinPct = s_.rotaryMinPct;
+    return l;
+}
+
+bool Console::randomActive() const { return d_.dir->active(); }
+
+// ---------------------------------------------------------------- loop
+
+void Console::update(Ms now) {
+    // results the supervisor measured on its own: keep them
+    if (d_.sup->takeCalibrationUpdated()) {
+        takeCalibration(cal_, d_.sup->lastCalibration(), s_.motor, now);
+        d_.persist->requestSaveCalibration();
+        printf("CAL stored: travel=%u minUp=%u%% minDown=%u%% (profile %u)", cal_.travel, cal_.minUp / 10, cal_.minDown / 10, cal_.motor);
+        if (s_.travelTicks) printf("CAL note: #PTRAVEL=%u still overrides the calibrated %u; send #PTRAVEL0 to use the calibrated figure", s_.travelTicks, cal_.travel);
+        if (s_.minPowerUpPct || s_.minPowerDownPct) line("CAL note: #PMINUP/#PMINDOWN still override the calibrated minimum powers; set them to 0 to use the calibration");
+        applySettings(false);
+    }
+    if (d_.sup->takeCharacterisationUpdated()) {
+        if (takeCharacterisation(s_, d_.sup->config().rotary)) { d_.persist->requestSaveSettings(); printf("ROTARY stored: %.1f ticks/rev confident=%u arc=%u", s_.ticksPerRev, s_.tprConfident, s_.contactArcTicks); }
+    }
+    // trigger inputs: a debounced non-zero value plays that stored sequence
+    if (d_.i2c->inputReads() != lastInputReads_) {
+        lastInputReads_ = d_.i2c->inputReads();
+        int v = triggers_.feed(d_.i2c->inputs());
+        if (v) { char l[8]; std::snprintf(l, sizeof l, ":PS%d", v); printf("TRIGGER=%d", v); d_.disp->handleLine(l, ReqSource::Trigger, now); }
+    }
+    // random director
+    Snapshot snap; if (!d_.pub->read(snap)) return;
+    Command chain[Sequencer::kMaxElements];
+    int n = d_.dir->next(now, !d_.seq->active(), snap, limits(), chain, Sequencer::kMaxElements);
+    if (n > 0) d_.disp->submitDirector(chain, n);
+    // flash
+    d_.persist->update(snap, *d_.sup);
+    if (restartPending_ && elapsed(now, restartAt_) > 300) { d_.usb->flush(); ESP.restart(); }
+}
+
+void Console::handleEcosystemLine(const char* l) {
+    if (std::strncmp(l, "&ESTOP,RESET", 12) == 0) { if (d_.estop->release(millis())) line("ESTOP=released"); }
+    // every other &-line is someone else's business (Sabé / Roam-A-Dome heartbeats)
+}
+
+void Console::noteEstop(bool latched) {
+    if (latched) { d_.dir->stop("ESTOP"); d_.seq->clear("ESTOP"); }
+}
+
+// ---------------------------------------------------------------- sequencer listener
+
+void Console::onLight(int mode) {
+    int m = mode;
+    if (m < 0) { do { m = rng_.range(0, 7); } while (m == 1); }
+    d_.i2c->setLightKit(static_cast<uint8_t>(m));
+    printf("LIGHT=%d", m);
+}
+void Console::onRandom(const Command& c) {
+    Ms now = millis();
+    if (c.verb == Verb::RandomLevel) d_.dir->startLevel(c.letter == 'G' ? 0 : c.letter == 'M' ? 1 : 2, now);
+    else if (c.hasA || c.hasB || c.hasC || c.hasD) d_.dir->startParams(c, limits(), now);
+    else d_.dir->startLevel(s_.aggressiveness, now);
+}
+void Console::onRandomStop() { d_.dir->stop("command"); }
+void Console::onEstop() { bool was = d_.estop->tripped(); d_.estop->trip(EstopLatch::Source::Sequence, millis()); line(was ? "ESTOP=latched" : "ESTOP=latched (stored sequence)"); }
+
+// ---------------------------------------------------------------- configuration commands
+
+bool Console::refuseWhileMoving(const char* what) {
+    if (d_.sup->activeJob() != JobKind::None || d_.seq->active()) { printf("%s=refused (something is moving; :PX or wait)", what); return true; }
+    return false;
+}
+
+void Console::pushOperatorJob(JobKind k, int32_t a) {
+    d_.dir->stop("operator job"); d_.seq->clear("operator job");
+    MotionRequest r; r.kind = k; r.a = a; r.source = ReqSource::SerialUsb;
+    uint32_t id = d_.q->push(r);
+    if (id == 0) line("BUSY=queue_full"); else printf("QUEUED=%s id=%lu", jobName(static_cast<int>(k)), static_cast<unsigned long>(id));
+}
+
+void Console::onConfig(const Command& c, const char* raw, ReqSource src) {
+    (void)raw; (void)src;
     switch (c.verb) {
-        case Verb::LiftTo: case Verb::LiftRandom: {
-            int32_t pct = c.verb == Verb::LiftRandom ? rnd(0, 100) : clampv<int32_t>(c.a, 0, 100);
-            int32_t speed = c.hasB ? (c.b == -2 ? rnd(30, 100) : c.b) * 10 : 0;
-            push(JobKind::LifterSeek, pct * travel() / 100, speed, (pct >= 100 || pct <= 0) ? 1 : 0);
-            break;
-        }
-        case Verb::SafeLower: push(JobKind::SafeLower, 0, c.hasA ? c.a * 10 : 0, 0); break;
-        case Verb::RotAbs: case Verb::RotAbsRandom: case Verb::RotRel: case Verb::RotRelRandom: {
-            bool rel = c.verb == Verb::RotRel || c.verb == Verb::RotRelRandom;
-            bool rndv = c.verb == Verb::RotAbsRandom || c.verb == Verb::RotRelRandom;
-            int32_t deg = rndv ? (rel ? rnd(-180, 180) : rnd(0, 359)) : c.a;
-            int32_t spd = c.hasB ? (c.b == -2 ? rnd(40, 100) : c.b) * 10 : 0;
-            int32_t mx = c.hasC ? (c.c == -2 ? rnd(40, 100) : c.c) * 10 : 0;
-            if (!rel && deg == 0) push(JobKind::RotaryHome, 0, 0, 0);
-            else push(rel ? JobKind::RotaryRelative : JobKind::RotaryAbsolute, deg, spd, mx);
-            break;
-        }
-        case Verb::Spin: if (c.a == 0) push(JobKind::RotaryHome, 0, 0, 0); else push(JobKind::RotarySpin, clampv<int32_t>(c.a, -100, 100) * 10, 0, 0); break;
-        case Verb::SpinRandom: { int32_t m = c.hasA ? clampv<int32_t>(c.a, 1, 100) : 80; int32_t v = rnd(-m, m); if (v == 0) v = m; push(JobKind::RotarySpin, v * 10, 0, 0); break; }
-        case Verb::Estop: out_->println("ESTOP=latched"); break;
-        case Verb::Resume: out_->println(estop_->release(millis()) ? "ESTOP=released" : "ESTOP=not_latched"); break;
+        case Verb::Resume: line(d_.estop->release(millis()) ? "ESTOP=released" : "ESTOP=not_latched"); break;
         case Verb::State: printState(); break;
-        case Verb::RotaryTest: push(JobKind::RotaryCharacterise, c.hasA ? clampv<int32_t>(c.a, 1, 10) : 3, 0, 0); break;
-        case Verb::Calibrate: push(JobKind::LifterCalibrate, 0, 0, 0); break;
-        case Verb::ClearFault: sup_->requestClearFault(); out_->println("FAULT=clear_requested"); break;
+        case Verb::Status: printStatus(); break;
         case Verb::Config: printConfig(); break;
-        case Verb::Motor:
-            if (c.hasA && c.a >= 0 && c.a < static_cast<int32_t>(LifterMotor::Count)) { cfg_.motor = static_cast<LifterMotor>(c.a); cfg_.travelTicks = 0; cfg_.travelCalibrated = false; sup_->setConfig(cfg_); }
-            out_->printf("MOTOR=%d %s\n", static_cast<int>(cfg_.motor), profileFor(cfg_.motor).name);
+        case Verb::Cal: printCal(); break;
+        case Verb::V3Dump: printV3(); break;
+        case Verb::V3Import: importV3Now(true); break;
+        case Verb::Help: printHelp(); break;
+        case Verb::ClearFault: d_.sup->requestClearFault(); line("FAULT=clear_requested"); break;
+        case Verb::RotaryTest: pushOperatorJob(JobKind::RotaryCharacterise, c.hasA ? clampv<int32_t>(c.a, 1, 10) : 3); break;
+        case Verb::Calibrate: pushOperatorJob(JobKind::LifterCalibrate, 0); break;
+        case Verb::Unlock: s_.commissioned = 1; applySettings(false); d_.persist->requestSaveSettings(); line("COMMISSIONED=1 (saved: the board boots unlocked from now on; #PLOCK to undo)"); break;
+        case Verb::Lock: s_.commissioned = 0; applySettings(false); d_.persist->requestSaveSettings(); line("COMMISSIONED=0 (saved)"); break;
+        case Verb::Set: setKey(c); break;
+        case Verb::RotaryToggle:
+            s_.rotaryDisabled = s_.rotaryDisabled ? 0 : 1; applySettings(false); d_.persist->requestSaveSettings();
+            printf("#PROTARYOFF=%u (%s, saved)", s_.rotaryDisabled, s_.rotaryDisabled ? "rotary disabled: no homing, descents never wait for it" : "rotary enabled");
             break;
-        case Verb::RotaryTpr:
-            if (c.hasA && c.a >= 1000 && c.a <= 50000) { cfg_.rotary.ticksPerRev = c.a / 10.f; cfg_.rotary.confident = true; sup_->setConfig(cfg_); }
-            out_->printf("ROTARYTPR=%.1f ticks/rev (RAM only; tenths, e.g. #PROTARYTPR11855)\n", cfg_.rotary.ticksPerRev);
+        case Verb::LimitPolarity: {
+            uint8_t nc = c.letter == 'C' ? 1 : 0;
+            if (c.a == 'L') s_.lifterLimitsNC = nc; else s_.rotaryHomeNC = nc;
+            d_.persist->requestSaveSettings();
+            printf("#P%s=%u (%s; takes effect after #PRESTART)", c.a == 'L' ? "LIFTERNC" : "ROTARYNC", nc, nc ? "normally closed" : "normally open");
             break;
-        case Verb::Wiggle:
-            if (c.hasA && c.a >= 0 && c.a <= 20) { cfg_.rotary.settleWiggleDeg = static_cast<uint8_t>(c.a); sup_->setConfig(cfg_); }
-            out_->printf("WIGGLE=%u deg first swing (RAM only; 0 = no wiggle, the park's out-and-back still shows)\n", cfg_.rotary.settleWiggleDeg);
+        }
+        case Verb::StoreSeq: {
+            int n = clampv<int32_t>(c.a, 0, SequenceStore::kCount - 1);
+            char canon[SequenceStore::kMaxLen + 1], bad[64];
+            int els = canonicalSequence(c.text ? c.text : "", canon, sizeof canon, bad, sizeof bad);
+            if (els < 0) { printf("INVALID=sequence element '%s' (nothing stored)", bad); break; }
+            if (els == 0) { printf("INVALID=empty sequence %d (use #PD%d to delete)", n, n); break; }
+            printf("Sequence [%d]: %s", n, canon);
+            if (!d_.persist->storeSequence(n, canon)) line("BUSY=too many stores pending; wait for PERSIST=saved");
             break;
-        case Verb::HomePark:
-            if (c.hasA) { cfg_.rotary.parkOnLeadingEdge = c.a != 0; cfg_.rotary.parkApproach = c.a == 2 ? 1 : -1; sup_->setConfig(cfg_); }
-            out_->printf("HOMEPARK=%d (0 = arc centre by count; 1 = first closure creeping in against the sweep, v3 style; 2 = creeping in with the sweep)\n", cfg_.rotary.parkOnLeadingEdge ? (cfg_.rotary.parkApproach > 0 ? 2 : 1) : 0);
+        }
+        case Verb::ListSeq: printSequences(); break;
+        case Verb::DelSeq: { int n = clampv<int32_t>(c.a, 0, SequenceStore::kCount - 1); if (!d_.persist->eraseSequence(n)) line("BUSY=too many stores pending"); break; }
+        case Verb::SeqName: {
+            int n = clampv<int32_t>(c.a, 0, SequenceStore::kCount - 1);
+            char name[SequenceStore::kNameLen + 1]; std::snprintf(name, sizeof name, "%s", c.text ? c.text : "");
+            if (!d_.persist->nameSequence(n, name)) line("BUSY=too many stores pending");
             break;
-        case Verb::HomeOffset:
-            if (c.hasA && c.a >= -600 && c.a <= 600) { cfg_.rotary.homeOffsetTicks = static_cast<int16_t>(c.a); sup_->setConfig(cfg_); }
-            out_->printf("HOMEOFFSET=%d ticks from the switch centre (RAM only; measure: :PA0, then :PD+-2 until straight, read rotary= in #PSTATE)\n", cfg_.rotary.homeOffsetTicks);
+        }
+        case Verb::Zero: if (!d_.persist->clearSequences()) line("BUSY"); else line("SEQ clearing all stored sequences"); break;
+        case Verb::Factory:
+            if (refuseWhileMoving("FACTORY")) break;
+            d_.persist->factoryReset(); line("FACTORY=done, restarting"); restartPending_ = true; restartAt_ = millis();
             break;
-        case Verb::SafeSpin:
-            if (c.hasA && c.a >= 0 && c.a <= 5000) { cfg_.safeSpinTicks = c.a; sup_->setConfig(cfg_); }
-            out_->printf("SAFESPIN=%ld ticks (RAM only; 0 = only the top counts as clear)\n", (long)cfg_.safeSpinTicks);
+        case Verb::Restart:
+            if (refuseWhileMoving("RESTART")) break;
+            if (d_.persist->pending()) line("RESTART=waiting for PERSIST=saved first");
+            line("RESTART=in 300 ms"); restartPending_ = true; restartAt_ = millis();
             break;
-        case Verb::V3Dump: printV3Prefs(); break;
-        case Verb::Travel:
-            if (c.hasA && c.a >= 100 && c.a <= 5000) { cfg_.travelTicks = c.a; cfg_.travelCalibrated = false; cfg_.safeSpinTicks = 0; sup_->setConfig(cfg_); }
-            out_->printf("TRAVEL=%ld ticks (RAM only; 0 = profile default %u)\n", (long)cfg_.travelTicks, profileFor(cfg_.motor).defaultTravelTicks);
-            break;
-        case Verb::Invert:
-            if (c.hasA) { cfg_.lifterInverted = c.a != 0; sup_->setConfig(cfg_); }
-            out_->printf("INVERT=%d (RAM only%s)\n", cfg_.lifterInverted ? 1 : 0, c.hasA ? ", re-referenced from the limit switches" : "");
-            break;
-        case Verb::Unlock: cfg_.commissioned = true; sup_->setConfig(cfg_); out_->println("COMMISSIONED=1 (RAM only, phase 1 bench unlock)"); break;
-        case Verb::Lock: cfg_.commissioned = false; sup_->setConfig(cfg_); out_->println("COMMISSIONED=0"); break;
-        case Verb::Light: i2c_->setLightKit(static_cast<uint8_t>(clampv<int32_t>(c.a, 0, 7))); out_->printf("LIGHT=%d\n", i2c_->lightKit()); break;
-        case Verb::LightRandom: { int m; do { m = rnd(0, 7); } while (m == 1); i2c_->setLightKit(static_cast<uint8_t>(m)); out_->printf("LIGHT=%d\n", m); break; }
-        case Verb::Help:
-            out_->println("CMDS=:PP<0-100>[,spd] :PPR :PH[spd] :PA<deg>[,spd][,max] :PAR :PD<deg>[,spd][,max] :PDR :PR<+-spd> :PRR[max] :PL<0-7> :PX");
-            out_->println("CFG=#PRESUME #PSTATE #PROTARYTEST[n] #PSC #PCLEARFAULT #PCONFIG #PMOTOR[0-2] #PINVERT[0/1] #PTRAVEL<ticks> #PSAFESPIN<ticks> #PHOMEOFFSET<ticks> #PHOMEPARK<0/1/2> #PWIGGLE<deg> #PROTARYTPR<tenths> #PV3 #PUNLOCK #PLOCK #PHELP");
-            break;
-        case Verb::Wait: case Verb::PlaySeq: case Verb::Random: case Verb::RandomLevel: out_->println("UNSUPPORTED=phase2"); break;
-        case Verb::Invalid: default: out_->println("INVALID"); break;
+        case Verb::Invalid: default: line("INVALID"); break;
     }
-    (void)s;
 }
+
+void Console::setKey(const Command& c) {
+    const SettingKey* k = findSettingKey(c.key, std::strlen(c.key));
+    char buf[64];
+    if (!k) { printf("INVALID=#P%s (unknown; #PHELP lists the keys)", c.key); return; }
+    if (!c.hasA) { formatSetting(s_, *k, buf, sizeof buf); printf("%s  (%s)", buf, k->help); return; }
+    Settings before = s_;
+    if (!k->set(s_, c.a)) { printf("OUT_OF_RANGE=#P%s%ld (%s)", k->name, static_cast<long>(c.a), k->help); return; }
+    sanitize(s_);
+    bool changed = std::memcmp(&before, &s_, sizeof s_) != 0;
+    const char* note = "";
+    if (std::strcmp(k->name, "MOTOR") == 0 && before.motor != s_.motor) {
+        // a different lifter is a different mechanism: everything measured on the old one goes
+        s_.commissioned = 0; s_.travelTicks = 0; s_.safeSpinTicks = 0; s_.minPowerUpPct = s_.minPowerDownPct = s_.approachPowerPct = 0;
+        note = " (new profile: LOCKED again, travel/safe-spin/min powers cleared, calibration ignored until #PSC)";
+    } else if (std::strcmp(k->name, "INVERT") == 0) note = " (re-referenced from the limit switches)";
+    else if (std::strcmp(k->name, "TRAVEL") == 0 && s_.safeSpinTicks) note = " (SAFESPIN kept: it is ticks above the bottom switch, not a share of travel)";
+    else if (std::strcmp(k->name, "ROTARYTPR") == 0) note = s_.ticksPerRev > 0 ? " (marked confident: no two-turn measurement on the first rotary move)" : " (cleared: the next rotary move measures it)";
+    else if (std::strcmp(k->name, "LIFTERNC") == 0 || std::strcmp(k->name, "ROTARYNC") == 0) note = " (takes effect after #PRESTART)";
+    else if (std::strcmp(k->name, "BAUD") == 0 || std::strcmp(k->name, "CMDTX") == 0) { beginCmdSerial(); note = " (command UART reopened)"; }
+    else if (std::strcmp(k->name, "COMMISSIONED") == 0) note = s_.commissioned ? " (unlocked)" : " (LOCKED)";
+    applySettings(false);
+    if (changed) d_.persist->requestSaveSettings();
+    formatSetting(s_, *k, buf, sizeof buf);
+    printf("%s%s%s", buf, changed ? " (saved)" : " (unchanged)", note);
+}
+
+// ---------------------------------------------------------------- reports
 
 void Console::printState() {
-    Snapshot s = sup_->current();
-    out_->printf("STATE=%s lifter=%ld/%ld(%d%%) lifterConf=%s rotary=%ld ticks %ddeg homeConf=%s tpr=%.1f\n",
-                 stateName(static_cast<int>(s.state)), (long)s.lifterTicks, (long)s.lifterTravel, s.lifterPct, lifterConfName(static_cast<int>(s.lifterConf)),
-                 (long)s.rotaryTicks, s.rotaryDeg, homeConfName(static_cast<int>(s.homeConf)), s.ticksPerRev);
-    out_->printf("LIMITS=top:%d bot:%d home:%d diag=[%d %d] enabled=%d faults=0x%lx estop=%d(%s) override=%lus\n",
-                 s.topLimit, s.bottomLimit, s.homeSwitch, s.lifterDiag, s.rotaryDiag, s.enabled, (unsigned long)s.faults, s.estop,
-                 EstopLatch::sourceName(static_cast<EstopLatch::Source>(s.estopSource)), (unsigned long)(s.overrideRemainingMs / 1000));
-    out_->printf("JOB=%s last=%s %s %s tick=[max %luus late %lu n %lu]\n", jobName(static_cast<int>(s.activeJob)), jobName(static_cast<int>(s.lastJob)),
-                 resultName(static_cast<int>(s.lastResult)), reasonName(s.lastReason), (unsigned long)s.cycleUsMax, (unsigned long)s.lateTicks, (unsigned long)s.tickCount);
-}
-
-// v3 kept its tuning in NVS namespace "uppityspinner"; the v4 flash layout leaves that
-// partition where it was, so the builder's numbers are still readable. Read-only.
-void Console::printV3Prefs() {
-    Preferences p;
-    if (!p.begin("uppityspinner", true)) { out_->println("V3=none (no uppityspinner namespace in NVS)"); return; }
-    static const char* const keys[] = { "lftminpwr", "lftseekbotpwr", "rotminpwr", "lftdist", "minheight", "rotenccount", "driftpct", "aggression", "motortype", "wizstate", "expertmode" };
-    out_->print("V3=");
-    int n = 0;
-    for (const char* k : keys) if (p.isKey(k)) { out_->printf(" %s=%ld", k, (long)p.getInt(k, -1)); ++n; }
-    if (n == 0) out_->print(" (namespace present, no known keys)");
-    out_->println();
-    out_->println("V3 minheight is ticks in v3's frame (lftdist = its travel): #PSAFESPIN it, scaled if #PTRAVEL differs");
-    p.end();
+    Snapshot s; if (!d_.pub->read(s)) return;
+    printf("STATE=%s lifter=%ld/%ld(%d%%) lifterConf=%s rotary=%ld ticks %ddeg homeConf=%s tpr=%.1f",
+           stateName(static_cast<int>(s.state)), (long)s.lifterTicks, (long)s.lifterTravel, s.lifterPct, lifterConfName(static_cast<int>(s.lifterConf)),
+           (long)s.rotaryTicks, s.rotaryDeg, homeConfName(static_cast<int>(s.homeConf)), s.ticksPerRev);
+    printf("LIMITS=top:%d bot:%d home:%d diag=[%d %d] enabled=%d faults=0x%lx estop=%d(%s) override=%lus",
+           s.topLimit, s.bottomLimit, s.homeSwitch, s.lifterDiag, s.rotaryDiag, s.enabled, (unsigned long)s.faults, s.estop,
+           EstopLatch::sourceName(static_cast<EstopLatch::Source>(s.estopSource)), (unsigned long)(s.overrideRemainingMs / 1000));
+    printf("JOB=%s id=%lu last=%s %s %s (id %lu) tick=[max %luus late %lu n %lu]", jobName(static_cast<int>(s.activeJob)), (unsigned long)s.activeJobId, jobName(static_cast<int>(s.lastJob)),
+           resultName(static_cast<int>(s.lastResult)), reasonName(s.lastReason), (unsigned long)s.lastProgramId, (unsigned long)s.cycleUsMax, (unsigned long)s.lateTicks, (unsigned long)s.tickCount);
+    printf("SEQ=%s random=%s light=%u inputs=%u persist=%s", d_.seq->active() ? "running" : "idle", d_.dir->active() ? "on" : "off", d_.i2c->lightKit(), d_.i2c->inputs(), d_.persist->pending() ? "pending" : "saved");
 }
 
 void Console::printConfig() {
-    const MotionConfig& c = sup_->config();
-    out_->printf("#PVERSION=%s\n#PMOTOR=%d (%s)\n#PEXPERT=%d\n#PINVERT=%d\n#PTRAVEL=%ld calibrated=%d\n#PMINUP=%d\n#PMINDOWN=%d\n#PSAFESPIN=%ld\n#PROTARYTPR=%.1f confident=%d arc=%u chatter=%u driveSign=%d\n#PHOMEOFFSET=%d\n#PROTARYDISABLED=%d\n#PCOMMISSIONED=%d\n#PDRIFT=%d\n",
-                 UPPITY_FW_VERSION, static_cast<int>(c.motor), profileFor(c.motor).name, c.expertMode, c.lifterInverted, (long)c.travelTicks, c.travelCalibrated, c.minPowerUp, c.minPowerDown,
-                 (long)c.safeSpinTicks, c.rotary.ticksPerRev, c.rotary.confident, c.rotary.contactArcTicks, c.rotary.chatterPerPass, c.rotary.driveSign, c.rotary.homeOffsetTicks, c.rotaryDisabled, c.commissioned, c.driftPct);
-    if (c.travelCalibrated) {
-        // slot = power in 5 % steps; vel = ticks/s at that power; over = coast ticks after the brake
-        out_->print("#PCALUP  ");   for (int i = 0; i < kSlots; ++i) if (c.velUp[i] || c.overshootUp[i])     out_->printf(" %d%%:%u/%u", i * 5, c.velUp[i], c.overshootUp[i]);
-        out_->print("\n#PCALDOWN");  for (int i = 0; i < kSlots; ++i) if (c.velDown[i] || c.overshootDown[i]) out_->printf(" %d%%:%u/%u", i * 5, c.velDown[i], c.overshootDown[i]);
-        out_->println();
+    printf("CONFIG=begin v%s schema=%u (every #P line below can be pasted back)", UPPITY_FW_VERSION, kSettingsSchema);
+    char buf[64];
+    for (int i = 0; i < kSettingKeyCount; ++i) { formatSetting(s_, kSettingKeys[i], buf, sizeof buf); line(buf); }
+    printSequences();
+    printf("CONFIG=end travel_in_use=%ld%s", static_cast<long>(effectiveTravel(s_, cal_)), s_.travelTicks ? " (#PTRAVEL)" : calibrationApplies(s_, cal_) ? " (calibrated)" : " (profile guess)");
+}
+
+void Console::printCal() {
+    if (!cal_.valid) { line("CAL=none (run #PSC; needs the rotary home and the head clear)"); return; }
+    printf("CAL=%s travel=%u minUp=%u%% minDown=%u%% profile=%u measuredAt=%lus", calibrationApplies(s_, cal_) ? "in use" : "ignored (other profile)", cal_.travel, cal_.minUp / 10, cal_.minDown / 10, cal_.motor, static_cast<unsigned long>(cal_.measuredAtMs / 1000));
+    // slot = power in 5 % steps; vel = ticks/s at that power; over = coast ticks after the brake
+    String up = "CALUP  ", down = "CALDOWN";
+    for (int i = 0; i < kSlots; ++i) { if (cal_.slotValidUp[i]) { up += ' '; up += i * 5; up += "%:"; up += cal_.velUp[i]; up += '/'; up += cal_.overUp[i]; } if (cal_.slotValidDown[i]) { down += ' '; down += i * 5; down += "%:"; down += cal_.velDown[i]; down += '/'; down += cal_.overDown[i]; } }
+    line(up.c_str()); line(down.c_str());
+}
+
+void Console::printSequences() {
+    char text[SequenceStore::kMaxLen + 1], name[SequenceStore::kNameLen + 1];
+    int n = 0;
+    for (int i = 0; i < SequenceStore::kCount; ++i) {
+        if (!d_.persist->sequences().read(i, text, sizeof text)) continue;
+        printf("#PS%d:%s", i, text); ++n;
+        if (d_.persist->sequences().readName(i, name, sizeof name)) printf("#PSEQNAME%d=%s", i, name);
     }
+    if (n == 0) line("SEQ=none stored");
+}
+
+void Console::printStatus() {
+    Ms up = elapsed(millis(), bootMs_) / 1000;
+    printf("VERSION=%s phase2 built %s %s", UPPITY_FW_VERSION, __DATE__, __TIME__);
+    printf("UPTIME=%lus commissioned=%u random=%s seq=%s persist=%s saves=%lu", static_cast<unsigned long>(up), s_.commissioned, d_.dir->active() ? "on" : "off", d_.seq->active() ? "running" : "idle", d_.persist->pending() ? "pending" : "saved", static_cast<unsigned long>(d_.persist->saves()));
+    printf("SERIAL=usb+cmd@%lu id=%u dedup=%ums droppedForId=%lu duplicates=%lu cmdTx=%u", static_cast<unsigned long>(s_.cmdBaud), s_.marcId, s_.dedupMs, static_cast<unsigned long>(d_.disp->droppedForId()), static_cast<unsigned long>(d_.disp->droppedDuplicates()), s_.cmdTx);
+    printf("EXPANDER=%s errors=%lu inputs=%u light=%u", d_.i2c->ok() ? "ok" : "FAILING", static_cast<unsigned long>(d_.i2c->errors()), d_.i2c->inputs(), d_.i2c->lightKit());
+    line("WIFI=none (phase 3)");
+}
+
+void Console::printV3() {
+    V3Prefs v;
+    if (!d_.persist->readV3(v)) { line("V3=none (no uppityspinner namespace in NVS)"); return; }
+    if (!v.present) { line("V3=namespace present, no known keys"); return; }
+    printf("V3= lftminpwr=%ld lftseekbotpwr=%ld rotminpwr=%ld lftdist=%ld minheight=%ld rotenccount=%ld driftpct=%ld aggression=%ld motortype=%ld expertmode=%ld wizstate=%ld",
+           (long)v.lftminpwr, (long)v.lftseekbotpwr, (long)v.rotminpwr, (long)v.lftdist, (long)v.minheight, (long)v.rotenccount, (long)v.driftpct, (long)v.aggression, (long)v.motortype, (long)v.expertmode, (long)v.wizstate);
+    printf("V3 import %s; #PV3IMPORT runs it again (conservative: defaults are never taken)", s_.v3Imported ? "already ran" : "has not run");
+}
+
+void Console::printHelp() {
+    line("CMDS=:PP<0-100>[,spd] :PPR :PH[spd] :PA<deg>[,spd][,max] :PAR :PD<deg>[,spd][,max] :PDR :PR<+-spd> :PRR[max] :PL<0-7> :PLR :PW[R]<s> :PS<n> :PM :PMG/M/A :PM,lift,rot,min,max :PX  (chain with ':')");
+    line("CFG=#PRESUME #PSTATE #PSTATUS #PCONFIG #PCAL #PSC #PROTARYTEST[n] #PCLEARFAULT #PUNLOCK #PLOCK #PS<n>:<seq> #PL #PD<n> #PSEQNAME<n>=<name> #PZERO #PR #PNCL/#PNOL/#PNCR/#PNOR #PV3 #PV3IMPORT #PRESTART #PFACTORY #PHELP");
+    String keys = "KEYS=";
+    for (int i = 0; i < kSettingKeyCount; ++i) { keys += "#P"; keys += kSettingKeys[i].name; keys += ' '; }
+    keys += " (#PKEY<n> or #PKEY=<n> sets and saves, #PKEY reads)";
+    line(keys.c_str());
 }
 
 } // namespace uppity
