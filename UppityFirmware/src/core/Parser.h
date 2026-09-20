@@ -14,7 +14,7 @@ namespace uppity {
 enum class Verb : uint8_t {
     None = 0, Invalid,
     LiftTo, LiftRandom, SafeLower, RotAbs, RotAbsRandom, RotRel, RotRelRandom, Spin, SpinRandom, Estop,
-    Resume, State, RotaryTest, Calibrate, ClearFault, Config, Motor, Unlock, Lock, Help, Wait, Light, LightRandom, PlaySeq, Random, RandomLevel,
+    Resume, State, RotaryTest, Calibrate, ClearFault, Config, Motor, Invert, Travel, SafeSpin, V3Dump, HomeOffset, RotaryTpr, HomePark, Wiggle, Unlock, Lock, Help, Wait, Light, LightRandom, PlaySeq, Random, RandomLevel,
 };
 
 struct Command {
@@ -81,12 +81,20 @@ inline bool parseLine(const char* line, Command& cmd) {
         }
     }
     if (startsWith(p, "RESUME")) { cmd.verb = Verb::Resume; return true; }
+    if (startsWith(p, "ROTARYTPR")) { p += 9; cmd.verb = Verb::RotaryTpr; if (readInt(p, cmd.a)) cmd.hasA = true; return true; }
     if (startsWith(p, "ROTARYTEST")) { p += 10; cmd.verb = Verb::RotaryTest; if (readInt(p, cmd.a)) cmd.hasA = true; return true; }
     if (startsWith(p, "STATE")) { cmd.verb = Verb::State; return true; }
     if (startsWith(p, "SC")) { cmd.verb = Verb::Calibrate; return true; }
     if (startsWith(p, "CLEARFAULT")) { cmd.verb = Verb::ClearFault; return true; }
     if (startsWith(p, "CONFIG")) { cmd.verb = Verb::Config; return true; }
     if (startsWith(p, "MOTOR")) { p += 5; cmd.verb = Verb::Motor; if (readInt(p, cmd.a)) cmd.hasA = true; return true; }
+    if (startsWith(p, "WIGGLE")) { p += 6; cmd.verb = Verb::Wiggle; if (readInt(p, cmd.a)) cmd.hasA = true; return true; }
+    if (startsWith(p, "HOMEPARK")) { p += 8; cmd.verb = Verb::HomePark; if (readInt(p, cmd.a)) cmd.hasA = true; return true; }
+    if (startsWith(p, "HOMEOFFSET")) { p += 10; cmd.verb = Verb::HomeOffset; if (readInt(p, cmd.a)) cmd.hasA = true; return true; }
+    if (startsWith(p, "SAFESPIN")) { p += 8; cmd.verb = Verb::SafeSpin; if (readInt(p, cmd.a)) cmd.hasA = true; return true; }
+    if (startsWith(p, "V3")) { cmd.verb = Verb::V3Dump; return true; }
+    if (startsWith(p, "TRAVEL")) { p += 6; cmd.verb = Verb::Travel; if (readInt(p, cmd.a)) cmd.hasA = true; return true; }
+    if (startsWith(p, "INVERT")) { p += 6; cmd.verb = Verb::Invert; if (readInt(p, cmd.a)) cmd.hasA = true; return true; }
     if (startsWith(p, "UNLOCK")) { cmd.verb = Verb::Unlock; return true; }
     if (startsWith(p, "LOCK")) { cmd.verb = Verb::Lock; return true; }
     if (startsWith(p, "HELP")) { cmd.verb = Verb::Help; return true; }

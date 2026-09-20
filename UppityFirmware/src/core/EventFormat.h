@@ -50,10 +50,15 @@ inline int formatEvent(const Event& e, char* buf, size_t n) {
         case Ev::JobStart: return std::snprintf(buf, n, "%s%s START param=%ld id=%ld", head, jobName(e.a), (long)e.b, (long)e.c);
         case Ev::JobEnd: return std::snprintf(buf, n, "%s%s %s %s", head, jobName(e.a), resultName(e.b), reasonName(e.c));
         case Ev::SeekClamped: return std::snprintf(buf, n, "%sSEEK CLAMPED %ld -> %ld reason=%s", head, (long)e.a, (long)e.b, reasonName(e.c));
-        case Ev::LimitTop: return std::snprintf(buf, n, "%sLIMIT TOP %s at %ld", head, e.a ? "made" : "released", (long)e.b);
-        case Ev::LimitBottom: return std::snprintf(buf, n, "%sLIMIT BOTTOM %s at %ld", head, e.a ? "made" : "released", (long)e.b);
+        case Ev::LimitTop: return std::snprintf(buf, n, "%sLIMIT TOP %s at %ld", head, e.a == 2 ? "made IGNORED (bottom still made)" : e.a ? "made" : "released", (long)e.b);
+        case Ev::LimitBottom: return std::snprintf(buf, n, "%sLIMIT BOTTOM %s at %ld", head, e.a == 2 ? "made IGNORED (top still made)" : e.a ? "made" : "released", (long)e.b);
         case Ev::HomeSwitch: return std::snprintf(buf, n, "%sHOME SWITCH %s at %ld", head, e.a ? "closed" : "open", (long)e.b);
         case Ev::HomeEdge: return std::snprintf(buf, n, "%sHOME EDGE enter=%ld exit=%ld closures=%ld", head, (long)e.a, (long)e.b, (long)e.c);
+        case Ev::HomeSettle: {
+            int wig = e.b & 0xff, mr = (e.b >> 8) & 0xff, rs = (e.b >> 16) & 0xff;
+            if (mr == 0) return std::snprintf(buf, n, "%sHOME PARKED on the leading edge (wiggle %d, park moves %ld, rest contact %s)", head, wig, (long)e.c, e.a ? "yes" : "no");
+            return std::snprintf(buf, n, "%sHOME PARKED on the leading edge (wiggle %d, park moves %ld, rest contact %s; last move %s %s)", head, wig, (long)e.c, e.a ? "yes" : "no", resultName(mr), reasonName(rs));
+        }
         case Ev::HomeFrameCorrected: return std::snprintf(buf, n, "%sHOME FRAME CORRECTED by %ld ticks (switch wins)", head, (long)e.a);
         case Ev::ConfidenceLifter: return std::snprintf(buf, n, "%sLIFTER %s -> %s", head, lifterConfName(e.a), lifterConfName(e.b));
         case Ev::ConfidenceRotary: return std::snprintf(buf, n, "%sROTARY %s -> %s", head, homeConfName(e.a), homeConfName(e.b));

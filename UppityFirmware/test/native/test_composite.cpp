@@ -11,7 +11,7 @@ TEST(ph_from_raised_with_unhomed_rotary_homes_then_lowers) {
     g.req(JobKind::SafeLower, 0, 700, 0); g.runUntilIdle(120000);
     CHECK_EQ(starts(g, JobKind::RotaryHome), 1);
     CHECK_EQ(starts(g, JobKind::LifterSeek), 1);                     // no raise needed, one descent
-    CHECK(g.sup.rotary().confidence == HomeConfidence::Latched);
+    CHECK(g.sup.rotary().confidence == HomeConfidence::Latched || g.sup.rotary().confidence == HomeConfidence::SwitchLive);   // settled on contact = SWITCH_LIVE
     CHECK(g.snap().lastResult == JobResult::DoneLimit || g.snap().lastResult == JobResult::DoneTarget);
     CHECK(g.snap().lifterTicks <= 5);
     CHECK_EQ(g.count(Ev::LightKit), 1);
@@ -25,6 +25,7 @@ TEST(ph_with_broken_switch_stays_raised_and_says_why) {
     CHECK(g.snap().lastReason == (uint8_t)Reason::HomeFailed);
     CHECK(g.snap().lifterTicks >= 440);                              // never descended
     CHECK_EQ(starts(g, JobKind::LifterSeek), 0);
+    { const Event* e = g.last(Ev::JobEnd); CHECK(e && e->a == (int)JobKind::SafeLower && e->c == (int)Reason::HomeFailed); }   // the log says so too
 }
 
 TEST(ph_from_below_safe_height_skips_homing) {
@@ -122,4 +123,42 @@ TEST(hold_recorrects_drift_and_gives_up_after_three_failures) {
     g.runMs(40000);                                                   // three failed re-seeks
     CHECK(g.sup.holdTarget() < 0);
     const Event* h = g.last(Ev::Hold); CHECK(h != nullptr); if (h) CHECK_EQ(h->a, 0);
+}
+
+TEST(safe_lower_lands_on_the_bottom_switch_even_when_travel_is_wrong) {
+    // Bench 2026-09-19: profile travel 450 on a ~1150-tick lifter. :PH descended to count 0 and
+    // stopped halfway with the bottom switch never made. The descent must end on the switch.
+    MotionConfig c = gregConfig(); c.travelTicks = 450;
+    Rig g(c);
+    g.hal.lifter.setParams([]{ sim::LifterParams p; p.breakawayDuty = 0.45; p.travelTicks = 1150; p.kv = 0.5; return p; }());
+    g.hal.lifter.setPosition(1150); g.boot();                 // parked at the real top: count = 450
+    g.req(JobKind::SafeLower); g.runUntilIdle(30000);
+    CHECK(g.snap().lastResult == JobResult::DoneLimit);
+    CHECK(g.hal.lifter.bottomLimit());
+    CHECK_EQ(g.snap().lifterTicks, 0);
+}
+
+TEST(ph_with_unknown_ticks_per_rev_characterises_then_homes_then_lowers) {
+    // Bench 2026-09-19: first boot with the head away from home and no ticks/rev. :PH ran the
+    // two-revolution characterisation, left the head ~50 ticks past the switch, and the descent
+    // clamped at safe height (ROTARY_NOT_HOME). Characterisation must be followed by a home.
+    MotionConfig c = gregConfig(false); c.rotary.ticksPerRev = 0.f; c.rotary.confident = false; c.travelTicks = 450;
+    Rig g(c);
+    g.hal.rotary.setParams([]{ sim::RotaryParams p; p.tauBrakeMs = 40.0; return p; }());   // a head that coasts ~15 ticks at floor power, as Todd's does, so the last pass overruns the switch
+    g.hal.lifter.setPosition(450); g.hal.rotary.setPosition(500); g.boot();
+    g.req(JobKind::SafeLower); g.runUntilIdle(60000);
+    CHECK(g.count(Ev::Measure) >= 2);                          // characterisation happened
+    CHECK(g.count(Ev::HomeEdge) >= 1 || absl(g.homeErrorTicks()) <= 12);   // a real home unless the head already sat within tolerance
+    CHECK(absl(g.homeErrorTicks()) <= 12);
+    CHECK(g.snap().lastResult == JobResult::DoneLimit);
+    CHECK(g.hal.lifter.bottomLimit());
+    CHECK_EQ(g.count(Ev::SeekClamped), 0);
+}
+
+TEST(ph_from_the_bottom_reports_already_there) {
+    Rig g(gregConfig(false)); g.hal.lifter.setPosition(0); g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks); g.boot();
+    g.req(JobKind::SafeLower); g.runUntilIdle(5000);
+    CHECK(!g.anyDriveAfter(0));
+    const Event* e = g.last(Ev::JobEnd);
+    CHECK(e && e->a == (int)JobKind::SafeLower && e->b == (int)JobResult::Done && e->c == (int)Reason::AlreadyThere);
 }

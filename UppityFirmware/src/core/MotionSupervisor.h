@@ -29,7 +29,8 @@ struct MotionConfig {
     Throttle approachPower = 0;     // 0 = profile seek-bottom power
     Ticks    travelTicks = 0;       // 0 = profile default
     bool     travelCalibrated = false;
-    Ticks    safeSpinTicks = 0;     // 0 = travel / 2
+    bool     lifterInverted = false; // v3 fLifterInverted: mechanism runs backwards; negate drive AND count
+    Ticks    safeSpinTicks = 0;     // 0 = only the top limit counts as clear (see safeSpin())
     RotaryCharacterisation rotary;
     bool     rotaryDisabled = false;
     bool     commissioned = false;
@@ -60,6 +61,7 @@ class MotionSupervisor {
     static constexpr Ms kEnableTimeoutMs = 50;
     static constexpr int kLimitMakeTicks = 3, kLimitBreakTicks = 20;
     static constexpr int kHomeMakeTicks = 2, kHomeBreakTicks = 30;
+    static constexpr Ms  kRestSwitchHoldMs = 400;    // at rest, a home-switch state must hold this long to count
     static constexpr Ms kTickEventMs = 1000;
     static constexpr Ms kEnCycleLowMs = 50;      // EN held low to clear the TB9051FTG latch
     static constexpr Ms kEnVerifyMs = 400;       // then enabled while DIAG is re-evaluated
@@ -96,6 +98,7 @@ class MotionSupervisor {
 
     void debounceSwitch(Debounce& d, bool raw, int makeTicks, int breakTicks);
     void applyPendingConfig();
+    bool invertApplied_ = false;
     void updateKnowledge(const TickInputs& in, bool rotaryBusy);
     int  expandRequest(const MotionRequest& r, const TickInputs& in, Step* steps);
     int  startStep(const Step& s, const TickInputs& in);     // 1 started, 0 skipped, -1 refused
@@ -135,6 +138,7 @@ class MotionSupervisor {
     FaultModel faults_;
     Debounce top_, bottom_, home_;
     bool topWas_ = false, botWas_ = false, homeWas_ = false;
+    bool homePending_ = false; Ms homePendingSince_ = 0;
 
     // program + job slot
     Step steps_[kMaxSteps];

@@ -4,8 +4,11 @@
 # board is re-detected on a port change (Sabé and Roam-A-Dome ALT both hit this). With
 # this file the options live in the repo:
 #   IDE 2.3+  — pick "uppity" from the profile dropdown next to the board selector.
-#   CLI       — arduino-cli compile --profile uppity UppityFirmware
-#               arduino-cli upload  --profile uppity -p /dev/cu.usbserial-XXXX UppityFirmware
+#   CLI       — run from the repo root (the folder that contains UppityFirmware/):
+#               arduino-cli compile --profile uppity UppityFirmware
+#               arduino-cli upload  --profile uppity -p /dev/cu.wchusbserial110 UppityFirmware
+#               (find the port with `ls /dev/cu.*` while the board is plugged in; Apple
+#               Silicon Macs need Rosetta 2 installed for arduino-cli's ctags helper)
 #
 # Every value is load-bearing:
 #   PartitionScheme=min_spiffs  two 1.9 MB app slots (OTA-capable) instead of the default

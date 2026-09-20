@@ -89,11 +89,15 @@ TEST(rest_contact_corrects_a_wrong_frame_loudly) {
     g->setRotaryAngleFromCentre(100); g->boot();
     g->req(JobKind::RotaryHome); g->runUntilIdle(120000);
     CHECK(g->snap().lastResult == JobResult::Done);
+    // homing now ends resting on the switch, so lift the head off it first (the frame stays LATCHED)
+    g->setRotaryAngleFromCentre(40); g->runMs(500);
+    CHECK(g->sup.rotary().confidence == HomeConfidence::Latched);
+    int base = g->count(Ev::HomeFrameCorrected);
     // corrupt the frame by 130 ticks (~40 degrees), then park the head on the switch
     g->hal.setEncoder(Axis::Rotary, g->snap().rotaryTicks + 130); g->runMs(2);
-    CHECK(g->count(Ev::HomeFrameCorrected) == 0);
-    g->setRotaryAngleFromCentre(0.5); g->runMs(60);
-    CHECK(g->count(Ev::HomeFrameCorrected) == 1);
+    CHECK(g->count(Ev::HomeFrameCorrected) == base);
+    g->setRotaryAngleFromCentre(0.5); g->runMs(600);
+    CHECK(g->count(Ev::HomeFrameCorrected) == base + 1);
     CHECK(absl(g->snap().rotaryTicks) <= 2);
     CHECK(g->sup.rotary().confidence == HomeConfidence::SwitchLive);
     delete g;
@@ -104,7 +108,7 @@ TEST(resting_open_read_does_not_block_descent) {
     g->setRotaryAngleFromCentre(150); g->boot();
     g->req(JobKind::RotaryHome); g->runUntilIdle(120000);
     CHECK(g->snap().lastResult == JobResult::Done);
-    g->setRotaryAngleFromCentre(5.0); g->runMs(60);                 // in the band, open at rest
+    g->setRotaryAngleFromCentre(5.0); g->runMs(500);                // in the band, open at rest (held past the 400 ms rest filter)
     CHECK(!g->snap().homeSwitch);
     CHECK(g->sup.rotary().confidence == HomeConfidence::Latched);
     g->seek(0, 700); g->runUntilIdle(30000);
@@ -240,3 +244,84 @@ TEST(characterise_reports_no_switch_and_writes_nothing) {
     CHECK(std::fabs(g->sup.config().rotary.ticksPerRev - 1184.6f) < 0.01f);
     delete g;
 }
+
+TEST(home_parks_repeatably_on_the_leading_edge_with_drive_play) {
+    // Todd's rotary (2026-09-20): play at the motor shaft. The park must land on the same spot
+    // from either approach: the first closure met while creeping in along the sweep direction.
+    double parked[2] = {0, 0}; int k = 0;
+    for (int dir = -1; dir <= 1; dir += 2) {
+        Rig g(gregConfig(false));
+        g.hal.rotary.setParams([]{ sim::RotaryParams p; p.backlashTicks = 8.0; p.chatterP = 0.0; return p; }());
+        g.hal.lifter.setPosition(450); g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks + dir * 300); g.boot();
+        g.req(JobKind::RotaryHome); g.runUntilIdle(40000);
+        CHECK(g.snap().lastResult == JobResult::Done);
+        CHECK(g.hal.rotary.distToCentre() <= g.hal.rotary.params().halfWidthMoving + 2.0);   // on the arc
+        const Event* e = g.last(Ev::HomeSettle);
+        CHECK(e && (e->b & 0xff) >= 3);                                                     // the wiggle ran
+        parked[k++] = std::fmod(g.hal.rotary.position(), g.hal.rotary.params().ticksPerRev);   // same revolution frame
+    }
+    CHECK(std::fabs(parked[0] - parked[1]) <= 3.0);                                         // same spot from both sides
+}
+
+
+TEST(home_wiggles_and_parks_even_before_ticks_per_rev_is_known) {
+    // Bench 2026-09-20: first :PA0 of a RAM-only boot (ticksPerRev = 0) skipped the wiggle.
+    MotionConfig c = gregConfig(false); c.rotary.ticksPerRev = 0.f; c.rotary.confident = false;
+    Rig g(c);
+    g.hal.rotary.setParams([]{ sim::RotaryParams p; p.backlashTicks = 4.0; p.tauBrakeMs = 40.0; return p; }());
+    g.hal.lifter.setPosition(450); g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks); g.boot();
+    g.req(JobKind::RotaryHome); g.runUntilIdle(40000);
+    const Event* e = g.last(Ev::HomeSettle);
+    CHECK(e && (e->b & 0xff) >= 1);                          // the wiggle ran (a heavy head may cut it short after the first swing)
+    CHECK(g.hal.rotary.distToCentre() <= g.hal.rotary.params().halfWidthMoving + 2.0);
+}
+
+TEST(home_offset_parks_the_head_where_it_looks_straight_and_moves_measure_from_there) {
+    // Todd, 2026-09-20: v3 parked on the arc's leading edge, so his head looks straight ~6 deg
+    // from the arc centre. #PHOMEOFFSET moves the parking spot; "home" and :PA angles follow it.
+    MotionConfig c = gregConfig(false); c.rotary.homeOffsetTicks = -20;
+    Rig g(c);
+    g.hal.rotary.setParams([]{ sim::RotaryParams p; p.backlashTicks = 4.0; return p; }());
+    g.hal.lifter.setPosition(450); g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks + 250); g.boot();
+    g.req(JobKind::RotaryHome); g.runUntilIdle(40000);
+    CHECK(g.snap().lastResult == JobResult::Done);
+    CHECK(absl(g.snap().rotaryTicks - (-20)) <= 6);                     // parked at the offset, in the switch frame
+    CHECK_EQ(g.snap().rotaryDeg, 0);                                    // which reads as 0 degrees
+    g.req(JobKind::SafeLower); g.runUntilIdle(40000);                   // and counts as home for the descent
+    CHECK(g.snap().lastResult == JobResult::DoneLimit);
+    CHECK_EQ(g.count(Ev::SeekClamped), 0);
+    g.seek(450, 0, true); g.runUntilIdle(20000);
+    g.req(JobKind::RotaryAbsolute, 90, 0, 0); g.runUntilIdle(30000);    // 90 deg from the visual home
+    Ticks expect = -20 + static_cast<Ticks>(1184.6f * 90 / 360 + 0.5f);
+    CHECK(absl(g.snap().rotaryTicks - expect) <= 20);
+    CHECK(absl(g.snap().rotaryDeg - 90) <= 6);
+}
+
+TEST(small_relative_moves_walk_in_single_ticks_and_land) {
+    // Bench 2026-09-20: ":PD2" reported OVERSHOOT without moving, because a continuous move
+    // brakes 16 ticks out. Moves under ~6 degrees now step one tick at a time.
+    for (int lash = 0; lash <= 6; lash += 6) {
+        Rig g(gregConfig(false));
+        g.hal.rotary.setParams([lash]{ sim::RotaryParams p; p.backlashTicks = lash; return p; }());
+        g.hal.lifter.setPosition(450); g.hal.rotary.setPosition(500); g.boot(); g.runMs(5);
+        Ticks start = g.snap().rotaryTicks;
+        g.req(JobKind::RotaryRelative, 2, 0, 0); g.runUntilIdle(20000);              // 2 deg = 7 ticks
+        CHECK(g.snap().lastResult == JobResult::DoneTarget);
+        CHECK(absl(g.snap().rotaryTicks - (start + 7)) <= 2);
+        g.req(JobKind::RotaryRelative, -2, 0, 0); g.runUntilIdle(20000);
+        CHECK(absl(g.snap().rotaryTicks - start) <= 3);
+    }
+}
+
+TEST(home_parks_on_the_arc_even_when_the_encoder_slips_under_pulses) {
+    // Todd, 2026-09-20: short pulses turn the count without the head (or the head without the
+    // count). The park pass must land on the arc using the switch alone.
+    Rig g(gregConfig(false));
+    g.hal.rotary.setParams([]{ sim::RotaryParams p; p.phantomPerMsDriving = 0.15; p.backlashTicks = 6.0; return p; }());
+    g.hal.lifter.setPosition(450); g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks + 200); g.boot();
+    g.req(JobKind::RotaryHome); g.runUntilIdle(40000);
+    CHECK(g.snap().lastResult == JobResult::Done);
+    CHECK(g.hal.rotary.distToCentre() <= g.hal.rotary.params().halfWidthMoving + 2.0);
+}
+
+

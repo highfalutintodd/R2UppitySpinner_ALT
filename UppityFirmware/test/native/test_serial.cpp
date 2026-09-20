@@ -74,6 +74,15 @@ TEST(parser_config_verbs_and_foreign_lines) {
     CHECK(parseLine("#PROTARYTEST", c)); CHECK(c.verb == Verb::RotaryTest); CHECK(!c.hasA);
     CHECK(parseLine("#PSC", c)); CHECK(c.verb == Verb::Calibrate);
     CHECK(parseLine("#PMOTOR1", c)); CHECK(c.verb == Verb::Motor); CHECK_EQ(c.a, 1);
+    CHECK(parseLine("#PINVERT1", c)); CHECK(c.verb == Verb::Invert); CHECK(c.hasA); CHECK_EQ(c.a, 1);
+    CHECK(parseLine("#PINVERT", c)); CHECK(c.verb == Verb::Invert); CHECK(!c.hasA);
+    CHECK(parseLine("#PTRAVEL1150", c)); CHECK(c.verb == Verb::Travel); CHECK_EQ(c.a, 1150);
+    CHECK(parseLine("#PSAFESPIN760", c)); CHECK(c.verb == Verb::SafeSpin); CHECK_EQ(c.a, 760);
+    CHECK(parseLine("#PV3", c)); CHECK(c.verb == Verb::V3Dump);
+    CHECK(parseLine("#PHOMEOFFSET-18", c)); CHECK(c.verb == Verb::HomeOffset); CHECK_EQ(c.a, -18);
+    CHECK(parseLine("#PROTARYTPR11855", c)); CHECK(c.verb == Verb::RotaryTpr); CHECK_EQ(c.a, 11855);
+    CHECK(parseLine("#PROTARYTEST3", c)); CHECK(c.verb == Verb::RotaryTest); CHECK_EQ(c.a, 3);
+    CHECK(parseLine("#PWIGGLE2", c)); CHECK(c.verb == Verb::Wiggle); CHECK_EQ(c.a, 2);
     CHECK(parseLine("#PCLEARFAULT", c)); CHECK(c.verb == Verb::ClearFault);
     CHECK(parseLine("#PBOGUS", c)); CHECK(c.verb == Verb::Invalid);
     CHECK(!parseLine("&SABE,HB,1,2,3", c));

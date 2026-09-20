@@ -14,7 +14,7 @@ enum class Ev : uint8_t {
     JobStart,           // a = JobKind, b = param, c = job id
     JobEnd,             // a = JobKind, b = JobResult, c = reason
     SeekClamped,        // a = requested ticks, b = clamped ticks, c = reason
-    LimitTop,           // a = 1 made / 0 released, b = ticks
+    LimitTop,           // a = 1 made / 0 released / 2 made but ignored (other limit still made), b = ticks
     LimitBottom,
     HomeSwitch,         // a = 1 closed / 0 open, b = rotary ticks
     HomeEdge,           // a = enter ticks, b = exit ticks, c = closures
@@ -33,6 +33,7 @@ enum class Ev : uint8_t {
     Calibration,        // a = phase, b = value, c = value2
     Hold,               // a = 1 re-seek / 0 gave up, b = target ticks, c = current
     Tick,               // a = cycleUsMax, b = lateTicks (periodic health)
+    HomeSettle,         // a = 1 contact at rest / 0 not, b = wiggle moves, c = nudges
 };
 
 // Reason codes shared by JobResult/Refused/SeekClamped/JobEnd.

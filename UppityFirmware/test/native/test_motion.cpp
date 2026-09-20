@@ -95,6 +95,45 @@ TEST(boot_with_both_limits_closed_is_a_fault) {
     CHECK(g.snap().state == MotionState::Idle);
 }
 
+TEST(finger_on_top_switch_with_mast_down_does_not_move_the_reference) {
+    // Bench 2026-09-19: Todd pressed the top limit switch with the mast parked down. v4 took the
+    // edge as "mast is at the top", so the next :PP20 was a descent onto the made bottom switch
+    // and ended in 100 ms without moving.
+    Rig g(gregConfig());
+    g.hal.lifter.setPosition(0); g.boot();
+    CHECK_EQ(g.snap().lifterTicks, 0);
+    g.hal.forceTop = true; g.runMs(500);                       // half a second of fingertip
+    CHECK(g.sup.faults().has(F_LimitContradiction));           // motion is blocked while both are made
+    const Event* e = g.last(Ev::LimitTop);
+    CHECK(e && e->a == 2);                                     // logged as ignored, not as made
+    g.hal.forceTop = false; g.runMs(100);
+    CHECK(!g.sup.faults().has(F_LimitContradiction));
+    CHECK_EQ(g.snap().lifterTicks, 0);                         // still parked at the bottom
+    g.seek(90, 650); g.runUntilIdle(20000);
+    CHECK(g.snap().lastResult == JobResult::DoneTarget);       // and :PP20 actually goes there
+    CHECK(absl(g.snap().lifterTicks - 90) <= 12);
+}
+
+TEST(reversed_mechanism_grinds_into_the_bottom_stop_until_invert_is_set) {
+    // Bench 2026-09-19, second attempt: :PP20 at full power drove the mast into the bottom
+    // stop; the count crept up a few ticks of compliance, the bottom switch never released,
+    // and the seek ended STALLED. v3 ran this build with fLifterInverted set.
+    Rig g(gregConfig());
+    g.hal.lifter.setParams([]{ sim::LifterParams p; p.breakawayDuty = 0.45; p.travelTicks = 450; p.kv = 0.5; p.mastReversed = true; return p; }());
+    g.hal.lifter.setPosition(0); g.boot();
+    g.seek(90, 0); g.runUntilIdle(20000);
+    CHECK(g.snap().lastResult == JobResult::Stalled);
+    CHECK_EQ(g.count(Ev::LimitBottom), 0);                    // never lifted off the bottom switch
+    CHECK(g.hal.lifter.position() < 5);
+    // #PINVERT1 while parked on the bottom switch: re-referenced to 0, next seek reaches the target.
+    MotionConfig c = gregConfig(); c.lifterInverted = true; g.sup.setConfig(c); g.runMs(5);
+    CHECK_EQ(g.snap().lifterTicks, 0);
+    g.seek(90, 0); g.runUntilIdle(20000);
+    CHECK(g.snap().lastResult == JobResult::DoneTarget);
+    CHECK(absl(g.snap().lifterTicks - 90) <= 12);
+    CHECK(g.hal.lifter.position() > 70);                       // the mast itself went up
+}
+
 // ---------------------------------------------------------------- seeks
 
 TEST(seek_reaches_target_and_pulses_in_cruise) {
@@ -130,7 +169,7 @@ TEST(seek_clamps_at_safe_height_when_rotary_unknown_and_says_why) {
     CHECK(absl(g.snap().lifterTicks - 225) <= 15);            // parked at the safe height, loudly
     // Now put the head on the switch at rest: SwitchLive -> home -> descent allowed
     g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks);
-    g.runMs(50);
+    g.runMs(500);                                             // an at-rest switch state has to hold 400 ms to count
     CHECK(g.sup.rotary().confidence == HomeConfidence::SwitchLive);
     g.seek(0, 700); g.runUntilIdle(20000);
     CHECK(g.snap().lastResult == JobResult::DoneLimit || g.snap().lastResult == JobResult::DoneTarget);
@@ -287,4 +326,18 @@ TEST(reversal_never_follows_a_drive_with_the_opposite_drive) {
     g.runUntilIdle(30000);
     CHECK(g.snap().lastResult == JobResult::DoneLimit);
     CHECK_EQ(g.snap().lifterTicks, 0);
+}
+
+TEST(rotary_below_the_top_is_refused_until_safe_spin_is_set) {
+    // Bench 2026-09-19: half travel is not a safe default; Todd's head hit the lifter frame at
+    // 54 %. With no safe-spin height configured, only the top limit counts as clear.
+    MotionConfig c = gregConfig(false); c.safeSpinTicks = 0;
+    Rig g(c); g.hal.lifter.setPosition(0); g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks); g.boot();
+    g.seek(400, 0); g.runUntilIdle(20000);                                            // 89 %, not the top
+    Ms t0 = g.hal.nowMs();
+    g.req(JobKind::RotaryAbsolute, 90, 0, 0); g.runUntilIdle(30000);
+    bool rotaryDrove = false; for (int i = 0; i < g.hal.recordCount(); ++i) { const auto& r = g.hal.rec(i); if (r.t > t0 && r.a == Axis::Rotary && r.c.mode == Bridge::Drive && r.c.duty != 0 && !g.hal.lifter.topLimit()) rotaryDrove = true; }
+    CHECK(!rotaryDrove);                                                              // it raised to the top first
+    CHECK(g.hal.lifter.topLimit());
+    CHECK(g.snap().lastResult == JobResult::DoneTarget);
 }

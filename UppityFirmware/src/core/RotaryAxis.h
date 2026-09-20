@@ -43,6 +43,8 @@ struct RotaryMoveParams {
     Ticks    halfRev = 590;       // for speed scaling by distance
     Ms       stallMs = 500;
     bool     allowFlip = true;    // one reversal to correct an overshoot
+    Ticks    stepBelow = 0;       // a move no longer than this is walked one tick at a time (brake, pause, next tick):
+                                  // a continuous move cannot land within its own coast distance
     const RotaryCharacterisation* rc = nullptr;
 };
 
@@ -50,11 +52,15 @@ class RotaryMove {
   public:
     enum class Phase : uint8_t { Idle, Moving, Braking, Finished };
     static constexpr Ms kBrakeMs = 50;
+    static constexpr Ms kStepPauseMs = 40;
+    static constexpr int kMaxSteps = 80;
     void start(const RotaryMoveParams& p, Ticks current, Ms now) {
         p_ = p; if (p_.speed <= 0) p_.speed = p_.floor; if (p_.maxSpeed < p_.speed) p_.maxSpeed = p_.speed;
         dir_ = p.target >= current ? 1 : -1; flips_ = 0; phase_ = Phase::Moving; slew_.reset(now);
-        lastTicks_ = current; lastMoveMs_ = now; brakeUntil_ = 0;
-        if (absl(p.target - current) <= p_.fudge) { phase_ = Phase::Finished; pending_ = StepOutcome::done(JobResult::DoneTarget, Reason::AlreadyThere, 0); }
+        lastTicks_ = current; lastMoveMs_ = now; brakeUntil_ = 0; stepping_ = false; steps_ = 0;
+        Ticks dist = absl(p.target - current);
+        if (dist <= p_.fudge) { phase_ = Phase::Finished; pending_ = StepOutcome::done(JobResult::DoneTarget, Reason::AlreadyThere, 0); return; }
+        if (p_.stepBelow > 0 && dist <= p_.stepBelow) { stepping_ = true; finalTarget_ = p.target; p_.fudge = 0; p_.stopDist = 0; p_.allowFlip = false; beginStep(current, now); }
     }
     StepOutcome step(const TickInputs& in, BridgeCommand& out) {
         Ticks pos = in.rotaryTicks; Ms now = in.nowMs; StepOutcome o; out = brakeCmd();
@@ -62,13 +68,18 @@ class RotaryMove {
         if (universalExit(in, in.rotaryDiag, o)) { finish(o); return pending_; }
         if (phase_ == Phase::Braking) {
             if (static_cast<int32_t>(now - brakeUntil_) < 0) return StepOutcome::running();
+            if (stepping_) {
+                Ticks rem = (finalTarget_ - pos) * dir_;
+                if (rem <= 0 || steps_ >= kMaxSteps) { finish(StepOutcome::done(JobResult::DoneTarget, Reason::TargetReached, finalTarget_ - pos)); return pending_; }
+                beginStep(pos, now); return StepOutcome::running();
+            }
             Ticks err = p_.target - pos;
             if (absl(err) <= p_.fudge) { finish(StepOutcome::done(JobResult::DoneTarget, Reason::TargetReached, err)); return pending_; }
             if (p_.allowFlip && flips_ < 1) { ++flips_; dir_ = err > 0 ? 1 : -1; phase_ = Phase::Moving; slew_.reset(now); lastTicks_ = pos; lastMoveMs_ = now; return StepOutcome::running(); }
             finish(StepOutcome::done(JobResult::Done, Reason::Overshoot, err)); return pending_;
         }
         Ticks remaining = (p_.target - pos) * dir_;
-        if (remaining <= p_.stopDist) { phase_ = Phase::Braking; brakeUntil_ = now + kBrakeMs; return StepOutcome::running(); }
+        if (remaining <= p_.stopDist) { phase_ = Phase::Braking; brakeUntil_ = now + kBrakeMs + (stepping_ ? kStepPauseMs : 0); return StepOutcome::running(); }
         if (pos != lastTicks_) { lastTicks_ = pos; lastMoveMs_ = now; }
         else if (elapsed(now, lastMoveMs_) >= p_.stallMs) { finish(StepOutcome::failed(JobResult::Stalled, Reason::Stall, pos)); return pending_; }
         Throttle cmd = p_.speed;
@@ -80,9 +91,14 @@ class RotaryMove {
     }
     Phase phase() const { return phase_; }
     int flips() const { return flips_; }
+    bool stepping() const { return stepping_; }
   private:
     void finish(StepOutcome o) { pending_ = o; phase_ = Phase::Finished; }
+    void beginStep(Ticks pos, Ms now) { dir_ = finalTarget_ > pos ? 1 : -1; p_.target = pos + dir_; ++steps_; phase_ = Phase::Moving; slew_.reset(now); lastTicks_ = pos; lastMoveMs_ = now; }
     RotaryMoveParams p_;
+    Ticks finalTarget_ = 0;
+    bool stepping_ = false;
+    int steps_ = 0;
     int dir_ = 1, flips_ = 0;
     Phase phase_ = Phase::Idle;
     Slew slew_;
@@ -135,6 +151,7 @@ struct RotaryHomeParams {
     bool  referenced = false;       // a frame exists (Latched or Stale): pass 1 is possible
     Ticks tpr = 0;                  // 0 = unknown
     int   sweepDir = 1;             // tick direction of the sweep
+    Ticks homeOffset = 0;           // park here (relative to the arc centre) once settled on the switch
 };
 
 struct HomeResult {
@@ -144,16 +161,27 @@ struct HomeResult {
     uint16_t closures = 0;          // raw make events during the contact window
     Ticks swept = 0;
     bool reversed = false;
+    bool contact = false;           // switch conducting at rest when the settle pass ended
+    uint8_t wiggles = 0, nudges = 0;
+    uint8_t lastMoveResult = 0, lastMoveReason = 0;   // JobResult / Reason of the last settle move that did not reach its target
 };
 
 class RotaryHome {
   public:
-    enum class Phase : uint8_t { Idle, Pass1, Pass1Brake, Sweep, EdgeBrake, ReverseBrake, Settle, Finished };
+    enum class Phase : uint8_t { Idle, Pass1, Pass1Brake, Sweep, EdgeBrake, ReverseBrake, Settle, Nudge, Offset, ParkBack, ParkIn, Finished };
+    static constexpr Ms    kParkRestMs = 60;
+    static constexpr Ms    kParkRestMaxMs = 400;
+    static constexpr Ms    kParkMaxMs = 6000;
     static constexpr Ms    kBrakeMs = 50;
     static constexpr Ms    kSettleMs = 12;
     static constexpr Ms    kPulseMinMs = 4, kPulseMaxMs = 60;
     static constexpr Ms    kSweepBackstopMs = 25000;
-    static constexpr Ms    kSettleMaxMs = 2000;
+    static constexpr Ms    kSettleMaxMs = 5000;      // wiggle budget
+    static constexpr Ms    kNudgeMaxMs = 3500;       // contact-nudge budget on top of it
+    static constexpr Ms    kInterMoveMs = 60;        // brake pause between settle moves
+    static constexpr Ms    kRestConfirmMs = 90;      // at rest this long before the switch is believed
+    static constexpr int   kMaxNudges = 24;
+    static constexpr int   kDeepenTicks = 2;
     static constexpr Ticks kStuckClosedTicks = 60;
     static constexpr Ticks kMaxClosedTravel = 40;
     static constexpr int   kNoMovePulsesStall = 12;
@@ -189,22 +217,132 @@ class RotaryHome {
             case Phase::Sweep:
                 return sweep(in, out);
             case Phase::EdgeBrake:
-                if (static_cast<int32_t>(now - brakeUntil_) >= 0) {
-                    Ticks err = absl(pos - res_.zero);
-                    Ticks settleTol = p_.tpr > 0 ? clampv<Ticks>(p_.tpr * 3 / 360, 2, 1 << 20) : 4;
-                    if (err > settleTol && p_.tpr > 0) {
-                        RotaryMoveParams m; m.rc = p_.rc; m.floor = p_.floor; m.speed = p_.floor; m.maxSpeed = p_.floor; m.target = res_.zero;
-                        m.fudge = settleTol; m.stopDist = settleTol; m.halfRev = p_.tpr / 2; m.allowFlip = false;
-                        move_.start(m, pos, now); settleStart_ = now; enter(Phase::Settle, now);
-                    } else finish(StepOutcome::done(JobResult::Done, Reason::None, res_.zero));
-                }
+                if (static_cast<int32_t>(now - brakeUntil_) >= 0) beginSettle(pos, now);
                 return StepOutcome::running();
             case Phase::ReverseBrake:
                 if (static_cast<int32_t>(now - brakeUntil_) >= 0) { beginSweep(pos, now); res_.reversed = true; }
                 return StepOutcome::running();
+            // Pass 3a, the settle wiggle: a decaying swing about the new zero, alternating sides,
+            // with the last approach along the sweep direction so that any play in the drive
+            // (Todd's motor shaft, 2026-09-20) is taken up the same way every home. It is also
+            // the visible "settling into place" v3 builders liked. Best effort: it cannot change
+            // the outcome, and a stall just ends it early.
             case Phase::Settle: {
+                if (elapsed(now, settleStart_) >= kSettleMaxMs) { beginNudge(pos, now); return StepOutcome::running(); }
+                if (!moveActive_) {
+                    if (static_cast<int32_t>(now - pauseUntil_) < 0) return StepOutcome::running();
+                    if (wiggleIdx_ >= nWiggle_) {
+                        if (p_.rc && p_.rc->parkOnLeadingEdge) { beginPark(pos, now); return StepOutcome::running(); }
+                        // Wiggle over (or abandoned). If the head is still well off the zero, one
+                        // plain return move first, aimed short by the measured coast; then the nudge.
+                        Ticks off = absl(pos - res_.zero);
+                        if (!recovered_ && off > 4 * degTicks()) {
+                            recovered_ = true; int d = res_.zero > pos ? 1 : -1;
+                            moveTarget_ = res_.zero; moveDir_ = d;
+                            startSettleMove(res_.zero - d * coast_, settleTol(), pos, now, true); ++res_.wiggles;
+                            return StepOutcome::running();
+                        }
+                        beginNudge(pos, now); return StepOutcome::running();
+                    }
+                    Ticks target = wiggle_[wiggleIdx_]; int d = target >= pos ? 1 : -1;
+                    moveTarget_ = target; moveDir_ = d;
+                    startSettleMove(wiggleIdx_ == 0 ? target : target - d * coast_, settleTol(), pos, now); ++res_.wiggles;
+                    return StepOutcome::running();
+                }
                 StepOutcome m = move_.step(in, out);
-                if (m.result != StepResult::Running || elapsed(now, settleStart_) >= kSettleMaxMs) { out = brakeCmd(); finish(StepOutcome::done(JobResult::Done, Reason::None, res_.zero)); settleSkipped_ = m.result != StepResult::Done; }
+                if (m.result != StepResult::Running) {
+                    out = brakeCmd(); moveActive_ = false; pauseUntil_ = now + kInterMoveMs;
+                    if (m.result != StepResult::Done || m.reason != Reason::TargetReached) { res_.lastMoveResult = static_cast<uint8_t>(m.jobResult); res_.lastMoveReason = static_cast<uint8_t>(m.reason); }
+                    if (wiggleIdx_ < nWiggle_) {
+                        if (wiggleIdx_ == 0) {                                     // first swing: learn how far the head coasts past a brake
+                            Ticks over = (pos - moveTarget_) * moveDir_;
+                            coast_ = over > 0 ? over : 0;
+                            if (coast_ > absl(moveTarget_ - res_.zero)) wiggleIdx_ = nWiggle_ - 2;   // coasts more than it swings: skip to the final approach (the ++ below lands on it)
+                        }
+                        ++wiggleIdx_;
+                        if (m.result != StepResult::Done) wiggleIdx_ = nWiggle_;   // a stall or fault ends the wiggle; the nudge still runs
+                    }
+                }
+                return StepOutcome::running();
+            }
+            // Pass 3b, the contact nudge (v3's settleOntoHome, made play-aware): at rest with
+            // the switch open, step toward the zero one tick at a time, rest, and believe only
+            // the debounced switch at rest (a moving switch chatters at the band edges, which is
+            // what fooled v3's stop-on-first-contact). Reverse only when the count says the
+            // head has gone a couple of degrees past. The count rides the motor shaft, so with
+            // play in the drive the first steps may only take up the slack; that is why the
+            // steps are small and one-directional. Bounded; the zero comes from the edge
+            // centre regardless.
+            case Phase::Nudge: {
+                if (!moveActive_) {
+                    if (static_cast<int32_t>(now - pauseUntil_) < 0) return StepOutcome::running();
+                    if (in.homeSwitch) {
+                        // Contact at rest. Do not stop on the very edge of the zone, where a ball
+                        // bearing flickers with any vibration: go up to kDeepenTicks further in
+                        // while it still conducts. Lose it and the next steps come back.
+                        if (deepen_ >= kDeepenTicks || nudgeN_ >= kMaxNudges || elapsed(now, nudgeStart_) >= kNudgeMaxMs) { res_.contact = true; return settled(pos, now); }
+                        ++deepen_; ++nudgeN_; ++res_.nudges; lastContactPos_ = pos;
+                        startSettleMove(pos + nudgeDir_, 0, pos, now);
+                        return StepOutcome::running();
+                    }
+                    if (deepen_ > 0) { nudgeDir_ = -nudgeDir_; deepen_ = kDeepenTicks; }        // stepped out the far side: come back and stop on the first contact
+                    if (nudgeN_ >= kMaxNudges || elapsed(now, nudgeStart_) >= kNudgeMaxMs) { res_.contact = false; return settled(pos, now); }
+                    if (nudgeN_ == 0) { Ticks e = res_.zero - pos; nudgeDir_ = e > 0 ? 1 : e < 0 ? -1 : sweepDir_; }
+                    else if ((res_.zero - pos) * nudgeDir_ < -2 * degTicks() && nudgeFlips_ < 2) { nudgeDir_ = -nudgeDir_; ++nudgeFlips_; }
+                    ++nudgeN_; ++res_.nudges;
+                    startSettleMove(pos + nudgeDir_, 0, pos, now);
+                    return StepOutcome::running();
+                }
+                StepOutcome m = move_.step(in, out);
+                if (m.result != StepResult::Running) { out = brakeCmd(); moveActive_ = false; pauseUntil_ = now + kRestConfirmMs; }
+                return StepOutcome::running();
+            }
+            // Pass 3b', the switch-only park (v3's parking spot), in two continuous moves: get
+            // clear of the arc on the approach side, then move slowly back onto it and stop on
+            // the first closure seen while moving, coast included. Continuous moves, not
+            // pulses: on Todd's drive (2026-09-20) short pulses in one direction turn the count
+            // without turning the head, while continuous moves at floor power track it. The
+            // count bounds the moves; the switch decides.
+            case Phase::ParkBack: {
+                StepOutcome m = move_.step(in, out);
+                if (m.result != StepResult::Running) { out = brakeCmd(); parkRestStart_ = now; enter(Phase::ParkIn, now); parkHit_ = false; parkMoveStarted_ = false; }
+                return StepOutcome::running();
+            }
+            case Phase::ParkIn: {
+                int approach = sweepDir_ * ((p_.rc && p_.rc->parkApproach > 0) ? 1 : -1);
+                if (!parkMoveStarted_) {
+                    out = brakeCmd();
+                    if (elapsed(now, parkRestStart_) < kParkRestMs) return StepOutcome::running();
+                    if (in.homeSwitch) {                                            // still on the arc: the back-off was not enough
+                        if (parkBackTries_++ < 2) { beginParkBack(pos, now, approach, (res_.arc > 0 ? res_.arc : 40) + 20); return StepOutcome::running(); }
+                        res_.contact = false; return settled(pos, now);
+                    }
+                    Ticks arcT = res_.arc > 0 ? res_.arc : 40;
+                    startSettleMove(pos + approach * (arcT * 2 + 40), 2, pos, now);   // far enough to cross the whole arc
+                    parkMoveStarted_ = true; ++res_.nudges;
+                    return StepOutcome::running();
+                }
+                if (!parkHit_) {
+                    if (in.homeSwitch) { parkHit_ = true; out = brakeCmd(); parkRestStart_ = now; return StepOutcome::running(); }
+                    StepOutcome m = move_.step(in, out);
+                    if (m.result != StepResult::Running) { out = brakeCmd(); res_.contact = false; return settled(pos, now); }   // crossed the bound with no closure
+                    return StepOutcome::running();
+                }
+                out = brakeCmd();
+                if (pos != parkLastTicks_) { parkLastTicks_ = pos; parkLastMoveMs_ = now; }
+                if (elapsed(now, parkRestStart_) < kParkRestMs) return StepOutcome::running();
+                if (elapsed(now, parkLastMoveMs_) < kParkRestMs && elapsed(now, parkRestStart_) < kParkRestMaxMs) return StepOutcome::running();
+                res_.zero = pos; res_.contact = in.homeSwitch;
+                return settled(pos, now);
+            }
+            // Pass 3c: the head is on the switch; park it where it looks straight.
+            case Phase::Offset: {
+                StepOutcome m = move_.step(in, out);
+                if (m.result != StepResult::Running) {
+                    out = brakeCmd(); moveActive_ = false;
+                    if (m.result != StepResult::Done || m.reason != Reason::TargetReached) { res_.lastMoveResult = static_cast<uint8_t>(m.jobResult); res_.lastMoveReason = static_cast<uint8_t>(m.reason); }
+                    finish(StepOutcome::done(JobResult::Done, Reason::None, res_.zero));
+                }
                 return StepOutcome::running();
             }
             default: return StepOutcome::running();
@@ -214,12 +352,55 @@ class RotaryHome {
     Phase phase() const { return phase_; }
     bool takePhaseChanged() { bool c = phaseChanged_; phaseChanged_ = false; return c; }
     const HomeResult& result() const { return res_; }
-    bool settleSkipped() const { return settleSkipped_; }
+    bool settleSkipped() const { return !res_.contact; }
     Ms pulseMs() const { return pulseMs_; }
 
   private:
     void enter(Phase ph, Ms now) { phase_ = ph; phaseMs_ = now; phaseChanged_ = true; }
     void finish(StepOutcome o) { pending_ = o; phase_ = Phase::Finished; phaseChanged_ = true; }
+    Ticks degTicks() const { return p_.tpr > 0 ? clampv<Ticks>(p_.tpr / 360, 1, 1 << 20) : 3; }
+    Ticks settleTol() const { return p_.tpr > 0 ? clampv<Ticks>(p_.tpr / 360, 2, 1 << 20) : 4; }   // one degree
+    void startSettleMove(Ticks target, Ticks tol, Ticks pos, Ms now, bool allowFlip = false) {
+        RotaryMoveParams m; m.rc = p_.rc; m.floor = p_.floor; m.speed = p_.floor; m.maxSpeed = p_.floor; m.target = target;
+        m.fudge = tol; m.stopDist = tol; m.halfRev = p_.tpr > 0 ? p_.tpr / 2 : 590; m.allowFlip = allowFlip; m.stallMs = 400;
+        move_.start(m, pos, now); moveActive_ = true;
+    }
+    void beginSettle(Ticks pos, Ms now) {
+        settleStart_ = now; wiggleIdx_ = 0; nWiggle_ = 0; moveActive_ = false; pauseUntil_ = now; coast_ = 0; recovered_ = false;
+        int amp = p_.rc ? p_.rc->settleWiggleDeg : 0;
+        int s = sweepDir_;
+        // degTicks() falls back to ~1 degree of a typical build when ticks/rev is not known
+        // yet (bench 2026-09-20: a fresh boot with RAM-only settings skipped the wiggle).
+        if (amp > 0) {
+            Ticks a1 = degTicks() * amp, a2 = a1 * 6 / 10, a3 = a1 * 35 / 100;
+            wiggle_[nWiggle_++] = res_.zero - s * a1;          // back against the sweep
+            wiggle_[nWiggle_++] = res_.zero + s * a2;          // through zero and past it
+            if (a3 >= 2) wiggle_[nWiggle_++] = res_.zero - s * a3;
+            wiggle_[nWiggle_++] = res_.zero;                   // final approach along the sweep
+        } else if (absl(pos - res_.zero) > settleTol()) {
+            wiggle_[nWiggle_++] = res_.zero;
+        }
+        enter(Phase::Settle, now);
+    }
+    StepOutcome settled(Ticks pos, Ms now) {
+        if (p_.homeOffset != 0) { startSettleMove(res_.zero + p_.homeOffset, settleTol(), pos, now, true); enter(Phase::Offset, now); return StepOutcome::running(); }
+        finish(StepOutcome::done(JobResult::Done, Reason::None, res_.zero)); return pending_;
+    }
+    void beginPark(Ticks pos, Ms now) {
+        parkStartMs_ = now; parkStartTicks_ = pos; parkBackTries_ = 0; parkHit_ = false; parkMoveStarted_ = false;
+        parkLastTicks_ = pos; parkLastMoveMs_ = now;
+        int approach = sweepDir_ * ((p_.rc && p_.rc->parkApproach > 0) ? 1 : -1);
+        // The head is near the arc centre after the wiggle: back off a little over half an arc
+        // plus margin on the approach side (further if the switch is closed right now).
+        Ticks arcT = res_.arc > 0 ? res_.arc : 40;
+        Ticks back = absl(pos - res_.zero) + arcT / 2 + 10;
+        beginParkBack(pos, now, approach, back);
+    }
+    void beginParkBack(Ticks pos, Ms now, int approach, Ticks dist) {
+        startSettleMove(pos - approach * dist, 3, pos, now);
+        enter(Phase::ParkBack, now);
+    }
+    void beginNudge(Ticks pos, Ms now) { (void)pos; nudgeStart_ = now; nudgeN_ = 0; nudgeFlips_ = 0; deepen_ = 0; lastContactPos_ = 0; nudgeDir_ = sweepDir_; moveActive_ = false; pauseUntil_ = now + kRestConfirmMs; enter(Phase::Nudge, now); }
     void beginSweep(Ticks pos, Ms now) {
         enter(Phase::Sweep, now);
         sweepStartMs_ = now; swept_ = 0; sawClosure_ = false; closedTravel_ = 0; noMove_ = 0; driving_ = true;
@@ -275,9 +456,19 @@ class RotaryHome {
     RotaryMove move_;
     Phase phase_ = Phase::Idle;
     Ms phaseMs_ = 0, brakeUntil_ = 0, sweepStartMs_ = 0, pulseStartMs_ = 0, settleStartMs_ = 0, settleStart_ = 0, pulseMs_ = kPulseMinMs;
+    Ms pauseUntil_ = 0, nudgeStart_ = 0;
     Ticks step_ = 4, limit_ = 0, swept_ = 0, pulseStartTicks_ = 0, closedTravel_ = 0;
-    int sweepDir_ = 1, noMove_ = 0;
-    bool driving_ = true, sawClosure_ = false, lastRaw_ = false, phaseChanged_ = false, settleSkipped_ = false;
+    Ticks wiggle_[4] = {0, 0, 0, 0};
+    Ticks coast_ = 0, moveTarget_ = 0;
+    int moveDir_ = 1;
+    bool recovered_ = false;
+    Ms parkStartMs_ = 0, parkRestStart_ = 0, parkLastMoveMs_ = 0;
+    Ticks parkStartTicks_ = 0, parkLastTicks_ = 0;
+    int parkBackTries_ = 0;
+    bool parkHit_ = false, parkMoveStarted_ = false;
+    int sweepDir_ = 1, noMove_ = 0, nWiggle_ = 0, wiggleIdx_ = 0, nudgeN_ = 0, nudgeDir_ = 1, nudgeFlips_ = 0, deepen_ = 0;
+    Ticks lastContactPos_ = 0;
+    bool driving_ = true, sawClosure_ = false, lastRaw_ = false, phaseChanged_ = false, moveActive_ = false;
     StepOutcome pending_;
 };
 

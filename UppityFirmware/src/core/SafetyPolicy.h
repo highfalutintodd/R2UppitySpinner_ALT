@@ -19,6 +19,7 @@ struct PolicyContext {
     RotaryKnowledge rotary;
     float ticksPerRev = 0.f;
     Ticks safeSpinTicks = 0;        // lifter height above which the head clears the dome
+    Ticks homeOffsetTicks = 0;      // visual home relative to the switch centre (frame zero)
     bool  rotaryDisabled = false;
     bool  estop = false;
     bool  locked = false;           // commissioning incomplete
@@ -45,11 +46,11 @@ inline Ticks homeToleranceTicks(float ticksPerRev) {
 inline bool rotaryIsHome(const PolicyContext& c) {
     if (c.rotaryDisabled) return true;
     switch (c.rotary.confidence) {
-        case HomeConfidence::SwitchLive: return true;
+        case HomeConfidence::SwitchLive: return absl(c.homeOffsetTicks) <= homeToleranceTicks(c.ticksPerRev > 0 ? c.ticksPerRev : 1184.f);   // on the switch = at the centre
         case HomeConfidence::Latched: {
             if (c.ticksPerRev <= 0) return false;
             Ticks tpr = static_cast<Ticks>(c.ticksPerRev + 0.5f);
-            Ticks d = signedTickDelta(0, c.rotary.ticks, tpr);
+            Ticks d = signedTickDelta(c.homeOffsetTicks, c.rotary.ticks, tpr);
             return absl(d) <= homeToleranceTicks(c.ticksPerRev);
         }
         default: return false;

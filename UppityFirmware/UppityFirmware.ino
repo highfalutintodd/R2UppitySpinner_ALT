@@ -85,7 +85,11 @@ void setup() {
     Serial.printf("EXPANDER=%s\n", i2cOk ? "ok (drivers off, lights off)" : "NOT RESPONDING (motors cannot be enabled)");
     gConsole.begin(gSup, gQueue, gEstop, gI2c, Serial);
     MotionConfig& cfg = gConsole.config();
-    cfg.motor = LifterMotor::Pololu4757_6p3;
+    // Phase 1 has no saved settings, so boot with the most protective profile: the 19:1 caps
+    // throttle at 75 % and stalls out in 700 ms, which a 6.3:1 tolerates fine (its min power is
+    // 65 %). Bench 2026-09-19: Todd's 19:1 ran two 2 s full-power stalls under the 6.3:1
+    // profile before this was caught. #PMOTOR0 for a 6.3:1, #PMOTOR2 for IA-Parts, every boot.
+    cfg.motor = LifterMotor::Pololu4751_19;
     cfg.commissioned = false;                                  // locked until #PUNLOCK (phase 1) or commissioning (phase 4)
     cfg.rotary.driveSign = -1;                                 // v3 wiring convention; #PROTARYTEST will measure it in phase 2
     gSup.setConfig(cfg);

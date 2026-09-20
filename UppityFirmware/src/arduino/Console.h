@@ -17,6 +17,7 @@ class Console {
     MotionConfig& config() { return cfg_; }
     void printState();
     void printConfig();
+    void printV3Prefs();
   private:
     void handleCommand(const Command& c);
     bool push(JobKind k, int32_t a, int32_t b, int32_t c);

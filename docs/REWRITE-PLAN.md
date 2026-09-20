@@ -517,6 +517,14 @@ size line recorded, and a written bench procedure for Todd. v3.6.0 stays flashab
 Order inside Phase 1: Hal + Sim + tests; bootResolve and SafetyPolicy before any seek; Seek;
 E-STOP; Rotary spin; Home; Characterise; Calibrate last.
 
+**Status 2026-09-20:** Phases 0 and 1 done and bench-verified on Todd's periscope (branch
+`v4-rewrite`; results and the per-boot settings in `docs/BENCH-PHASE1.md`). Two design changes
+came out of the bench and supersede Appendix F where they differ: (1) the safe-spin default is
+the top, never half travel; (2) homing pass 3 is a switch-only park (back off clear of the arc,
+return at floor power, brake on the first closure while moving) because the encoder on Todd's
+drive cannot be trusted tick by tick after the frame strike; the arc-centre-by-count park
+remains as `#PHOMEPARK0`.
+
 ---
 
 ## 6. Verification strategy

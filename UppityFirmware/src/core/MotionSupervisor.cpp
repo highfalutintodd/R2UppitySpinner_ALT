@@ -12,14 +12,29 @@ void MotionSupervisor::setConfig(const MotionConfig& c) { pendingCfg_ = c; cfgPe
 void MotionSupervisor::applyPendingConfig() {
     if (!cfgPending_ || job_ != JobKind::None) return;
     cfgPending_ = false;
+    bool invertChanged = pendingCfg_.lifterInverted != cfg_.lifterInverted;
     cfg_ = pendingCfg_;
+    if (invertChanged || !invertApplied_) {
+        invertApplied_ = true;
+        hal_.setLifterInverted(cfg_.lifterInverted);
+        // The count sense just flipped: whatever was read before is meaningless. Re-reference
+        // from a made switch, or admit the position is unknown.
+        RawInputs raw; hal_.readInputs(raw);
+        if (raw.bottomLimit && !raw.topLimit)      { hal_.setEncoder(Axis::Lifter, 0); lifter_.ticks = 0; lifter_.confidence = LifterConfidence::Known; }
+        else if (raw.topLimit && !raw.bottomLimit) { hal_.setEncoder(Axis::Lifter, travel()); lifter_.ticks = travel(); lifter_.confidence = LifterConfidence::Known; }
+        else if (invertChanged)                    { lifter_.confidence = LifterConfidence::Unknown; }
+    }
     prof_ = &profileFor(cfg_.motor);
     lifter_.travelTicks = travel();
     lifter_.travelCalibrated = cfg_.travelCalibrated;
 }
 
 Ticks MotionSupervisor::travel() const { return cfg_.travelTicks > 0 ? cfg_.travelTicks : static_cast<Ticks>(prof_->defaultTravelTicks); }
-Ticks MotionSupervisor::safeSpin() const { return cfg_.safeSpinTicks > 0 ? cfg_.safeSpinTicks : travel() / 2; }
+// Below this height the head is inside the dome opening and must not turn. There is no safe
+// guess: v3's default of half travel let Todd's head hit the lifter frame at 54 % on
+// 2026-09-19. Until the builder sets it (#PSAFESPIN, or v3's stored "minheight"), only the
+// top counts as clear: lifterAboveSafeNow() still passes on the top limit switch.
+Ticks MotionSupervisor::safeSpin() const { return cfg_.safeSpinTicks > 0 ? cfg_.safeSpinTicks : travel(); }
 Ticks MotionSupervisor::tpr() const { return cfg_.rotary.ticksPerRev > 0 ? static_cast<Ticks>(cfg_.rotary.ticksPerRev + 0.5f) : 0; }
 
 Throttle MotionSupervisor::floorSpeed(Throttle speed, int dir) const {
@@ -45,7 +60,7 @@ void MotionSupervisor::begin(Ms now) {
         rotary_.ticks = 0; rotary_.confidence = HomeConfidence::SwitchLive; rotary_.provenance = HomeProvenance::RestContact; rotary_.referencedAt = now;
     }
     top_.state = raw.topLimit; bottom_.state = raw.bottomLimit; home_.state = raw.homeSwitch;
-    topWas_ = raw.topLimit; botWas_ = raw.bottomLimit; homeWas_ = raw.homeSwitch;
+    topWas_ = raw.topLimit; botWas_ = raw.bottomLimit; homeWas_ = raw.homeSwitch; homePending_ = raw.homeSwitch; homePendingSince_ = now;
     hal_.requestEnable(false);
     idleSince_ = now;
     state_ = cfg_.commissioned ? MotionState::Idle : MotionState::Locked;
@@ -65,6 +80,7 @@ PolicyContext MotionSupervisor::policy(const TickInputs& in) const {
     c.lifter = lifter_; c.rotary = rotary_;
     c.ticksPerRev = cfg_.rotary.ticksPerRev;
     c.safeSpinTicks = safeSpin();
+    c.homeOffsetTicks = cfg_.rotary.homeOffsetTicks;
     c.rotaryDisabled = cfg_.rotaryDisabled;
     c.estop = in.estop;
     c.locked = !cfg_.commissioned && !cfg_.commissioningActive;
@@ -77,8 +93,13 @@ PolicyContext MotionSupervisor::policy(const TickInputs& in) const {
 }
 
 void MotionSupervisor::updateKnowledge(const TickInputs& in, bool rotaryBusy) {
-    // Limit switches re-reference the lifter on their making edge.
-    if (in.topLimit && !topWas_) {
+    // Limit switches re-reference the lifter on their making edge. A making edge while the
+    // opposite switch is still made is a contradiction (bench: a finger on the top switch with
+    // the mast parked down; field: a short or a stuck switch) and must not move the reference.
+    // FaultModel::updateLimits raises F_LimitContradiction for the duration, which blocks motion.
+    if (in.topLimit && !topWas_ && in.bottomLimit) {
+        emit(Ev::LimitTop, 2, in.lifterTicks, 0, in.nowMs);
+    } else if (in.topLimit && !topWas_) {
         Ticks want = travel();
         if (!suppressLimitRef_) {
             if (lifter_.confidence == LifterConfidence::Known && lifter_.travelCalibrated && absl(in.lifterTicks - want) > travel() / 4) faults_.set(F_LimitMismatch);
@@ -87,7 +108,9 @@ void MotionSupervisor::updateKnowledge(const TickInputs& in, bool rotaryBusy) {
         lifter_.confidence = LifterConfidence::Known; lifter_.referencedAt = in.nowMs;
         emit(Ev::LimitTop, 1, in.lifterTicks, want, in.nowMs);
     } else if (!in.topLimit && topWas_) emit(Ev::LimitTop, 0, in.lifterTicks, 0, in.nowMs);
-    if (in.bottomLimit && !botWas_) {
+    if (in.bottomLimit && !botWas_ && in.topLimit) {
+        emit(Ev::LimitBottom, 2, in.lifterTicks, 0, in.nowMs);
+    } else if (in.bottomLimit && !botWas_) {
         if (!suppressLimitRef_) {
             if (lifter_.confidence == LifterConfidence::Known && lifter_.travelCalibrated && absl(in.lifterTicks) > travel() / 4) faults_.set(F_LimitMismatch);
             hal_.setEncoder(Axis::Lifter, 0); lifter_.ticks = 0;
@@ -97,12 +120,22 @@ void MotionSupervisor::updateKnowledge(const TickInputs& in, bool rotaryBusy) {
     } else if (!in.bottomLimit && botWas_) emit(Ev::LimitBottom, 0, in.lifterTicks, 0, in.nowMs);
     topWas_ = in.topLimit; botWas_ = in.bottomLimit;
 
-    if (in.homeSwitch != homeWas_) emit(Ev::HomeSwitch, in.homeSwitch ? 1 : 0, in.rotaryTicks, 0, in.nowMs);
-    homeWas_ = in.homeSwitch;
+    // While the rotary is busy every edge is logged as it happens (the home routine needs
+    // them). At rest, a ball bearing parked on the edge of the contact zone flickers with bench
+    // vibration (Todd, 2026-09-20: 18 toggles in 3 s with nothing moving); a state has to hold
+    // for kRestSwitchHoldMs before it is logged or allowed to move the trust label.
+    bool homeSeen;
+    if (rotaryBusy) { homeSeen = in.homeSwitch; homePending_ = in.homeSwitch; homePendingSince_ = in.nowMs; }
+    else {
+        if (in.homeSwitch != homePending_) { homePending_ = in.homeSwitch; homePendingSince_ = in.nowMs; }
+        homeSeen = (homePending_ != homeWas_ && elapsed(in.nowMs, homePendingSince_) >= kRestSwitchHoldMs) ? homePending_ : homeWas_;
+    }
+    if (homeSeen != homeWas_) emit(Ev::HomeSwitch, homeSeen ? 1 : 0, in.rotaryTicks, 0, in.nowMs);
+    homeWas_ = homeSeen;
 
     // Rotary rest contact: a closed switch with the motor at rest is a trusted zero.
     if (!cfg_.rotaryDisabled && !rotaryBusy) {
-        if (in.homeSwitch) {
+        if (homeSeen) {
             if (rotary_.confidence == HomeConfidence::Latched && tpr() > 0) {
                 Ticks err = signedTickDelta(0, in.rotaryTicks, tpr());
                 if (absl(err) > homeToleranceTicks(cfg_.rotary.ticksPerRev)) { hal_.setEncoder(Axis::Rotary, 0); rotary_.ticks = 0; emit(Ev::HomeFrameCorrected, err, 0, 0, in.nowMs); }
@@ -147,15 +180,19 @@ int MotionSupervisor::expandRequest(const MotionRequest& r, const TickInputs& in
         case JobKind::SafeLower:
             add(JobKind::LifterSeek, travel(), 0, 1 | kSkipKnown);                       // reference if unknown
             if (!cfg_.rotaryDisabled) {
+                // Characterisation measures ticks/rev but parks the head wherever its last pass
+                // ended (bench 2026-09-19: ~50 ticks past the switch, so the descent clamped at
+                // safe height with the head out of position). Always home afterwards.
                 if (tpr() <= 0) add(JobKind::RotaryCharacterise, 2, 0, kSkipHome | kSkipBelowSafe);
-                else add(JobKind::RotaryHome, 0, 0, kSkipHome | kSkipBelowSafe);
+                add(JobKind::RotaryHome, 0, 0, kSkipHome | kSkipBelowSafe);
             }
-            add(JobKind::LifterSeek, 0, r.b, 0);
+            add(JobKind::LifterSeek, 0, r.b, 1);                                      // full travel: end on the bottom switch, not on the count
             break;
         case JobKind::LifterCalibrate:
             if (!cfg_.rotaryDisabled && !rotaryHomeKnown()) {
                 add(JobKind::LifterSeek, travel(), 0, 1);
-                if (tpr() <= 0) add(JobKind::RotaryCharacterise, 2, 0, 0); else add(JobKind::RotaryHome, 0, 0, 0);
+                if (tpr() <= 0) add(JobKind::RotaryCharacterise, 2, 0, 0);
+                add(JobKind::RotaryHome, 0, 0, 0);
             }
             add(JobKind::LifterCalibrate, 0, 0, 0);
             break;
@@ -185,6 +222,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             SeekParams p;
             p.target = target;
             p.speed = floorSpeed(static_cast<Throttle>(s.b), dir);
+            p.minPower = floorSpeed(1, dir);
             p.approachPower = cfg_.approachPower > 0 ? cfg_.approachPower : pctToThrottle(prof_->defaultSeekBottomPowerPct);
             p.fullTravel = (s.c & 1) != 0 && d.verdict != Verdict::Clamp;
             { int slot = clampv<int>(p.speed / 50, 0, kSlots - 1); p.stopComp = dir > 0 ? cfg_.overshootUp[slot] : cfg_.overshootDown[slot]; }
@@ -221,7 +259,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             Ticks target;
             if (s.kind == JobKind::RotaryAbsolute) {
                 if (!rotaryHomeKnown()) { refuse(s, Reason::RotaryNotHome, programId_, in); return -1; }
-                int16_t curDeg = normalizeDeg(static_cast<int32_t>(cfg_.rotary.ticksToDeg(in.rotaryTicks)));
+                int16_t curDeg = normalizeDeg(static_cast<int32_t>(cfg_.rotary.ticksToDeg(in.rotaryTicks - cfg_.rotary.homeOffsetTicks)));
                 int16_t delta = signedCircularDelta(curDeg, normalizeDeg(s.a));
                 target = in.rotaryTicks + cfg_.rotary.degToTicks(static_cast<float>(delta));
             } else {
@@ -233,6 +271,8 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             p.maxSpeed = s.c > 0 ? clampv<Throttle>(static_cast<Throttle>(s.c), p.speed, kThrottleMax) : p.speed;
             p.target = target;
             p.fudge = clampv<Ticks>(tpr() * 5 / 360, 2, 1 << 20);
+            p.stepBelow = clampv<Ticks>(tpr() * 6 / 360, 4, 1 << 20);                 // ":PD2"-sized moves walk in single ticks
+            { Ticks dist = absl(target - in.rotaryTicks); if (dist <= p.stepBelow) p.fudge = 0; }
             p.stopDist = cfg_.rotary.stopDistanceTicks > 0 ? cfg_.rotary.stopDistanceTicks : clampv<Ticks>(tpr() / 72, p.fudge, 1 << 20);
             p.halfRev = tpr() / 2;
             rmove_.start(p, in.rotaryTicks, in.nowMs);
@@ -257,12 +297,15 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             return 1;
         }
         case JobKind::RotaryHome: {
-            if ((s.c & 2) && (rotaryHomeKnown() || cfg_.rotaryDisabled)) return 0;
+            // "skip if home": the head must actually be within tolerance, not merely referenced.
+            // (Bench 2026-09-19: after characterisation the frame was Latched but the head sat
+            // ~70 ticks past the switch; skipping here left :PH clamped at safe height.)
+            if ((s.c & 2) && (rotaryIsHome(c) || cfg_.rotaryDisabled)) return 0;
             if ((s.c & 4) && lifter_.confidence != LifterConfidence::Unknown && in.lifterTicks <= safeSpin() && !in.topLimit) return 0;
             Decision d = checkRotary(c, false);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
             RotaryHomeParams p;
-            p.rc = &cfg_.rotary; p.floor = rotaryFloor(); p.referenced = rotaryReferenced(); p.tpr = tpr(); p.sweepDir = 1;
+            p.rc = &cfg_.rotary; p.floor = rotaryFloor(); p.referenced = rotaryReferenced(); p.tpr = tpr(); p.sweepDir = 1; p.homeOffset = cfg_.rotary.homeOffsetTicks;
             rhome_.start(p, in.rotaryTicks, in.nowMs);
             job_ = JobKind::RotaryHome;
             emit(Ev::JobStart, static_cast<int32_t>(job_), p.referenced ? 1 : 0, static_cast<int32_t>(programId_), in.nowMs);
@@ -388,6 +431,7 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
             rotary_.lastEdgeArcTicks = lastHome_.arc; rotary_.lastEdgeClosures = static_cast<uint8_t>(lastHome_.closures > 255 ? 255 : lastHome_.closures);
             faults_.clear(F_RotaryStall);
             emit(Ev::HomeEdge, lastHome_.enter, lastHome_.exit, lastHome_.closures, in.nowMs);
+            emit(Ev::HomeSettle, lastHome_.contact ? 1 : 0, lastHome_.wiggles | (static_cast<int32_t>(lastHome_.lastMoveResult) << 8) | (static_cast<int32_t>(lastHome_.lastMoveReason) << 16), lastHome_.nudges, in.nowMs);
             if (was != HomeConfidence::Latched) emit(Ev::ConfidenceRotary, static_cast<int32_t>(was), static_cast<int32_t>(HomeConfidence::Latched), 0, in.nowMs);
         } else if (rotary_.confidence == HomeConfidence::Latched) {
             rotary_.confidence = HomeConfidence::Stale;   // frame untouched, trust reduced
@@ -434,7 +478,13 @@ void MotionSupervisor::endProgram(const StepOutcome& o, const TickInputs& in) {
         if (o.result == StepResult::Done) holdFails_ = 0;
         else if (++holdFails_ >= 3) { emit(Ev::Hold, 0, holdTarget_, in.lifterTicks, in.nowMs); holdTarget_ = -1; }
         holdCheckAt_ = in.nowMs;
-    } else { lastJob_ = programKind_; lastResult_ = o.jobResult; lastReason_ = o.reason; }
+    } else {
+        lastJob_ = programKind_; lastResult_ = o.jobResult; lastReason_ = o.reason;
+        // The composite reports its own outcome: its steps may all have been skipped (":PH"
+        // from the bottom prints nothing otherwise) or the failure belongs to the whole
+        // program ("SAFE_LOWER FAILED HOME_FAILED"), not to the step that tripped it.
+        if (programKind_ == JobKind::SafeLower) emit(Ev::JobEnd, static_cast<int32_t>(programKind_), static_cast<int32_t>(o.jobResult), static_cast<int32_t>(o.reason), in.nowMs);
+    }
     stepCount_ = 0; stepIdx_ = 0; programKind_ = JobKind::None; programId_ = 0;
     idleSince_ = in.nowMs;
 }
@@ -618,7 +668,7 @@ void MotionSupervisor::publish(const TickInputs& in, BridgeCommand lifterOut, Br
     s.lifterConf = lifter_.confidence;
     s.rotaryTicks = rotary_.ticks;
     s.ticksPerRev = cfg_.rotary.ticksPerRev;
-    s.rotaryDeg = cfg_.rotary.ticksPerRev > 0 ? normalizeDeg(static_cast<int32_t>(cfg_.rotary.ticksToDeg(rotary_.ticks))) : 0;
+    s.rotaryDeg = cfg_.rotary.ticksPerRev > 0 ? normalizeDeg(static_cast<int32_t>(cfg_.rotary.ticksToDeg(rotary_.ticks - cfg_.rotary.homeOffsetTicks))) : 0;
     s.homeConf = rotary_.confidence; s.homeProv = rotary_.provenance;
     s.topLimit = in.topLimit; s.bottomLimit = in.bottomLimit; s.homeSwitch = in.homeSwitch;
     s.lifterDiag = in.lifterDiag; s.rotaryDiag = in.rotaryDiag;

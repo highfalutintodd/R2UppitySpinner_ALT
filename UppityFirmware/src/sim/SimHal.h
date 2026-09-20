@@ -15,6 +15,8 @@ class SimHal final : public Hal {
 
     int  enableLatencyMs = 5;      // I2C service turnaround for EN/ENB
     bool failEnable = false;       // expander fault injection
+    bool forceTop = false;         // a fingertip on the top limit switch (bench step 4)
+    bool forceBottom = false;
 
     // ---- Hal ----
     Ms       nowMs() const override { return nowMs_; }
@@ -23,8 +25,8 @@ class SimHal final : public Hal {
         out.lifterTicks = lifterSign_ * lifter.encoder() + lifterOffset_;
         out.rotaryTicks = rotary.encoder() + rotaryOffset_;
         // Models report "made"; the wiring polarity is what the HAL would see and correct for.
-        out.topLimit    = lifter.topLimit();
-        out.bottomLimit = lifter.bottomLimit();
+        out.topLimit    = lifter.topLimit() || forceTop;
+        out.bottomLimit = lifter.bottomLimit() || forceBottom;
         out.homeSwitch  = rotary.homeSwitch();
         out.lifterDiag  = lifter.diag();
         out.rotaryDiag  = rotary.diag();

@@ -31,6 +31,7 @@ struct SeekParams {
     Ticks    target = 0;
     Throttle speed = 0;             // already floored/capped by the supervisor
     Throttle approachPower = 300;   // soft-approach floor (profile seek-bottom power)
+    Throttle minPower = 0;          // profile/tuned minimum reliable power; 0 = approachPower
     bool     fullTravel = false;    // seeking to a limit: ignore the encoder target
     Ticks    stopComp = 0;          // calibrated coast distance at this speed
     const LifterMotorProfile* prof = nullptr;
@@ -145,6 +146,15 @@ class LifterSeek {
     void beginBrake(StepOutcome pending, Ms now) { pending_ = pending; brakeUntil_ = now + kBrakeMs; phase_ = Phase::Braking; phaseChanged_ = true; }
     void finish(StepOutcome o) { pending_ = o; phase_ = Phase::Finished; phaseChanged_ = true; }
     Throttle cruisePower(Ticks remaining, Throttle full) const {
+        // Full-travel seek past its count target with no switch yet: the stored travel is
+        // wrong (bench 2026-09-19: 450 configured on a ~1150-tick lifter). Keep going at the
+        // minimum reliable power rather than the soft-approach floor, which can stall.
+        if (p_.fullTravel && remaining <= 0) {
+            Throttle m = p_.minPower > 0 ? p_.minPower : clampThrottle(p_.approachPower);
+            Throttle mag = static_cast<Throttle>(full < 0 ? -full : full);
+            if (m > mag) m = mag;
+            return static_cast<Throttle>(dir_ > 0 ? m : -m);
+        }
         Ticks zone = 0;
         if (dir_ > 0) { if (p_.prof && p_.prof->softApproachEnabled) zone = clampv<Ticks>(distance_ * p_.prof->softApproachPct / 100, 30, 1 << 30); }
         else zone = clampv<Ticks>(distance_ / 5, 30, 1 << 30);

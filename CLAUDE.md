@@ -49,6 +49,15 @@ debugging record). Read the plan's §1.1 decisions table before proposing anythi
     reasoning, not just the result; Todd is a capable builder, not a professional developer.
 11. **Never write outside this repo without saying so** (the patched ReelTwo library under
     `~/Documents/Arduino/libraries/` is load-bearing for v3 builds).
+12. **No bench step may depend on a clearance that was not measured on Todd's hardware.** On
+    2026-09-19 a step written against the firmware's default safe-spin height (half travel)
+    turned the head at 54 % and hit the lifter frame; the periscope head came loose and the
+    rotary drive has had play ever since. Heights, travel and switch positions come from the
+    builder's own numbers (`#PV3` reads v3's NVS) or from a slow, watched measurement, never
+    from a profile default. Until a clearance is set, only the top counts as clear.
+13. **Todd is not a coder and not comfortable in the terminal.** Every instruction is a complete
+    copy-paste command with the real path and the real port (`/dev/cu.wchusbserial110`), one per
+    fenced block, with what success looks like. No placeholders.
 
 ---
 
@@ -59,8 +68,11 @@ make -C UppityFirmware/test/native test            # host tests (UBSan on; `make
 arduino-cli compile --profile uppity UppityFirmware # ESP32, core 3.3.4 pinned in sketch.yaml
 ```
 Profile `uppity` = `esp32:esp32:esp32:PartitionScheme=min_spiffs,FlashSize=4M`. Baseline at
-Phase 0: 314 KB of 1,966,080 (15 %). Paths under this repo contain spaces: always quote them.
-`arduino-cli` 1.5.1 is installed via Homebrew; the ESP32 core 3.3.4 is installed.
+Phase 0: 314 KB of 1,966,080 (15 %); end of Phase 1 bench: 381 KB (19 %). Paths under this repo
+contain spaces: always quote them. `arduino-cli` 1.5.1 is installed via Homebrew; the ESP32
+core 3.3.4 is installed; Apple Silicon needs Rosetta 2 for arduino-cli's `ctags` (installed
+2026-09-19). Todd flashes from the Terminal app with the three commands at the top of
+`docs/BENCH-PHASE1.md`.
 
 Known local quirk: AddressSanitizer deadlocks in its own initialiser on this macOS build
 (Darwin 25, Apple clang 17), so the default test build uses UBSan only.
@@ -72,15 +84,17 @@ Known local quirk: AddressSanitizer deadlocks in its own initialiser on this mac
 | Phase | Status |
 |---|---|
 | 0 Skeleton, simulator, tests, docs | **Done** 2026-09-07: tree, profile, core foundation, simulator, ESP32 HAL (PCNT + 10 kHz LEDC), TB9051FTG facts in docs/TB9051FTG-NOTES.md. |
-| 1 Motion core + USB console | **Code complete on host** 2026-09-07: policy, faults, lifter seek/creep/calibrate/hold, rotary move/spin/jog/home/characterise, composites (`:PH`, auto-raise), supervisor with programs, control task, I2C service, serial front with E-STOP scanner, console. 71 host tests pass; ESP32 build 367 KB. **Bench pending**: docs/BENCH-PHASE1.md. |
-| 2 Command layer + settings | not started |
+| 1 Motion core + USB console | **Bench-verified on Todd's 19:1 periscope 2026-09-19/20** (branch `v4-rewrite`): every step of docs/BENCH-PHASE1.md incl. calibration and the extended rotary set; 82 host tests; ESP32 build 381 KB. Fixes from the bench are listed in that doc's results section (limit-edge contradiction guard, `#PINVERT`/`#PTRAVEL`/`#PSAFESPIN`/`#PROTARYTPR`/`#PHOMEPARK`/`#PWIGGLE`/`#PV3` bench commands, `:PH` ends on the switch and homes after characterising, top-only safe-spin default, switch-only two-move park that reproduces v3's home spot, rest-switch hold filter, tick-walking short rotary moves). |
+| 2 Command layer + settings | **Next.** Persistence must cover everything Todd re-sends per boot: invert, travel, safe-spin, ticks/rev, park mode, wiggle, home offset, motor profile, commissioning. Also carry over: arc-aware rest-contact correction (only correct when outside the known arc), `#PV3` import as a one-shot migration from v3's NVS. |
 | 3 Network + minimal UI | not started |
 | 4 Full web UI | not started |
 | 5 Mesh + DroidNet | not started |
 | 6 Release | not started |
 
-Open items Todd owns: TB9051FTG datasheet check (PWM1=PWM2=low: coast or brake?) before
-Phase 1 motion tests; heartbeat tag `&PERI` vs `&UPPITY` before Phase 5.
+Open items Todd owns: heartbeat tag `&PERI` vs `&UPPITY` before Phase 5; keep an eye on the
+rotary drive play (coupler set screw / encoder disc) — homing is robust to it but it will not
+improve by itself. Todd's hardware numbers live in memory `project_todd_periscope_hardware` and
+in the "Todd's hardware" section of docs/BENCH-PHASE1.md.
 
 ---
 

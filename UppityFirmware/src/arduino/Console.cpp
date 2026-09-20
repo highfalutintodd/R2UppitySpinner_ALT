@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <esp_random.h>
 #include "Console.h"
+#include <Preferences.h>
 #include "../core/EventFormat.h"
 #include "../../Version.h"
 
@@ -75,13 +76,42 @@ void Console::handleCommand(const Command& c) {
             if (c.hasA && c.a >= 0 && c.a < static_cast<int32_t>(LifterMotor::Count)) { cfg_.motor = static_cast<LifterMotor>(c.a); cfg_.travelTicks = 0; cfg_.travelCalibrated = false; sup_->setConfig(cfg_); }
             out_->printf("MOTOR=%d %s\n", static_cast<int>(cfg_.motor), profileFor(cfg_.motor).name);
             break;
+        case Verb::RotaryTpr:
+            if (c.hasA && c.a >= 1000 && c.a <= 50000) { cfg_.rotary.ticksPerRev = c.a / 10.f; cfg_.rotary.confident = true; sup_->setConfig(cfg_); }
+            out_->printf("ROTARYTPR=%.1f ticks/rev (RAM only; tenths, e.g. #PROTARYTPR11855)\n", cfg_.rotary.ticksPerRev);
+            break;
+        case Verb::Wiggle:
+            if (c.hasA && c.a >= 0 && c.a <= 20) { cfg_.rotary.settleWiggleDeg = static_cast<uint8_t>(c.a); sup_->setConfig(cfg_); }
+            out_->printf("WIGGLE=%u deg first swing (RAM only; 0 = no wiggle, the park's out-and-back still shows)\n", cfg_.rotary.settleWiggleDeg);
+            break;
+        case Verb::HomePark:
+            if (c.hasA) { cfg_.rotary.parkOnLeadingEdge = c.a != 0; cfg_.rotary.parkApproach = c.a == 2 ? 1 : -1; sup_->setConfig(cfg_); }
+            out_->printf("HOMEPARK=%d (0 = arc centre by count; 1 = first closure creeping in against the sweep, v3 style; 2 = creeping in with the sweep)\n", cfg_.rotary.parkOnLeadingEdge ? (cfg_.rotary.parkApproach > 0 ? 2 : 1) : 0);
+            break;
+        case Verb::HomeOffset:
+            if (c.hasA && c.a >= -600 && c.a <= 600) { cfg_.rotary.homeOffsetTicks = static_cast<int16_t>(c.a); sup_->setConfig(cfg_); }
+            out_->printf("HOMEOFFSET=%d ticks from the switch centre (RAM only; measure: :PA0, then :PD+-2 until straight, read rotary= in #PSTATE)\n", cfg_.rotary.homeOffsetTicks);
+            break;
+        case Verb::SafeSpin:
+            if (c.hasA && c.a >= 0 && c.a <= 5000) { cfg_.safeSpinTicks = c.a; sup_->setConfig(cfg_); }
+            out_->printf("SAFESPIN=%ld ticks (RAM only; 0 = only the top counts as clear)\n", (long)cfg_.safeSpinTicks);
+            break;
+        case Verb::V3Dump: printV3Prefs(); break;
+        case Verb::Travel:
+            if (c.hasA && c.a >= 100 && c.a <= 5000) { cfg_.travelTicks = c.a; cfg_.travelCalibrated = false; cfg_.safeSpinTicks = 0; sup_->setConfig(cfg_); }
+            out_->printf("TRAVEL=%ld ticks (RAM only; 0 = profile default %u)\n", (long)cfg_.travelTicks, profileFor(cfg_.motor).defaultTravelTicks);
+            break;
+        case Verb::Invert:
+            if (c.hasA) { cfg_.lifterInverted = c.a != 0; sup_->setConfig(cfg_); }
+            out_->printf("INVERT=%d (RAM only%s)\n", cfg_.lifterInverted ? 1 : 0, c.hasA ? ", re-referenced from the limit switches" : "");
+            break;
         case Verb::Unlock: cfg_.commissioned = true; sup_->setConfig(cfg_); out_->println("COMMISSIONED=1 (RAM only, phase 1 bench unlock)"); break;
         case Verb::Lock: cfg_.commissioned = false; sup_->setConfig(cfg_); out_->println("COMMISSIONED=0"); break;
         case Verb::Light: i2c_->setLightKit(static_cast<uint8_t>(clampv<int32_t>(c.a, 0, 7))); out_->printf("LIGHT=%d\n", i2c_->lightKit()); break;
         case Verb::LightRandom: { int m; do { m = rnd(0, 7); } while (m == 1); i2c_->setLightKit(static_cast<uint8_t>(m)); out_->printf("LIGHT=%d\n", m); break; }
         case Verb::Help:
             out_->println("CMDS=:PP<0-100>[,spd] :PPR :PH[spd] :PA<deg>[,spd][,max] :PAR :PD<deg>[,spd][,max] :PDR :PR<+-spd> :PRR[max] :PL<0-7> :PX");
-            out_->println("CFG=#PRESUME #PSTATE #PROTARYTEST[n] #PSC #PCLEARFAULT #PCONFIG #PMOTOR[0-2] #PUNLOCK #PLOCK #PHELP");
+            out_->println("CFG=#PRESUME #PSTATE #PROTARYTEST[n] #PSC #PCLEARFAULT #PCONFIG #PMOTOR[0-2] #PINVERT[0/1] #PTRAVEL<ticks> #PSAFESPIN<ticks> #PHOMEOFFSET<ticks> #PHOMEPARK<0/1/2> #PWIGGLE<deg> #PROTARYTPR<tenths> #PV3 #PUNLOCK #PLOCK #PHELP");
             break;
         case Verb::Wait: case Verb::PlaySeq: case Verb::Random: case Verb::RandomLevel: out_->println("UNSUPPORTED=phase2"); break;
         case Verb::Invalid: default: out_->println("INVALID"); break;
@@ -101,11 +131,32 @@ void Console::printState() {
                  resultName(static_cast<int>(s.lastResult)), reasonName(s.lastReason), (unsigned long)s.cycleUsMax, (unsigned long)s.lateTicks, (unsigned long)s.tickCount);
 }
 
+// v3 kept its tuning in NVS namespace "uppityspinner"; the v4 flash layout leaves that
+// partition where it was, so the builder's numbers are still readable. Read-only.
+void Console::printV3Prefs() {
+    Preferences p;
+    if (!p.begin("uppityspinner", true)) { out_->println("V3=none (no uppityspinner namespace in NVS)"); return; }
+    static const char* const keys[] = { "lftminpwr", "lftseekbotpwr", "rotminpwr", "lftdist", "minheight", "rotenccount", "driftpct", "aggression", "motortype", "wizstate", "expertmode" };
+    out_->print("V3=");
+    int n = 0;
+    for (const char* k : keys) if (p.isKey(k)) { out_->printf(" %s=%ld", k, (long)p.getInt(k, -1)); ++n; }
+    if (n == 0) out_->print(" (namespace present, no known keys)");
+    out_->println();
+    out_->println("V3 minheight is ticks in v3's frame (lftdist = its travel): #PSAFESPIN it, scaled if #PTRAVEL differs");
+    p.end();
+}
+
 void Console::printConfig() {
     const MotionConfig& c = sup_->config();
-    out_->printf("#PVERSION=%s\n#PMOTOR=%d (%s)\n#PEXPERT=%d\n#PTRAVEL=%ld calibrated=%d\n#PMINUP=%d\n#PMINDOWN=%d\n#PSAFESPIN=%ld\n#PROTARYTPR=%.1f confident=%d arc=%u chatter=%u driveSign=%d\n#PROTARYDISABLED=%d\n#PCOMMISSIONED=%d\n#PDRIFT=%d\n",
-                 UPPITY_FW_VERSION, static_cast<int>(c.motor), profileFor(c.motor).name, c.expertMode, (long)c.travelTicks, c.travelCalibrated, c.minPowerUp, c.minPowerDown,
-                 (long)c.safeSpinTicks, c.rotary.ticksPerRev, c.rotary.confident, c.rotary.contactArcTicks, c.rotary.chatterPerPass, c.rotary.driveSign, c.rotaryDisabled, c.commissioned, c.driftPct);
+    out_->printf("#PVERSION=%s\n#PMOTOR=%d (%s)\n#PEXPERT=%d\n#PINVERT=%d\n#PTRAVEL=%ld calibrated=%d\n#PMINUP=%d\n#PMINDOWN=%d\n#PSAFESPIN=%ld\n#PROTARYTPR=%.1f confident=%d arc=%u chatter=%u driveSign=%d\n#PHOMEOFFSET=%d\n#PROTARYDISABLED=%d\n#PCOMMISSIONED=%d\n#PDRIFT=%d\n",
+                 UPPITY_FW_VERSION, static_cast<int>(c.motor), profileFor(c.motor).name, c.expertMode, c.lifterInverted, (long)c.travelTicks, c.travelCalibrated, c.minPowerUp, c.minPowerDown,
+                 (long)c.safeSpinTicks, c.rotary.ticksPerRev, c.rotary.confident, c.rotary.contactArcTicks, c.rotary.chatterPerPass, c.rotary.driveSign, c.rotary.homeOffsetTicks, c.rotaryDisabled, c.commissioned, c.driftPct);
+    if (c.travelCalibrated) {
+        // slot = power in 5 % steps; vel = ticks/s at that power; over = coast ticks after the brake
+        out_->print("#PCALUP  ");   for (int i = 0; i < kSlots; ++i) if (c.velUp[i] || c.overshootUp[i])     out_->printf(" %d%%:%u/%u", i * 5, c.velUp[i], c.overshootUp[i]);
+        out_->print("\n#PCALDOWN");  for (int i = 0; i < kSlots; ++i) if (c.velDown[i] || c.overshootDown[i]) out_->printf(" %d%%:%u/%u", i * 5, c.velDown[i], c.overshootDown[i]);
+        out_->println();
+    }
 }
 
 } // namespace uppity

@@ -70,6 +70,14 @@ struct RotaryCharacterisation {
     int8_t   driveSign = -1;            // +1: positive throttle increases the tick count; v3 wiring was -1
     uint16_t slewAccelPermille = 40;    // throttle change per rampLatencyMs while accelerating
     uint16_t slewDecelPermille = 120;   // while decelerating or reversing
+    uint8_t  settleWiggleDeg = 2;       // homing pass 3: first swing of the decaying settle wiggle (Todd picked 2° on the bench); 0 = none
+    bool     parkOnLeadingEdge = true;  // home = first switch closure met while creeping onto the arc, found with the switch alone
+                                        // (v3's parking spot). Off = the arc centre by encoder. On is the only choice when the
+                                        // count cannot be trusted tick by tick (Todd's drive, 2026-09-20).
+    int8_t   parkApproach = -1;         // creep direction of that final approach relative to the sweep: -1 = against it (v3's
+                                        // left-first search met the far edge of v4's sweep; Todd's head is aligned there), +1 = with it
+    int16_t  homeOffsetTicks = 0;       // where the head looks straight, relative to the switch arc centre (v3 parked on the
+                                        // arc's leading edge, so heads aligned under v3 sit ~half an arc from the centre)
 
     Ticks degToTicks(float deg) const { return ticksPerRev > 0 ? static_cast<Ticks>(deg * ticksPerRev / 360.f + (deg >= 0 ? 0.5f : -0.5f)) : 0; }
     float ticksToDeg(Ticks t) const { return ticksPerRev > 0 ? static_cast<float>(t) * 360.f / ticksPerRev : 0.f; }

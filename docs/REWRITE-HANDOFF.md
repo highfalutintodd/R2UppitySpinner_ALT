@@ -6,6 +6,13 @@ to learn. Read it end to end before proposing an architecture.
 
 Maintainer: **Todd Word** (GitHub `highfalutintodd`, Discord "Highfalutintodd").
 
+> **Status 2026-09-20:** the rewrite exists. `UppityFirmware/` on branch `v4-rewrite` has passed
+> Phase 1 on Todd's hardware; see `docs/BENCH-PHASE1.md` (procedure, results, per-boot settings,
+> Todd's measured numbers) and `CLAUDE.md` (phase table). This document remains the record of
+> what v3 taught us; §5 requirements stand. New since it was written: the rotary drive has play
+> from a bench strike (2026-09-19), so nothing tick-level may decide a home (§5.1 now met by a
+> switch-only park), and v3's `minheight`/tuning are readable from NVS with `#PV3`.
+
 ---
 
 ## 1. What this is

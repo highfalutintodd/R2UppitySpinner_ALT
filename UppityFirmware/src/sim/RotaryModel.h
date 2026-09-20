@@ -32,6 +32,7 @@ struct RotaryParams {
     double phantomPerMsDriving = 0.0;
     double phantomPerMsIdle = 0.0;
     bool   invertedWiring = false;
+    double backlashTicks = 0.0;       // play between shaft and head: head moves only once the shaft has crossed it
 };
 
 class RotaryModel {
@@ -44,7 +45,8 @@ class RotaryModel {
     void setSwitchStuckClosed(bool s) { stuck_ = s; }
     void setSwitchDisconnected(bool d) { disconnected_ = d; }
     void setSwitchPolarityWrong(bool w) { wrongPolarity_ = w; }
-    void setPosition(double ticks) { pos_ = ticks; vel_ = 0; moving_ = false; dwell_ = 0; encoder_ = static_cast<Ticks>(std::floor(pos_)) + phantom_; updateSwitch(); }
+    void setPosition(double ticks) { pos_ = ticks; shaft_ = ticks; vel_ = 0; moving_ = false; dwell_ = 0; encoder_ = static_cast<Ticks>(std::floor(shaft_)) + phantom_; updateSwitch(); }
+    double shaft() const { return shaft_; }
     void setParams(const RotaryParams& p) { p_ = p; }
     const RotaryParams& params() const { return p_; }
 
@@ -86,14 +88,17 @@ class RotaryModel {
             if (!driving && std::fabs(vel_) < 0.002) { vel_ = 0; moving_ = false; }
         }
         if (jammed_) vel_ = 0;
-        pos_ += vel_;
+        shaft_ += vel_;
+        double half = p_.backlashTicks / 2.0;
+        if (shaft_ - pos_ > half) pos_ = shaft_ - half;          // the head is dragged once the play is used up
+        else if (shaft_ - pos_ < -half) pos_ = shaft_ + half;
         travelled_ += std::fabs(vel_);
         updateSwitch();
 
         if (!encoderFrozen_) {
-            encoder_ = static_cast<Ticks>(std::floor(pos_)) + phantom_;
+            encoder_ = static_cast<Ticks>(std::floor(shaft_)) + phantom_;
             double pp = driving ? p_.phantomPerMsDriving : p_.phantomPerMsIdle;
-            if (pp > 0 && rng_.chance(pp)) { phantom_ += rng_.chance(0.5) ? 1 : -1; encoder_ = static_cast<Ticks>(std::floor(pos_)) + phantom_; }
+            if (pp > 0 && rng_.chance(pp)) { phantom_ += rng_.chance(0.5) ? 1 : -1; encoder_ = static_cast<Ticks>(std::floor(shaft_)) + phantom_; }
         }
         if (diagMs_ > 0) --diagMs_;
     }
@@ -117,7 +122,7 @@ class RotaryModel {
     }
     RotaryParams p_;
     Rng rng_;
-    double pos_ = 0, vel_ = 0, travelled_ = 0;
+    double pos_ = 0, shaft_ = 0, vel_ = 0, travelled_ = 0;
     bool moving_ = false, jammed_ = false, encoderFrozen_ = false;
     bool stuck_ = false, disconnected_ = false, wrongPolarity_ = false;
     bool switch_ = false, inBand_ = false, bandState_ = false;
