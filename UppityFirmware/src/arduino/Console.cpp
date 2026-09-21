@@ -15,6 +15,26 @@ void Console::begin(const Deps& d) { d_ = d; }
 void Console::line(const char* text) {
     d_.usb->println(text);
     if (s_.cmdTx && d_.cmd) d_.cmd->println(text);
+    if (d_.log) d_.log->line(text);              // the web page's log tail reads from here
+}
+
+void Console::handleWebLine(const char* l) {
+    if (std::strcmp(l, "!STOP") == 0) {           // the page's soft stop: end the show, drop the chain, cancel the job
+        stopRandom("web stop"); d_.seq->clear("web stop"); d_.q->cancel(); line("STOP=web");
+        return;
+    }
+    d_.disp->handleLine(l, ReqSource::Web, millis());
+}
+
+void Console::writeStateJson(JsonWriter& j) {
+    j.key("random"); j.beginObject(); j.kv("on", d_.dir->active()); j.kv("level", static_cast<int>(s_.aggressiveness)); j.endObject();
+    j.kv("seq", d_.seq->active());
+    j.kv("light", static_cast<int>(d_.i2c->lightKit()));
+    j.kv("safeSpin", static_cast<long>(s_.safeSpinTicks));
+    j.kv("travelSet", static_cast<long>(effectiveTravel(s_, cal_)));
+    j.kv("persist", d_.persist->pending() ? "pending" : "saved");
+    j.kv("theme", static_cast<int>(s_.theme));
+    j.kv("inputs", static_cast<int>(d_.i2c->inputs()));
 }
 
 // ---------------------------------------------------------------- boot / settings
@@ -203,6 +223,12 @@ void Console::onConfig(const Command& c, const char* raw, ReqSource src) {
             if (refuseWhileMoving("FACTORY")) break;
             d_.persist->factoryReset(); line("FACTORY=done, restarting"); restartPending_ = true; restartAt_ = millis();
             break;
+        case Verb::WifiReset:
+            if (refuseWhileMoving("WIFIRESET")) break;
+            s_.staSsid[0] = '\0'; s_.staPass[0] = '\0'; std::snprintf(s_.apPass, sizeof s_.apPass, "Astromech"); s_.wifiEnabled = 1; s_.apChannel = 1;
+            d_.persist->requestSaveSettings();
+            line("WIFI=reset to the access point only, password \"Astromech\"; restarting"); restartPending_ = true; restartAt_ = millis();
+            break;
         case Verb::Restart:
             if (refuseWhileMoving("RESTART")) break;
             if (d_.persist->pending()) line("RESTART=waiting for PERSIST=saved first");
@@ -213,9 +239,22 @@ void Console::onConfig(const Command& c, const char* raw, ReqSource src) {
 }
 
 void Console::setKey(const Command& c) {
+    if (const StringKey* sk = findStringKey(c.key, std::strlen(c.key))) {
+        if (!c.text) { if (sk->secret) printf("#P%s=%s  (%s)", sk->name, stringField(s_, *sk)[0] ? "(set)" : "(empty)", sk->help); else printf("#P%s=%s  (%s)", sk->name, stringField(s_, *sk), sk->help); return; }
+        Settings before = s_;
+        setStringField(s_, *sk, c.text);
+        sanitize(s_);
+        bool changed = std::memcmp(&before, &s_, sizeof s_) != 0;
+        if (changed) d_.persist->requestSaveSettings();
+        if (sk->secret) printf("#P%s=%s (%s; takes effect after #PRESTART)", sk->name, stringField(s_, *sk)[0] ? "(set)" : "(cleared)", changed ? "saved" : "unchanged");
+        else printf("#P%s=%s (%s; takes effect after #PRESTART)", sk->name, stringField(s_, *sk), changed ? "saved" : "unchanged");
+        if (std::strcmp(sk->name, "APPASS") == 0 && std::strlen(c.text) > 0 && std::strlen(c.text) < 8) line("APPASS note: WPA2 needs 8+ characters; kept the previous password");
+        return;
+    }
     const SettingKey* k = findSettingKey(c.key, std::strlen(c.key));
     char buf[64];
     if (!k) { printf("INVALID=#P%s (unknown; #PHELP lists the keys)", c.key); return; }
+    if (!c.hasA && c.text) { printf("OUT_OF_RANGE=#P%s=%s (%s)", k->name, c.text, k->help); return; }
     if (!c.hasA) { formatSetting(s_, *k, buf, sizeof buf); printf("%s  (%s)", buf, k->help); return; }
     Settings before = s_;
     if (!k->set(s_, c.a)) { printf("OUT_OF_RANGE=#P%s%ld (%s)", k->name, static_cast<long>(c.a), k->help); return; }
@@ -232,6 +271,7 @@ void Console::setKey(const Command& c) {
     else if (std::strcmp(k->name, "LIFTERNC") == 0 || std::strcmp(k->name, "ROTARYNC") == 0) note = " (takes effect after #PRESTART)";
     else if (std::strcmp(k->name, "BAUD") == 0 || std::strcmp(k->name, "CMDTX") == 0) { beginCmdSerial(); note = " (command UART reopened)"; }
     else if (std::strcmp(k->name, "COMMISSIONED") == 0) note = s_.commissioned ? " (unlocked)" : " (LOCKED)";
+    else if (std::strcmp(k->name, "WIFI") == 0 || std::strcmp(k->name, "APCHANNEL") == 0) note = " (takes effect after #PRESTART)";
     applySettings(false);
     if (changed) d_.persist->requestSaveSettings();
     formatSetting(s_, *k, buf, sizeof buf);
@@ -257,6 +297,8 @@ void Console::printConfig() {
     printf("CONFIG=begin v%s schema=%u (every #P line below can be pasted back)", UPPITY_FW_VERSION, kSettingsSchema);
     char buf[64];
     for (int i = 0; i < kSettingKeyCount; ++i) { formatSetting(s_, kSettingKeys[i], buf, sizeof buf); line(buf); }
+    printf("#PSSID=%s", s_.staSsid);
+    printf("INFO=PASS %s, APPASS %s (passwords are never printed)", s_.staPass[0] ? "set" : "empty", std::strcmp(s_.apPass, "Astromech") == 0 ? "default" : "custom");
     printSequences();
     printf("CONFIG=end travel_in_use=%ld%s", static_cast<long>(effectiveTravel(s_, cal_)), s_.travelTicks ? " (#PTRAVEL)" : calibrationApplies(s_, cal_) ? " (calibrated)" : " (profile guess)");
 }
@@ -283,11 +325,11 @@ void Console::printSequences() {
 
 void Console::printStatus() {
     Ms up = elapsed(millis(), bootMs_) / 1000;
-    printf("VERSION=%s phase2 built %s %s", UPPITY_FW_VERSION, __DATE__, __TIME__);
+    printf("VERSION=%s phase3 built %s %s", UPPITY_FW_VERSION, __DATE__, __TIME__);
     printf("UPTIME=%lus commissioned=%u random=%s seq=%s persist=%s saves=%lu", static_cast<unsigned long>(up), s_.commissioned, d_.dir->active() ? "on" : "off", d_.seq->active() ? "running" : "idle", d_.persist->pending() ? "pending" : "saved", static_cast<unsigned long>(d_.persist->saves()));
     printf("SERIAL=usb+cmd@%lu id=%u dedup=%ums droppedForId=%lu duplicates=%lu cmdTx=%u", static_cast<unsigned long>(s_.cmdBaud), s_.marcId, s_.dedupMs, static_cast<unsigned long>(d_.disp->droppedForId()), static_cast<unsigned long>(d_.disp->droppedDuplicates()), s_.cmdTx);
     printf("EXPANDER=%s errors=%lu inputs=%u light=%u", d_.i2c->ok() ? "ok" : "FAILING", static_cast<unsigned long>(d_.i2c->errors()), d_.i2c->inputs(), d_.i2c->lightKit());
-    line("WIFI=none (phase 3)");
+    if (net_) net_->printStatus(*this); else line("WIFI=off");
 }
 
 void Console::printV3() {
@@ -302,6 +344,7 @@ void Console::printV3() {
 void Console::printHelp() {
     line("CMDS=:PP<0-100>[,spd] :PPR :PH[spd] :PA<deg>[,spd][,max] :PAR :PD<deg>[,spd][,max] :PDR :PR<+-spd> :PRR[max] :PL<0-7> :PLR :PW[R]<s> :PS<n> :PM :PMG/M/A :PM,lift,rot,min,max :PX  (chain with ':')");
     line("CFG=#PRESUME #PSTATE #PSTATUS #PCONFIG #PCAL #PSC #PROTARYTEST[n] #PCLEARFAULT #PUNLOCK #PLOCK #PS<n>:<seq> #PL #PD<n> #PSEQNAME<n>=<name> #PZERO #PR #PNCL/#PNOL/#PNCR/#PNOR #PV3 #PV3IMPORT #PRESTART #PFACTORY #PHELP");
+    line("WIFI=#PSSID=<home network> #PPASS=<its password> #PAPPASS=<access point password> #PWIFI0/1 #PAPCHANNEL<1-13> #PWIFIRESET (all after #PRESTART)");
     String keys = "KEYS=";
     for (int i = 0; i < kSettingKeyCount; ++i) { keys += "#P"; keys += kSettingKeys[i].name; keys += ' '; }
     keys += " (#PKEY<n> or #PKEY=<n> sets and saves, #PKEY reads)";

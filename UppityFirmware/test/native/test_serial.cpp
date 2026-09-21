@@ -105,6 +105,12 @@ TEST(parser_config_verbs_and_foreign_lines) {
     CHECK(parseLine("#PID5", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "ID"); CHECK_EQ(c.a, 5);
     CHECK(parseLine("#PBAUD9600", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "BAUD"); CHECK_EQ(c.a, 9600);
     CHECK(parseLine("#PCAL", c)); CHECK(c.verb == Verb::Cal);
+    CHECK(parseLine("#PSSID=My Net 5G", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "SSID"); CHECK(!c.hasA); CHECK(std::string(c.text) == "My Net 5G");
+    CHECK(parseLine("#PSSID=", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.text) == "");
+    CHECK(parseLine("#PSSID=2Wire", c)); CHECK(c.verb == Verb::Set); CHECK(!c.hasA); CHECK(std::string(c.text) == "2Wire");
+    CHECK(parseLine("#PSSID=12345", c)); CHECK(c.verb == Verb::Set); CHECK(c.hasA); CHECK_EQ(c.a, 12345); CHECK(std::string(c.text) == "12345");
+    CHECK(parseLine("#PWIGGLE3x", c)); CHECK(c.verb == Verb::Invalid);
+    CHECK(parseLine("#PWIFI", c)); CHECK(c.verb == Verb::Set); CHECK(std::string(c.key) == "WIFI"); CHECK(!c.hasA); CHECK(c.text == nullptr);
     CHECK(parseLine(":PM", c)); CHECK(c.verb == Verb::Random); CHECK(!c.hasA);
     CHECK(parseLine(":PM,80,80,2,4", c)); CHECK(c.verb == Verb::Random); CHECK_EQ(c.a, 80); CHECK_EQ(c.b, 80); CHECK_EQ(c.c, 2); CHECK_EQ(c.d, 4); CHECK(c.hasD);
     CHECK(parseLine(":PWR5", c)); CHECK(c.verb == Verb::Wait); CHECK_EQ(c.b, 1); CHECK_EQ(c.a, 5);

@@ -23,7 +23,7 @@ enum class Verb : uint8_t {
     // configuration
     Resume, State, Status, RotaryTest, Calibrate, ClearFault, Config, Cal, V3Dump, V3Import, Unlock, Lock, Help,
     Set,                 // #P<KEY>[=]<value> / #P<KEY>: key in Command::key, value in a when hasA
-    StoreSeq, ListSeq, DelSeq, SeqName, Zero, Factory, Restart, RotaryToggle, LimitPolarity,
+    StoreSeq, ListSeq, DelSeq, SeqName, Zero, Factory, Restart, RotaryToggle, LimitPolarity, WifiReset,
 };
 
 struct Command {
@@ -126,24 +126,26 @@ inline bool parseLine(const char* line, Command& cmd) {
     if (startsWith(p, "LOCK")) { cmd.verb = Verb::Lock; return true; }
     if (startsWith(p, "HELP")) { cmd.verb = Verb::Help; return true; }
     if (startsWith(p, "ZERO")) { cmd.verb = Verb::Zero; return true; }
+    if (startsWith(p, "WIFIRESET")) { cmd.verb = Verb::WifiReset; return true; }
     if (startsWith(p, "FACTORY")) { cmd.verb = Verb::Factory; return true; }
-    // ---- generic settings key: letters, optional '=', optional value ----
+    // ---- generic settings key: "#PKEY", "#PKEY<n>", "#PKEY=<n>", "#PKEY=<text>" ----
     {
         const char* k = p;
         while (*p >= 'A' && *p <= 'Z') ++p;
         size_t klen = static_cast<size_t>(p - k);
-        if (klen > 0 && klen < sizeof cmd.key) {
-            const char* q = p;
-            if (*q == '=') ++q;
-            int32_t v;
-            bool has = readInt(q, v);
-            if (!has && *q != '\0') { /* not a plain key form; fall through to the special forms */ }
-            else {
+        // the single-letter forms below (L, D<n>, R, N.., S<n>:) take precedence over a key
+        bool special = (klen == 1 && (k[0] == 'L' || k[0] == 'D' || k[0] == 'R' || k[0] == 'S')) || (klen == 3 && k[0] == 'N');
+        if (klen > 0 && klen < sizeof cmd.key && !special) {
+            bool eq = *p == '=';
+            const char* t = eq ? p + 1 : p;
+            const char* q = t; int32_t v;
+            bool whole = readInt(q, v) && *q == '\0';           // the value is one integer and nothing else
+            if (whole || eq || *p == '\0') {
                 std::memcpy(cmd.key, k, klen); cmd.key[klen] = '\0';
-                // keys are validated by the caller against Settings.h; unknown single-letter
-                // forms below (L, D<n>, R, N.., S<n>:) take precedence over a bad key
-                bool special = (klen == 1 && (k[0] == 'L' || k[0] == 'D' || k[0] == 'R' || k[0] == 'S')) || (klen == 3 && k[0] == 'N');
-                if (!special) { cmd.verb = Verb::Set; if (has) { cmd.a = v; cmd.hasA = true; } return true; }
+                cmd.verb = Verb::Set;
+                if (whole) { cmd.a = v; cmd.hasA = true; }
+                if (eq) cmd.text = t;                              // text form (also set for "=<n>", for string keys such as a numeric SSID)
+                return true;
             }
         }
         p = k;

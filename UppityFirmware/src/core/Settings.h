@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <cstddef>
 #include "Units.h"
 #include "Profiles.h"
 #include "MotionSupervisor.h"
@@ -17,7 +18,7 @@
 //     their default when an older blob is loaded; nothing is ever moved or retyped.
 namespace uppity {
 
-constexpr uint16_t kSettingsSchema = 2;
+constexpr uint16_t kSettingsSchema = 3;
 
 struct Settings {
     // ---- 4-byte ----
@@ -56,8 +57,17 @@ struct Settings {
     uint8_t  cmdTx = 0;              // echo responses on the command UART TX (GPIO0, only if wired)
     uint8_t  randomLight = 0;        // schema 2: light kit while random mode runs; 0 leave alone, 1-7 that mode, 8 shuffle per action; off when it ends
     uint8_t  reserved[35] = {};      // zero; new fields are carved from here
+    // ---- schema 3 (phase 3, networking): appended past the 80-byte prefix; 1-byte types only ----
+    char     staSsid[33] = {};       // home network to join; empty = access point only
+    char     staPass[65] = {};
+    char     apPass[33] = "Astromech";   // the periscope's own access point (v3's default); WPA2 needs 8+
+    uint8_t  wifiEnabled = 1;        // 0 = radio off entirely
+    uint8_t  apChannel = 1;          // 1..13; the mesh channel when mesh is on (phase 5)
+    uint8_t  theme = 0;              // web UI: 0 paper (light, the default), 1 dark
+    uint8_t  netReserved[10] = {};
 };
-static_assert(sizeof(Settings) == 80, "Settings layout changed: append inside reserved[] only and bump kSettingsSchema");
+static_assert(sizeof(Settings) == 224, "Settings layout changed: append at the end (1-byte types), keep the size a multiple of 4, bump kSettingsSchema");
+constexpr size_t kSettingsSchema2Size = 80;   // what a schema 1/2 blob measures
 
 // Clamp every field into its legal range. Runs after every load and every set.
 inline void sanitize(Settings& s) {
@@ -83,6 +93,11 @@ inline void sanitize(Settings& s) {
     if (s.aggressiveness > 2) s.aggressiveness = 1;
     if (s.commissioned > 2) s.commissioned = 0;
     if (s.randomLight > 8) s.randomLight = 0;
+    s.staSsid[sizeof s.staSsid - 1] = '\0'; s.staPass[sizeof s.staPass - 1] = '\0'; s.apPass[sizeof s.apPass - 1] = '\0';
+    if (std::strlen(s.apPass) < 8) std::snprintf(s.apPass, sizeof s.apPass, "Astromech");   // WPA2 refuses shorter
+    s.wifiEnabled = s.wifiEnabled ? 1 : 0;
+    if (s.apChannel < 1 || s.apChannel > 13) s.apChannel = 1;
+    if (s.theme > 1) s.theme = 0;
 }
 
 // Load `stored` bytes (a blob written by this or an earlier schema) over defaults. Returns
@@ -97,6 +112,7 @@ inline uint16_t migrateSettings(Settings& out, const uint8_t* blob, size_t n) {
     // schema-specific defaults for fields that did not exist when the blob was written go here
     // (a reserve byte reads as 0, so a field whose default is 0 needs nothing):
     if (tmp.schema < 2) tmp.randomLight = 0;
+    // schema 3 appended the WiFi fields past the old end: a shorter blob leaves them at their defaults
     out = tmp;
     out.schema = kSettingsSchema;
     sanitize(out);
@@ -228,10 +244,29 @@ inline const SettingKey kSettingKeys[] = {
     { "CMDTX",      [](const Settings& s) { return (int32_t)s.cmdTx; },           [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.cmdTx = (uint8_t)v; return true; }, "0/1 echo responses on the command UART TX" },
     { "LIFTERNC",   [](const Settings& s) { return (int32_t)s.lifterLimitsNC; },  [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.lifterLimitsNC = (uint8_t)v; return true; }, "0 limit switches normally open, 1 normally closed (after #PRESTART)" },
     { "ROTARYNC",   [](const Settings& s) { return (int32_t)s.rotaryHomeNC; },    [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.rotaryHomeNC = (uint8_t)v; return true; }, "0 home switch normally open, 1 normally closed (after #PRESTART)" },
+    { "WIFI",       [](const Settings& s) { return (int32_t)s.wifiEnabled; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.wifiEnabled = (uint8_t)v; return true; }, "0/1 radio (access point + home network); after #PRESTART" },
+    { "APCHANNEL",  [](const Settings& s) { return (int32_t)s.apChannel; },       [](Settings& s, int32_t v) { if (!setkey::inRange(v, 1, 13)) return false; s.apChannel = (uint8_t)v; return true; }, "access point WiFi channel 1-13; after #PRESTART" },
+    { "THEME",      [](const Settings& s) { return (int32_t)s.theme; },           [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.theme = (uint8_t)v; return true; }, "web UI: 0 paper (light), 1 dark" },
     { "RANDOMLIGHT", [](const Settings& s) { return (int32_t)s.randomLight; },   [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 8)) return false; s.randomLight = (uint8_t)v; return true; }, "light kit in random mode: 0 leave alone, 1-7 that mode, 8 a new one each action; off when it ends" },
     { "COMMISSIONED", [](const Settings& s) { return (int32_t)s.commissioned; },  [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 2)) return false; s.commissioned = (uint8_t)v; return true; }, "0 locked, 1 bench unlock, 2 commissioned" },
 };
 constexpr int kSettingKeyCount = static_cast<int>(sizeof(kSettingKeys) / sizeof(kSettingKeys[0]));
+
+// Text-valued keys ("#PSSID=My Network"). Secrets are never printed, not even to the owner.
+struct StringKey { const char* name; size_t offset; size_t cap; bool secret; const char* help; };
+inline const StringKey kStringKeys[] = {
+    { "SSID",   offsetof(Settings, staSsid), sizeof(Settings::staSsid), false, "home network name; empty = access point only; after #PRESTART" },
+    { "PASS",   offsetof(Settings, staPass), sizeof(Settings::staPass), true,  "home network password; after #PRESTART" },
+    { "APPASS", offsetof(Settings, apPass),  sizeof(Settings::apPass),  true,  "access point password, 8+ characters; after #PRESTART" },
+};
+constexpr int kStringKeyCount = static_cast<int>(sizeof(kStringKeys) / sizeof(kStringKeys[0]));
+inline const StringKey* findStringKey(const char* name, size_t len) {
+    for (int i = 0; i < kStringKeyCount; ++i) if (std::strlen(kStringKeys[i].name) == len && std::strncmp(kStringKeys[i].name, name, len) == 0) return &kStringKeys[i];
+    return nullptr;
+}
+inline char* stringField(Settings& s, const StringKey& k) { return reinterpret_cast<char*>(&s) + k.offset; }
+inline const char* stringField(const Settings& s, const StringKey& k) { return reinterpret_cast<const char*>(&s) + k.offset; }
+inline void setStringField(Settings& s, const StringKey& k, const char* v) { std::snprintf(stringField(s, k), k.cap, "%s", v ? v : ""); }
 
 inline const SettingKey* findSettingKey(const char* name, size_t len) {
     for (int i = 0; i < kSettingKeyCount; ++i) {

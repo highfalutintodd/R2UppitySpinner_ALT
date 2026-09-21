@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Uppity Spinner</title>
+<style>
+/* Sabé design tokens (docs/REWRITE-PLAN.md Appendix C.5). Paper is the default; dark is opt-in. */
+html { font-size: 20px; }
+:root {
+  --sans: "Schibsted Grotesk", "Hanken Grotesk", "Helvetica Neue", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --bg:#F3EEE2; --raise:#FBF9F3; --raise2:#ECE6D8; --well:#EAE3D4; --field:#FFFEFA;
+  --text:#211C17; --dim:rgba(33,28,23,.64); --keyline:rgba(118,106,88,.25); --keyline-hd:rgba(118,106,88,.45);
+  --accent:#7A2230; --accent-hi:#93293A; --on-accent:#fff; --ok:#38754F; --warn:#8F6B22; --bad:#93293A;
+  --card-shadow:0 1px 3px rgba(33,28,23,.07);
+}
+html[data-theme="dark"] {
+  --bg:#15171C; --raise:#1C1F25; --raise2:#262A31; --well:#101216; --field:#101216;
+  --text:#E9E9E6; --dim:rgba(233,233,230,.62); --keyline:rgba(206,212,222,.14); --keyline-hd:rgba(206,212,222,.34);
+  --accent:#A93246; --accent-hi:#C7475B; --ok:#55A877; --warn:#D8AC52; --bad:var(--accent-hi); --card-shadow:none;
+}
+* { box-sizing:border-box; }
+html, body { margin:0; padding:0; }
+body { background:var(--bg); color:var(--text); font:400 1rem/1.45 var(--sans); min-height:100vh; -webkit-font-smoothing:antialiased; padding-bottom:5.5rem; }
+header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:.6rem; padding:.55rem .8rem; background:var(--raise); border-bottom:1px solid var(--keyline-hd); flex-wrap:wrap; }
+.wordmark { font-weight:700; letter-spacing:.01em; }
+.wordmark small { color:var(--dim); font-weight:400; font-size:.7rem; margin-left:.3rem; }
+.pill { display:inline-block; padding:.15rem .6rem; border-radius:999px; font-size:.75rem; font-weight:700; letter-spacing:.04em; border:2px solid transparent; }
+.pill.IDLE { background:var(--ok); color:#fff; } .pill.MOVING { background:var(--warn); color:#fff; }
+.pill.STOPPED { background:var(--bad); color:#fff; } .pill.FAULT { background:var(--bad); color:#fff; }
+.pill.LOCKED { background:var(--raise2); color:var(--text); border-color:var(--warn); }
+.pill.NOLINK { background:transparent; color:var(--warn); border:2px dashed var(--warn); }
+.readouts { display:flex; gap:.9rem; margin-left:auto; font-family:var(--mono); font-size:.8rem; }
+.readouts b { font-weight:600; }
+.readouts span { color:var(--dim); }
+main { max-width:52rem; margin:0 auto; padding:.8rem; display:grid; gap:.8rem; }
+.card { background:var(--raise); border:1px solid var(--keyline); border-radius:.6rem; padding:.8rem; box-shadow:var(--card-shadow); }
+.card h2 { margin:0 0 .5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
+.row { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+button { font:600 .9rem/1 var(--sans); min-height:44px; min-width:44px; padding:.5rem .9rem; border-radius:.5rem; border:1px solid var(--keyline-hd); background:var(--raise2); color:var(--text); cursor:pointer; }
+button:active { transform:translateY(1px); }
+button.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+button.primary:hover { background:var(--accent-hi); }
+button.ghost { background:transparent; }
+button:disabled { opacity:.5; cursor:default; }
+.seg { display:inline-flex; border:1px solid var(--keyline-hd); border-radius:.5rem; overflow:hidden; }
+.seg button { border:0; border-radius:0; border-right:1px solid var(--keyline); min-width:3.6rem; }
+.seg button:last-child { border-right:0; }
+.seg button.on { background:var(--accent); color:var(--on-accent); }
+.pills button { border-radius:999px; }
+.pills button.on { background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
+.banner { border-radius:.6rem; padding:.7rem .9rem; display:flex; gap:.8rem; align-items:center; font-weight:600; }
+.banner.stop { background:var(--bad); color:#fff; } .banner.warn { background:var(--warn); color:#fff; } .banner.info { background:var(--raise2); }
+.banner button { margin-left:auto; }
+.estop { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(.8rem + env(safe-area-inset-bottom)); z-index:6; width:min(92vw, 30rem); min-height:3.6rem; font-size:1.2rem; letter-spacing:.06em; background:var(--bad); color:#fff; border:2px solid #fff; border-radius:.8rem; box-shadow:0 6px 18px rgba(0,0,0,.35); }
+.estop:hover { background:#B0364A; }
+.status { display:grid; grid-template-columns:repeat(auto-fit, minmax(7rem, 1fr)); gap:.4rem .8rem; font-size:.8rem; }
+.status div { display:flex; justify-content:space-between; border-bottom:1px solid var(--keyline); padding:.15rem 0; }
+.status span:first-child { color:var(--dim); }
+.log { background:var(--well); border-radius:.5rem; padding:.5rem; height:14rem; overflow:auto; font:.72rem/1.35 var(--mono); white-space:pre-wrap; word-break:break-all; }
+.cmdrow { display:flex; gap:.5rem; margin-top:.5rem; }
+.cmdrow input { flex:1; min-height:44px; font:.9rem var(--mono); padding:.4rem .6rem; border:1px solid var(--keyline-hd); border-radius:.5rem; background:var(--field); color:var(--text); }
+.toast { position:fixed; top:.6rem; left:50%; transform:translateX(-50%); z-index:7; background:var(--text); color:var(--bg); padding:.5rem .9rem; border-radius:.5rem; font-size:.85rem; opacity:0; transition:opacity .2s; pointer-events:none; max-width:92vw; }
+.toast.show { opacity:.95; }
+.toast.bad { background:var(--bad); color:#fff; }
+label.chk { font-size:.8rem; color:var(--dim); display:inline-flex; gap:.3rem; align-items:center; }
+.hidden { display:none !important; }
+@media (max-width: 600px) { .readouts { margin-left:0; width:100%; } html { font-size:18px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="wordmark">Uppity Spinner<small id="fw"></small></div>
+  <span id="pill" class="pill NOLINK">NO LINK</span>
+  <div class="readouts"><b id="height">–</b><span>height</span><b id="rot">–</b><span>rotation</span></div>
+  <button class="ghost" id="themeBtn" title="Theme" aria-label="Toggle dark theme">◐</button>
+</header>
+<div id="toast" class="toast" role="status"></div>
+<main>
+  <div id="bStop" class="banner stop hidden">E-STOP is latched. Nothing moves until you reset it.<button id="resetBtn">Reset E-STOP</button></div>
+  <div id="bFault" class="banner warn hidden"><span id="faultText">Driver fault</span><button id="clearFaultBtn">Clear fault</button></div>
+  <div id="bLocked" class="banner info hidden">LOCKED: the motors are refused until the board is commissioned (Phase 4) or unlocked on the bench.<button id="unlockBtn">Unlock (bench)</button></div>
+  <div id="bOverride" class="banner warn hidden">Safety override active: <span id="ovr"></span> s left</div>
+  <div id="bUpdate" class="banner info hidden">Firmware update in progress, do not power off.</div>
+
+  <section class="card">
+    <h2>Lifter</h2>
+    <div class="row">
+      <button class="primary" data-cmd=":PP100">Up</button>
+      <button class="primary" data-cmd=":PH">Down</button>
+      <button data-lift="25">25%</button><button data-lift="50">50%</button><button data-lift="75">75%</button>
+      <span class="seg" id="liftSpeed"><button data-v="50">Gentle</button><button data-v="75" class="on">Normal</button><button data-v="100">Fast</button></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Rotary</h2>
+    <div class="row">
+      <button class="primary" data-cmd=":PA0">Home</button>
+      <button data-rot="90">90°</button><button data-rot="180">180°</button><button data-rot="270">270°</button>
+      <button data-spin="-1">Spin ◀</button><button data-spin="1">Spin ▶</button>
+      <button id="stopBtn">Soft stop</button>
+      <span class="seg" id="rotSpeed"><button data-v="40">Gentle</button><button data-v="70" class="on">Normal</button><button data-v="100">Fast</button></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Show</h2>
+    <div class="row">
+      <button data-cmd=":PMG">Random gentle</button><button data-cmd=":PMM">Random medium</button><button data-cmd=":PMA">Random aggressive</button>
+      <button id="stopShowBtn">Stop show</button>
+      <span id="randomState" class="pill hidden">RANDOM ON</span>
+    </div>
+    <div class="row pills" id="lights" style="margin-top:.5rem">
+      <button data-light="0">Cycle</button><button data-light="1">Off</button><button data-light="2">Obi-Wan</button><button data-light="3">Yoda</button>
+      <button data-light="4">Sith</button><button data-light="5">Search</button><button data-light="6">Dagobah</button><button data-light="7">Sparkle</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Status</h2>
+    <div class="status">
+      <div><span>Job</span><b id="job">–</b></div><div><span>Last</span><b id="last">–</b></div>
+      <div><span>Limits</span><b id="limits">–</b></div><div><span>Drivers</span><b id="enabled">–</b></div>
+      <div><span>Rotary home</span><b id="homeConf">–</b></div><div><span>Lifter</span><b id="lifterConf">–</b></div>
+      <div><span>Safe spin</span><b id="safeSpin">–</b></div><div><span>Faults</span><b id="faults">–</b></div>
+      <div><span>WiFi</span><b id="wifi">–</b></div><div><span>Settings</span><b id="persist">–</b></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Console</h2>
+    <div class="row" style="justify-content:space-between">
+      <label class="chk"><input type="checkbox" id="pause"> pause</label>
+      <label class="chk"><input type="checkbox" id="hideTick" checked> hide TICK</label>
+      <button class="ghost" data-cmd="#PSTATE">#PSTATE</button><button class="ghost" data-cmd="#PCONFIG">#PCONFIG</button>
+    </div>
+    <div id="log" class="log" aria-live="polite"></div>
+    <form class="cmdrow" id="cmdForm"><input id="cmd" placeholder=":PP50  or  #PWIGGLE3" autocomplete="off" autocapitalize="characters"><button class="primary" type="submit">Send</button></form>
+  </section>
+</main>
+<button class="estop" id="estopBtn">E-STOP</button>
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const ERR_TEXT = { busy: 'The board is busy (queue full); try again', invalid: 'Not a command the board knows', estop: 'E-STOP is latched: reset it first',
+                     locked: 'The motors are locked (bench unlock or commissioning)', armed: 'Refused while a motor is enabled', nolink: 'No answer from the board' };
+  let toastT = 0;
+  function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : ''); clearTimeout(toastT); toastT = setTimeout(() => t.className = 'toast', 2200); }
+  async function post(url, body) {
+    try {
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body || '' });
+      const j = await r.json().catch(() => ({ ok: r.ok }));
+      if (!j.ok) toast(ERR_TEXT[j.err] || j.msg || j.err || 'Refused', true); else if (j.msg) toast(j.msg);
+      return j;
+    } catch (e) { toast(ERR_TEXT.nolink, true); return { ok: false, err: 'nolink' }; }
+  }
+  function send(line) { $('log').dataset.follow = '1'; return post('/api/cmd', 'line=' + encodeURIComponent(line)); }
+
+  // ---- theme: paper by default, remembered per phone, seeded from the device once ----
+  const themeKey = 'uppity-theme';
+  function applyTheme(t) { document.documentElement.dataset.theme = t === 'dark' ? 'dark' : ''; }
+  let theme = null; try { theme = localStorage.getItem(themeKey); } catch (e) {}
+  if (theme) applyTheme(theme);
+  $('themeBtn').onclick = () => { theme = document.documentElement.dataset.theme === 'dark' ? 'paper' : 'dark'; applyTheme(theme); try { localStorage.setItem(themeKey, theme); } catch (e) {} send('#PTHEME=' + (theme === 'dark' ? 1 : 0)); };
+
+  // ---- controls ----
+  const speed = (id) => { const on = document.querySelector('#' + id + ' button.on'); return on ? on.dataset.v : ''; };
+  document.querySelectorAll('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.onclick = () => { seg.querySelectorAll('button').forEach(x => x.classList.remove('on')); b.classList.add('on'); }));
+  document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => send(b.dataset.cmd));
+  document.querySelectorAll('[data-lift]').forEach(b => b.onclick = () => { const s = speed('liftSpeed'); send(':PP' + b.dataset.lift + (s === '100' ? '' : ',' + s)); });
+  document.querySelectorAll('[data-rot]').forEach(b => b.onclick = () => { const s = speed('rotSpeed'); send(':PA' + b.dataset.rot + (s === '100' ? '' : ',' + s)); });
+  document.querySelectorAll('[data-spin]').forEach(b => b.onclick = () => send(':PR' + (b.dataset.spin < 0 ? '-' : '') + speed('rotSpeed')));
+  document.querySelectorAll('[data-light]').forEach(b => b.onclick = () => send(':PL' + b.dataset.light));
+  $('stopBtn').onclick = () => post('/api/stop');
+  $('stopShowBtn').onclick = () => post('/api/stop');
+  $('estopBtn').onclick = () => post('/api/estop');
+  $('resetBtn').onclick = () => post('/api/estop/reset');
+  $('clearFaultBtn').onclick = () => send('#PCLEARFAULT');
+  $('unlockBtn').onclick = () => { if ($('unlockBtn').dataset.armed) { send('#PUNLOCK'); delete $('unlockBtn').dataset.armed; $('unlockBtn').textContent = 'Unlock (bench)'; } else { $('unlockBtn').dataset.armed = '1'; $('unlockBtn').textContent = 'Really unlock?'; setTimeout(() => { delete $('unlockBtn').dataset.armed; $('unlockBtn').textContent = 'Unlock (bench)'; }, 4000); } };
+  $('cmdForm').onsubmit = (e) => { e.preventDefault(); const v = $('cmd').value.trim(); if (v) { send(v); $('cmd').value = ''; } };
+
+  // ---- state polling (2 Hz, diffed) ----
+  let lastState = null, misses = 0, seededTheme = false;
+  function setText(id, v) { const el = $(id); if (el.textContent !== String(v)) el.textContent = v; }
+  function show(id, on) { $(id).classList.toggle('hidden', !on); }
+  function render(s) {
+    setText('fw', 'v' + s.fw);
+    const pill = $('pill'); pill.textContent = s.state; pill.className = 'pill ' + s.state;
+    setText('height', s.lifter.pct + '%'); setText('rot', s.rotary.deg + '°');
+    show('bStop', s.estop); show('bFault', s.faults !== 0 && !s.estop); show('bLocked', s.state === 'LOCKED'); show('bOverride', s.override > 0); setText('ovr', s.override);
+    setText('faultText', s.faults ? 'Fault 0x' + s.faults.toString(16) + (s.job === 'NONE' ? '' : ' (' + s.job + ')') : 'Driver fault');
+    setText('job', s.job); setText('last', s.last.job + ' ' + s.last.result + (s.last.reason !== '-' ? ' ' + s.last.reason : ''));
+    setText('limits', (s.limits.top ? 'TOP ' : '') + (s.limits.bot ? 'BOTTOM ' : '') + (s.limits.home ? 'HOME' : '') || 'none');
+    setText('enabled', s.enabled ? 'enabled' : 'off'); setText('homeConf', s.rotary.conf); setText('lifterConf', s.lifter.conf);
+    setText('safeSpin', s.safeSpin ? s.safeSpin + ' ticks' : 'top only'); setText('faults', s.faults ? '0x' + s.faults.toString(16) : 'none');
+    setText('wifi', s.wifi.sta === 'up' ? s.wifi.ip + ' (' + s.wifi.rssi + ' dBm)' : s.wifi.ap + ' · ' + s.wifi.clients + ' on AP');
+    setText('persist', s.persist);
+    show('randomState', s.random.on);
+    document.querySelectorAll('[data-light]').forEach(b => b.classList.toggle('on', +b.dataset.light === s.light));
+    if (!seededTheme) { seededTheme = true; if (!theme && s.theme === 1) applyTheme('dark'); }
+  }
+  async function poll() {
+    try {
+      const r = await fetch('/api/state', { cache: 'no-store' }); const s = await r.json();
+      misses = 0; lastState = s; render(s);
+    } catch (e) { if (++misses >= 3) { const pill = $('pill'); pill.textContent = 'NO LINK'; pill.className = 'pill NOLINK'; } }
+  }
+  poll(); setInterval(poll, 500);
+
+  // ---- log tail (1 Hz) ----
+  let logNext = -1;
+  async function pollLog() {
+    if ($('pause').checked) return;
+    try {
+      const r = await fetch('/api/log?since=' + (logNext < 0 ? 'tail' : logNext), { cache: 'no-store' }); const j = await r.json();
+      const box = $('log');
+      if (logNext >= 0 && j.from > logNext) box.textContent += '… (' + (j.from - logNext) + ' bytes missed) …\n';
+      let text = j.text; if ($('hideTick').checked) text = text.split('\n').filter(l => !/ TICK /.test(l)).join('\n');
+      if (text) { box.textContent += text; const lines = box.textContent.split('\n'); if (lines.length > 400) box.textContent = lines.slice(-400).join('\n'); box.scrollTop = box.scrollHeight; }
+      logNext = j.next;
+    } catch (e) {}
+  }
+  pollLog(); setInterval(pollLog, 1000);
+})();
+</script>
+</body>
+</html>

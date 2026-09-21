@@ -10,7 +10,7 @@ namespace uppity {
 class StatusLed {
   public:
     void begin() { rgbLedWrite(board::kStatusLed, 0, 0, 0); }
-    void update(const Snapshot& s, bool randomMode, uint32_t now) {
+    void update(const Snapshot& s, bool randomMode, bool wifiClient, uint32_t now) {
         if (now - last_ < 100) return;
         last_ = now;
         bool blink = (now / 250) & 1;
@@ -22,8 +22,9 @@ class StatusLed {
             case MotionState::Moving:  if (blink) g = 3; else { r = 2; g = 2; } break;
             default: {
                 bool home = s.homeConf == HomeConfidence::Latched || s.homeConf == HomeConfidence::SwitchLive || s.rotaryDisabled;
-                if (home) g = 2; else r = 2;
-                if (randomMode && ((now / 1000) & 1)) b = 2;
+                if (wifiClient) { if (home) b = 2; else { if ((now / 500) & 1) b = 2; else r = 2; } }   // v3: home+wifi solid blue, away+wifi blue/red
+                else if (home) g = 2; else r = 2;
+                if (randomMode && ((now / 1000) & 1)) { b = 2; g = home ? 1 : 0; }
                 break;
             }
         }

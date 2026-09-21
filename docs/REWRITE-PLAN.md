@@ -543,6 +543,17 @@ run; four log findings fixed the same night (nearest-zero home after a spin, fir
 artefact and TICK spam, director homes only if needed, full-travel already-there report) and
 `#PRANDOMLIGHT` added (settings schema 2). Results and the re-test list: `docs/BENCH-PHASE2.md`.
 
+**Status 2026-09-20 (night): Phase 3 implemented**, awaiting the bench: `Net` (AP always up,
+`R2Uppity-XXXX`/`Astromech`; optional STA with Sabé's backoff and no retry while a phone is on
+the AP; captive DNS while STA is down; mDNS `uppity.local` after ArduinoOTA; web server in its
+own task on core 0), JSON API (`/api/state`, `/api/cmd`, `/api/estop` any method, `/api/estop/reset`,
+`/api/stop`, `/api/config` GET/POST, `/api/log?since=`, `/api/restart`, `POST /update`), one
+gzipped page (Operate + console; Sabé tokens, paper default, dark opt-in), the 16 KB log ring
+fed by every console line, `#PSSID/#PPASS/#PAPPASS/#PWIFI/#PAPCHANNEL/#PTHEME/#PWIFIRESET`
+(settings schema 3), `webui/build-assets.py` + `dev-server.py`. Deferred to Phase 4: the
+Sequences/Setup/Diagnostics/Rescue pages, a device PIN, a UI for the update upload. Build
+1,135,007 bytes (57 %). Bench: `docs/BENCH-PHASE3.md`.
+
 ---
 
 ## 6. Verification strategy
