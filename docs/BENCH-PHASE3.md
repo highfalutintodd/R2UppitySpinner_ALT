@@ -34,7 +34,7 @@ while a motor is enabled.
 
 1. Power on. New lines after `CONTROL_TASK=...`:
    ```
-   SETTINGS=migrated from schema 2 (80 bytes) to 3     (first boot only; the WiFi fields were added)
+   SETTINGS=migrated from schema 2 (80 bytes) to 3     (once; the WiFi fields were added; a PERSIST=saved settings line follows)
    WIFI AP "R2Uppity-XXXX" password "Astromech" (the default; #PAPPASS=<yours> to change) -> http://192.168.4.1  (http://uppity.local)
    WIFI no home network stored (#PSSID=<name> #PPASS=<password> #PRESTART to join one)
    READY (type #PHELP)

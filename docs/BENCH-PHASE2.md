@@ -259,3 +259,13 @@ Same flash lines as above. Then:
 6. During random mode, a `QUEUED=HOME` line with the head already home is followed straight by
    the next step with no `HOME START`; after a "random angle" or "look around" the home runs.
 7. When the rest of the droid is up: the command UART (step 16 above).
+
+## Re-test results 2026-09-27 (fix build e6e0602, Todd's periscope)
+
+All passed: `SETTINGS=migrated from schema 1 (80 bytes) to 2` at boot with the calibration and
+every setting intact; no `TICK` line in four minutes; `:PR50` then `:PA0` homed in 1.7 s from a
+count of -8700 (phase 2 half a second in, ~370 ticks of travel instead of seven turns); `:PP0` at
+the bottom answered `SEEK DONE ALREADY_THERE`; `#PRANDOMLIGHT7` + `:PMG` gave `LIGHT=7` with the
+first action and `LIGHT=1` when `:PH` ended it; a "big lift" with the head already home went
+straight from `QUEUED=HOME` to its seek with no `HOME START`, while one after a "random angle"
+homed as it must. A mistyped line (`:PMG: LIGHT=7`) was refused whole with `INVALID=`.

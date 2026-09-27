@@ -37,7 +37,7 @@ bool Persist::begin(Settings& s, Calibration& c, TextSink& log) {
     s_ = &s; c_ = &c; log_ = &log;
     seq_.begin();
     Preferences p;
-    bool had = false;
+    bool had = false, migrated = false, calMigrated = false;
     // opened read-write so the namespace exists from the first boot (a read-only open of a
     // namespace that does not exist yet fails, which is not "unavailable")
     if (p.begin("uppity", false)) {
@@ -47,13 +47,20 @@ bool Persist::begin(Settings& s, Calibration& c, TextSink& log) {
             p.getBytes("settings", buf, n);
             uint16_t from = migrateSettings(s, buf, n);
             if (from == 0) log_->printf("SETTINGS=unreadable (%u bytes), using defaults", static_cast<unsigned>(n));
-            else { had = true; if (from != kSettingsSchema || n != sizeof(Settings)) log_->printf("SETTINGS=migrated from schema %u (%u bytes) to %u", from, static_cast<unsigned>(n), kSettingsSchema); else log_->printf("SETTINGS=loaded schema %u", from); }
+            else {
+                had = true;
+                if (from != kSettingsSchema || n != sizeof(Settings)) {
+                    log_->printf("SETTINGS=migrated from schema %u (%u bytes) to %u", from, static_cast<unsigned>(n), kSettingsSchema);
+                    migrated = true;                   // write the upgraded blob back once, so this line does not repeat every boot
+                } else log_->printf("SETTINGS=loaded schema %u", from);
+            }
         } else { s = Settings{}; log_->line("SETTINGS=none (first boot of v4)"); }
         n = p.isKey("cal") ? p.getBytesLength("cal") : 0;
         if (n > 0 && n <= sizeof buf) {
             p.getBytes("cal", buf, n);
-            if (migrateCalibration(c, buf, n) == 0) log_->line("CALIBRATION=unreadable, ignored");
-            else log_->printf("CALIBRATION=%s travel=%u minUp=%u minDown=%u (profile %u)", c.valid ? "loaded" : "loaded (invalid)", c.travel, c.minUp, c.minDown, c.motor);
+            uint16_t cfrom = migrateCalibration(c, buf, n);
+            if (cfrom == 0) log_->line("CALIBRATION=unreadable, ignored");
+            else { log_->printf("CALIBRATION=%s travel=%u minUp=%u minDown=%u (profile %u)", c.valid ? "loaded" : "loaded (invalid)", c.travel, c.minUp, c.minDown, c.motor); calMigrated = cfrom != kCalibrationSchema || n != sizeof(Calibration); }
         } else { c = Calibration{}; }
         p.end();
     } else {
@@ -61,6 +68,10 @@ bool Persist::begin(Settings& s, Calibration& c, TextSink& log) {
         log_->line("SETTINGS=NVS namespace unavailable, using defaults (nothing will persist)");
     }
     lastSaved_ = s; lastSavedCal_ = c;
+    // a migrated blob is re-written in the current layout at the first idle moment (a blob
+    // that merely loaded is left alone: nothing to write)
+    if (migrated) { settingsDirty_ = true; std::memset(&lastSaved_, 0xFF, sizeof lastSaved_); }
+    if (calMigrated) { calDirty_ = true; std::memset(&lastSavedCal_, 0xFF, sizeof lastSavedCal_); }
     return had;
 }
 

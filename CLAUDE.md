@@ -68,11 +68,13 @@ make -C UppityFirmware/test/native test            # host tests (UBSan on; `make
 arduino-cli compile --profile uppity UppityFirmware # ESP32, core 3.3.4 pinned in sketch.yaml
 ```
 Profile `uppity` = `esp32:esp32:esp32:PartitionScheme=min_spiffs,FlashSize=4M`. Baseline at
-Phase 0: 314 KB of 1,966,080 (15 %); end of Phase 1 bench: 381 KB (19 %). Paths under this repo
+Phase 0: 314 KB of 1,966,080 (15 %); end of Phase 1 bench: 381 KB (19 %); Phase 2: 408 KB; Phase 3 (WiFi): 1,135 KB (57 %). Paths under this repo
 contain spaces: always quote them. `arduino-cli` 1.5.1 is installed via Homebrew; the ESP32
 core 3.3.4 is installed; Apple Silicon needs Rosetta 2 for arduino-cli's `ctags` (installed
 2026-09-19). Todd flashes from the Terminal app with the three commands at the top of
-`docs/BENCH-PHASE1.md`.
+the current phase's bench doc (`docs/BENCH-PHASE3.md`). Work lands on a session worktree branch;
+Todd fast-forwards `v4-rewrite` in the main checkout himself (Claude's own merge attempts are
+blocked by the tool policy): `git -C "<repo>" merge --ff-only <session branch>`.
 
 Known local quirk: AddressSanitizer deadlocks in its own initialiser on this macOS build
 (Darwin 25, Apple clang 17), so the default test build uses UBSan only.
@@ -85,8 +87,8 @@ Known local quirk: AddressSanitizer deadlocks in its own initialiser on this mac
 |---|---|
 | 0 Skeleton, simulator, tests, docs | **Done** 2026-09-07: tree, profile, core foundation, simulator, ESP32 HAL (PCNT + 10 kHz LEDC), TB9051FTG facts in docs/TB9051FTG-NOTES.md. |
 | 1 Motion core + USB console | **Bench-verified on Todd's 19:1 periscope 2026-09-19/20** (branch `v4-rewrite`): every step of docs/BENCH-PHASE1.md incl. calibration and the extended rotary set; 82 host tests; ESP32 build 381 KB. Fixes from the bench are listed in that doc's results section (limit-edge contradiction guard, `#PINVERT`/`#PTRAVEL`/`#PSAFESPIN`/`#PROTARYTPR`/`#PHOMEPARK`/`#PWIGGLE`/`#PV3` bench commands, `:PH` ends on the switch and homes after characterising, top-only safe-spin default, switch-only two-move park that reproduces v3's home spot, rest-switch hold filter, tick-walking short rotary moves). |
-| 2 Command layer + settings | **Next.** Persistence must cover everything Todd re-sends per boot: invert, travel, safe-spin, ticks/rev, park mode, wiggle, home offset, motor profile, commissioning. Also carry over: arc-aware rest-contact correction (only correct when outside the known arc), `#PV3` import as a one-shot migration from v3's NVS. |
-| 3 Network + minimal UI | not started |
+| 2 Command layer + settings | **Bench-passed 2026-09-20 evening** (commit `c0fc379`, fixes `e6e0602`): settings persist across a power cycle with a one-shot conservative v3 import, `#P<KEY>[=]<value>` + replayable `#PCONFIG`, command UART with its own assembler, non-blocking sequencer, stored sequences (Todd does not use them), random director, `#PRANDOMLIGHT`, trigger inputs, status LED. Todd's one-time lines after a fresh flash: `#PINVERT1 #PTRAVEL1150 #PROTARYTPR11855 #PUNLOCK` (safe-spin 904 comes from the v3 import). Four log findings fixed in `e6e0602` (nearest-zero home after a spin, TICK spam, home-if-needed for random, `:PP0` report); that fix build's re-test passed on the droid 2026-09-27 (all four fixes and `#PRANDOMLIGHT` confirmed; log in docs/BENCH-PHASE2.md results). Not yet tested: command UART, trigger inputs. 110 host tests; 408 KB. |
+| 3 Network + minimal UI | **Implemented 2026-09-20 night** (commit `67e6587` on `claude/uppity-spinner-v4-phase2-eb4c76`, **not yet merged into `v4-rewrite`, not on hardware**): AP `R2Uppity-XXXX`/`Astromech` always up, optional home network with backoff, captive DNS, mDNS `uppity.local`, web task on core 0, JSON API, one gzipped Operate+console page with E-STOP, 16 KB log ring, ArduinoOTA + `POST /update` refused while armed, settings schema 3 (`#PSSID/#PPASS/#PAPPASS/#PWIFI/#PAPCHANNEL/#PTHEME/#PWIFIRESET`), `webui/build-assets.py`, `webui/dev-server.py`. 114 host tests; 1,135 KB (57 %). Bench: docs/BENCH-PHASE3.md. The page was never rendered in a browser here (the in-app browser refused localhost). |
 | 4 Full web UI | not started |
 | 5 Mesh + DroidNet | not started |
 | 6 Release | not started |
