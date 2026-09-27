@@ -22,6 +22,12 @@
 // Handlers touch shared state only through the safe paths: the status snapshot (seqlock), the
 // E-STOP latch (atomic, trips from any context), the line queue into loop() (locked) and the
 // log ring (locked). Nothing here drives a motor.
+//
+// E-STOP has its own listener on port 81 in its own task (bench 2026-09-27: the page's E-STOP
+// never landed while the lifter ran; the radio loses packets around lifter moves and the
+// single-threaded web server waits up to 5 s on a connection whose request never arrives).
+// The page hits both ports and keeps retrying until the status confirms the latch. The main
+// server also drops a connection that has sent nothing for 400 ms instead of the library's 5 s.
 namespace uppity {
 
 class Console;
@@ -44,7 +50,10 @@ class Net {
 
   private:
     static void taskFn(void* arg);
+    static void estopTaskFn(void* arg);
     void service();
+    void serviceEstopPort();
+    void dropStalledClient();
     void serviceSta();
     void setPortal(bool want);
     void registerRoutes();
@@ -63,7 +72,12 @@ class Net {
 
     Deps d_;
     WebServer server_{80};
+    NetworkServer estopServer_{81};
     DNSServer dns_;
+    char staSsid_[33] = {};                       // credentials as they were at boot: a change waits for #PRESTART
+    char staPass_[65] = {};
+    int curFd_ = -1; uint32_t curFdSince_ = 0; bool handledSince_ = false;
+    uint32_t stalledDropped_ = 0, estopHits_ = 0;
     char apSsid_[24] = "R2Uppity";
     bool up_ = false, portalUp_ = false, staPauseLogged_ = false;
     std::atomic<uint8_t> staState_{0};            // 0 off/idle, 1 joining, 2 connected
@@ -78,6 +92,7 @@ class Net {
     char logBuf_[4096];
     char logJson_[6144];
     void* task_ = nullptr;
+    void* estopTask_ = nullptr;
 };
 
 } // namespace uppity

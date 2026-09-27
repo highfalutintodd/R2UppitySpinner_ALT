@@ -4,6 +4,7 @@
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
+#include <strings.h>
 #include "Net.h"
 #include "Console.h"
 #include "WebAssets.h"
@@ -25,7 +26,9 @@ bool Net::begin(const Deps& d) {
     if (!d_.settings->wifiEnabled) { d_.console->line("WIFI=off (#PWIFI1 and #PRESTART to enable)"); return false; }
     uint8_t mac[6]; WiFi.macAddress(mac);
     std::snprintf(apSsid_, sizeof apSsid_, "R2Uppity-%02X%02X", mac[4], mac[5]);     // v3's hostname convention
-    bool sta = d_.settings->staSsid[0] != '\0';
+    std::snprintf(staSsid_, sizeof staSsid_, "%s", d_.settings->staSsid);
+    std::snprintf(staPass_, sizeof staPass_, "%s", d_.settings->staPass);
+    bool sta = staSsid_[0] != '\0';
     WiFi.persistent(false);
     WiFi.mode(sta ? WIFI_AP_STA : WIFI_AP);
     WiFi.setHostname(kHost);
@@ -45,7 +48,7 @@ bool Net::begin(const Deps& d) {
     if (sta) {
         WiFi.setAutoReconnect(false);             // our own schedule (Sabé): stock reconnect hammers a missing network and disturbs the AP
         staNextTryMs_ = millis();                 // first try at once
-        d_.console->printf("WIFI home network \"%s\" stored; joining in the background", d_.settings->staSsid);
+        d_.console->printf("WIFI home network \"%s\" stored; joining in the background", staSsid_);
     } else d_.console->line("WIFI no home network stored (#PSSID=<name> #PPASS=<password> #PRESTART to join one)");
     setPortal(true);
     MDNS.begin(kHost);
@@ -55,10 +58,15 @@ bool Net::begin(const Deps& d) {
     server_.collectHeaders(wanted, 1);
     registerRoutes();
     server_.begin();
+    estopServer_.begin();
+    estopServer_.setNoDelay(true);
     up_ = true;
     TaskHandle_t h = nullptr;
     xTaskCreatePinnedToCore(taskFn, "uppity_net", 8192, this, 1, &h, 0);
     task_ = h;
+    TaskHandle_t e = nullptr;
+    xTaskCreatePinnedToCore(estopTaskFn, "uppity_estop", 4096, this, 2, &e, 0);   // above the web task: never queued behind a page load
+    estopTask_ = e;
     return true;
 }
 
@@ -67,11 +75,47 @@ void Net::taskFn(void* arg) {
     for (;;) { n->service(); vTaskDelay(2); }
 }
 
+void Net::estopTaskFn(void* arg) {
+    Net* n = static_cast<Net*>(arg);
+    for (;;) { n->serviceEstopPort(); vTaskDelay(3); }
+}
+
 void Net::service() {
     if (portalUp_) dns_.processNextRequest();
     server_.handleClient();
+    dropStalledClient();
     serviceSta();
     if (disarmed()) ArduinoOTA.handle();          // the IDE/CLI network port answers only while nothing can move
+}
+
+// The library keeps the single current connection for up to 5 s while waiting for its request
+// bytes; a request lost to the radio therefore blocks every other client for 5 s. 400 ms is
+// plenty for a request that is actually coming, so anything slower is dropped and the next
+// connection gets its turn. A request that has been handled on this connection is left alone.
+void Net::dropStalledClient() {
+    NetworkClient& cur = server_.client();
+    int fd = cur ? cur.fd() : -1;
+    if (fd != curFd_) { curFd_ = fd; curFdSince_ = millis(); handledSince_ = false; return; }
+    if (fd >= 0 && !handledSince_ && millis() - curFdSince_ > 400) { cur.stop(); curFd_ = -1; ++stalledDropped_; }
+}
+
+// Port 81: anything that mentions "estop" latches. No parsing beyond that, no auth, no queue
+// behind the web server; the latch trips before the reply is even written.
+void Net::serviceEstopPort() {
+    NetworkClient c = estopServer_.accept();
+    if (!c) return;
+    uint32_t t0 = millis();
+    while (!c.available() && c.connected() && millis() - t0 < 400) vTaskDelay(1);
+    char buf[240]; int n = 0;
+    while (c.available() && n < static_cast<int>(sizeof buf) - 1) buf[n++] = static_cast<char>(c.read());
+    buf[n] = '\0';
+    bool hit = false;
+    for (int i = 0; i + 5 <= n && !hit; ++i) hit = strncasecmp(buf + i, "estop", 5) == 0;
+    if (hit) { d_.estop->trip(EstopLatch::Source::Web, millis()); ++estopHits_; }
+    const char* body = hit ? "{\"ok\":true,\"msg\":\"E-STOP latched\"}" : "{\"ok\":false,\"err\":\"not an estop\"}";
+    c.printf("HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s",
+             hit ? 200 : 400, hit ? "OK" : "Bad Request", static_cast<int>(std::strlen(body)), body);
+    c.stop();
 }
 
 bool Net::disarmed() {
@@ -89,14 +133,13 @@ void Net::setPortal(bool want) {
 }
 
 void Net::serviceSta() {
-    const Settings& s = *d_.settings;
-    if (s.staSsid[0] == '\0') return;
+    if (staSsid_[0] == '\0') return;
     if (staEvent_.exchange(false)) {
         if (staState_.load() == 2) {
             staBackoffMs_ = 15000;
-            d_.console->printf("WIFI joined \"%s\": http://%s.local  (%s, %d dBm); the AP stays up too", s.staSsid, kHost, WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+            d_.console->printf("WIFI joined \"%s\": http://%s.local  (%s, %d dBm); the AP stays up too", staSsid_, kHost, WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
         } else {
-            d_.console->printf("WIFI not on \"%s\" (reason %u); retry in %lus, the AP is still up", s.staSsid, (unsigned)staReason_.load(), (unsigned long)(staBackoffMs_ / 1000));
+            d_.console->printf("WIFI not on \"%s\" (reason %u); retry in %lus, the AP is still up", staSsid_, (unsigned)staReason_.load(), (unsigned long)(staBackoffMs_ / 1000));
             staNextTryMs_ = millis() + staBackoffMs_;
             staBackoffMs_ = staBackoffMs_ >= 300000 ? 300000 : staBackoffMs_ * 2;
         }
@@ -111,7 +154,7 @@ void Net::serviceSta() {
     }
     staPauseLogged_ = false;
     staState_.store(1);
-    WiFi.begin(s.staSsid, s.staPass[0] ? s.staPass : nullptr);
+    WiFi.begin(staSsid_, staPass_[0] ? staPass_ : nullptr);
     staNextTryMs_ = millis() + (staBackoffMs_ > 20000 ? staBackoffMs_ : 20000);   // a wedged join cannot wait forever
 }
 
@@ -139,6 +182,7 @@ void Net::otaProgressToLog() {
 // ---------------------------------------------------------------- HTTP helpers
 
 void Net::sendJson(int code, const char* body) {
+    handledSince_ = true;
     server_.sendHeader("Cache-Control", "no-store");
     server_.sendHeader("Access-Control-Allow-Origin", "*");
     server_.send(code, "application/json", body);
@@ -155,6 +199,7 @@ void Net::registerRoutes() {
     for (unsigned int i = 0; i < WEB_ASSET_COUNT; ++i) {
         const WebAsset& a = WEB_ASSETS[i];
         auto serve = [this, &a]() {
+            handledSince_ = true;
             String etag = String("\"" WEB_ASSETS_BUILD "-") + a.len + "\"";
             server_.sendHeader("ETag", etag); server_.sendHeader("Cache-Control", "no-cache");
             if (server_.header("If-None-Match") == etag) { server_.send(304, a.mime, ""); return; }
@@ -214,8 +259,9 @@ void Net::writeWifiJson(JsonWriter& j) {
     j.beginObject();
     j.kv("ap", apSsid_); j.kv("clients", static_cast<int>(apClients_.load()));
     uint8_t st = staState_.load();
-    j.kv("sta", d_.settings->staSsid[0] == '\0' ? "off" : st == 2 ? "up" : st == 1 ? "joining" : "down");
-    j.kv("ssid", d_.settings->staSsid);
+    j.kv("sta", staSsid_[0] == '\0' ? "off" : st == 2 ? "up" : st == 1 ? "joining" : "down");
+    j.kv("ssid", staSsid_);
+    j.kv("estopPort", 81); j.kv("estopHits", static_cast<unsigned long>(estopHits_)); j.kv("stalled", static_cast<unsigned long>(stalledDropped_));
     j.kv("ip", st == 2 ? WiFi.localIP().toString().c_str() : WiFi.softAPIP().toString().c_str());
     j.kv("rssi", st == 2 ? static_cast<int>(WiFi.RSSI()) : 0);
     j.kv("host", kHost);
@@ -225,9 +271,9 @@ void Net::writeWifiJson(JsonWriter& j) {
 void Net::printStatus(TextSink& out) {
     if (!up_) { out.line("WIFI=off"); return; }
     uint8_t st = staState_.load();
-    out.printf("WIFI=ap \"%s\" %s clients=%u  home=%s%s%s  http://%s.local", apSsid_, WiFi.softAPIP().toString().c_str(), (unsigned)apClients_.load(),
-               d_.settings->staSsid[0] ? d_.settings->staSsid : "(none)", st == 2 ? " up " : st == 1 ? " joining" : d_.settings->staSsid[0] ? " down" : "",
-               st == 2 ? WiFi.localIP().toString().c_str() : "", kHost);
+    out.printf("WIFI=ap \"%s\" %s clients=%u  home=%s%s%s  http://%s.local  estopPort=81 hits=%lu stalledDropped=%lu", apSsid_, WiFi.softAPIP().toString().c_str(), (unsigned)apClients_.load(),
+               staSsid_[0] ? staSsid_ : "(none)", st == 2 ? " up " : st == 1 ? " joining" : staSsid_[0] ? " down" : "",
+               st == 2 ? WiFi.localIP().toString().c_str() : "", kHost, static_cast<unsigned long>(estopHits_), static_cast<unsigned long>(stalledDropped_));
 }
 
 // ":P..."/"#P..." lines from the page go to loop() like any other serial source
@@ -280,6 +326,7 @@ void Net::handleLog() {
 // ---------------------------------------------------------------- web OTA (POST /update, app .bin)
 
 void Net::handleUpdateUpload() {
+    handledSince_ = true;                         // an upload in progress is never a stalled client
     HTTPUpload& up = server_.upload();
     if (up.status == UPLOAD_FILE_START) {
         otaRefused_ = !disarmed(); otaFailed_ = false;

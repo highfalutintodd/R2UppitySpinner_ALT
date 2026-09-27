@@ -88,16 +88,28 @@ while a motor is enabled.
 
 ## OTA (firmware over WiFi)
 
-14. From the laptop on the same network as the board (its own network, or the house WiFi once
-    the board has joined), with the periscope idle:
+14. From the laptop on the same network as the board (the house WiFi once the board has joined
+    it, or the periscope's own network), with the periscope idle. First build the image into a
+    folder on the Desktop (this also refreshes the build after a merge):
     ```
     cd "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3"
-    arduino-cli upload --profile uppity -p uppity.local --upload-field password=Astromech UppityFirmware
     ```
-    (if you changed the AP password with `#PAPPASS`, use that instead of `Astromech`). The
-    monitor shows `OTA 0% (motors held)`, `OTA 10%` ... `OTA 100% done, restarting`, and the
-    board reboots into the new build. If a motor is enabled or a job is running the upload is
-    simply not answered until the board is idle (the CLI reports a timeout: wait, then retry).
+    ```
+    arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
+    ```
+    Then send it over WiFi. The address is the one `#PSTATUS` prints after `home=`; on the
+    house network it was `192.168.86.90` on 2026-09-27 (on the periscope's own network it is
+    always `192.168.4.1`). The password is the access point password (`Astromech` unless you
+    changed it with `#PAPPASS`), not your home WiFi password:
+    ```
+    python3 ~/Library/Arduino15/packages/esp32/hardware/esp32/3.3.4/tools/espota.py -r -i 192.168.86.90 -p 3232 -a Astromech -f ~/Desktop/uppity-build/UppityFirmware.ino.bin
+    ```
+    Success looks like `Uploading: [====...] 100%` then `Result: OK`; the monitor shows
+    `OTA 0% (motors held)`, `OTA 10%` ... `OTA 100% done, restarting`, and the board reboots
+    into the new build. If a motor is enabled or a job is running the board does not answer
+    the upload at all and the tool reports `No response from the ESP`: wait until it is idle
+    and try again. (`arduino-cli upload` can do the same only with `--protocol network`; the
+    command in the first version of this doc lacked it and tried the USB uploader instead.)
 15. While a move is running, a `POST /update` from the page's API answers
     `update refused: a motor is enabled or a job is running`. (No button for it yet; Phase 4's
     Setup page gets one.)
@@ -107,3 +119,47 @@ while a motor is enabled.
 The log file, and: the boot `WIFI` lines, whether the phone joined and the page popped up by
 itself, step 6 (E-STOP from the page while moving) and step 14 (OTA). If the page ever shows
 `NO LINK` while the phone is still on the network, the `#PSTATUS` line at that moment.
+
+## Results 2026-09-27 (Todd's periscope)
+
+Worked: the access point (`R2Uppity-FB3F`), the phone joined, every Operate button drove the
+periscope, soft stop cancelled a spin and a rotation, random mode from the page with the light
+kit following, the safety clamp from the web (`SEEK CLAMPED 287 -> 904 reason=ROTARY_NOT_HOME`),
+theme and settings saved, schema-3 migration with everything intact, home network stored and
+joined in about a second with the access point still up, E-STOP and reset from the page while
+idle. Not run: two phones, the trigger inputs.
+
+Failed: **E-STOP from the page never landed while the lifter was moving** (it did while idle,
+and soft stops landed mid-rotation). Every request sent during a lifter move arrived the moment
+the move ended. A ping from the laptop on the house network lost 13 packets in a row during a
+`:PP100` raise and spiked at driver enable/disable moments, with 3 % loss overall at -70 dBm;
+the rotary spin passed clean. Two causes stacked: the radio loses packets around lifter
+activity (pulsed drive current on the supply), and the single-threaded web server held a
+connection whose request never arrived for up to five seconds, blocking everything behind it.
+Also: the page never showed `NO LINK` (no request timeout; an iPhone leaves a request pending
+for a minute), and the OTA command in the first version of this doc used the wrong uploader.
+
+Fixed in the next build: a dedicated E-STOP listener on port 81 in its own task, the page
+firing at both ports on fresh connections every 300 ms until the status confirms the latch
+(button reads `SENDING E-STOP…`, then `E-STOP LATCHED`, or `NO ANSWER: USE THE POWER SWITCH`
+after eight seconds); the web server drops a connection that has sent nothing for 400 ms;
+two-second timeouts on the polls and no stacked polls; WiFi now starts before the control task
+(the 73 late ticks at boot were WiFi bring-up); a changed `#PSSID` waits for the restart as the
+doc says; the OTA step above corrected.
+
+## Re-test for the fix build (short)
+
+1. Boot: `#PSTATE` shows `late 0` (WiFi no longer counts against the control tick).
+2. `#PSTATUS`: the `WIFI=` line ends with `estopPort=81 hits=0 stalledDropped=0`.
+3. On the phone, tap **Up**, and while the mast is moving tap **E-STOP**. The button must go
+   `SENDING E-STOP…` at once and then `E-STOP LATCHED` within a second or two, with
+   `ESTOP LATCHED (source 3)` on the monitor **while the mast is still moving** and the motor
+   stopping. Do this three or four times (Up, Down, a 50 % seek). `#PSTATUS` afterwards:
+   `hits=` counts the port-81 latches, `stalledDropped=` the stuck connections the server
+   cleared. Both numbers are useful to me.
+4. Turn WiFi off on the phone (or walk away): the pill goes to `NO LINK` within about six
+   seconds. Back on: it recovers.
+5. Send commands from the page during lifter moves (tap 25 % while rising): they should now
+   land during the move, not after it, most of the time. If some still wait for the move to
+   end, that is the radio; note how often.
+6. OTA per step 14 above (the corrected command), with the periscope idle.

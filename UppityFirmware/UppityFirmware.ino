@@ -111,12 +111,14 @@ void setup() {
     gSup.begin(millis());
     gUsb.begin(Serial, gEstop, EstopLatch::Source::SerialUsb);
     gCmd.begin(Serial2, gEstop, EstopLatch::Source::SerialCmd);
-    bool taskOk = gTask.start(gSup);
-    gConsole.printf("CONTROL_TASK=%s", taskOk ? "running core1 prio10 1kHz" : "FAILED");
-    // the radio comes up after motion safety is running; the AP is always first, the home network joins in the background
+    // The radio comes up before the 1 kHz control task: WiFi bring-up stalls both cores for tens of
+    // milliseconds (flash access with the cache off) and would otherwise show as late ticks. The
+    // E-STOP latch and its panic hook already exist, and nothing can move until the task runs.
     Net::Deps nd; nd.console = &gConsole; nd.settings = &gConsole.settings(); nd.pub = &gSnapshot; nd.estop = &gEstop; nd.sup = &gSup; nd.lines = &gWebLines; nd.log = &gLog;
     gNet.begin(nd);
     gConsole.setNet(&gNetStatus);
+    bool taskOk = gTask.start(gSup);
+    gConsole.printf("CONTROL_TASK=%s", taskOk ? "running core1 prio10 1kHz" : "FAILED");
     gConsole.line("READY (type #PHELP)");
     drainEvents();
 }

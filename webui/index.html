@@ -55,6 +55,10 @@ button:disabled { opacity:.5; cursor:default; }
 .banner button { margin-left:auto; }
 .estop { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(.8rem + env(safe-area-inset-bottom)); z-index:6; width:min(92vw, 30rem); min-height:3.6rem; font-size:1.2rem; letter-spacing:.06em; background:var(--bad); color:#fff; border:2px solid #fff; border-radius:.8rem; box-shadow:0 6px 18px rgba(0,0,0,.35); }
 .estop:hover { background:#B0364A; }
+.estop.sending { animation:pulse .5s infinite alternate; }
+.estop.latched { background:#3a3a3a; border-color:var(--bad); }
+.estop.failed { background:var(--warn); }
+@keyframes pulse { from { background:var(--bad); } to { background:#ff5a6e; } }
 .status { display:grid; grid-template-columns:repeat(auto-fit, minmax(7rem, 1fr)); gap:.4rem .8rem; font-size:.8rem; }
 .status div { display:flex; justify-content:space-between; border-bottom:1px solid var(--keyline); padding:.15rem 0; }
 .status span:first-child { color:var(--dim); }
@@ -149,9 +153,10 @@ label.chk { font-size:.8rem; color:var(--dim); display:inline-flex; gap:.3rem; a
                      locked: 'The motors are locked (bench unlock or commissioning)', armed: 'Refused while a motor is enabled', nolink: 'No answer from the board' };
   let toastT = 0;
   function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : ''); clearTimeout(toastT); toastT = setTimeout(() => t.className = 'toast', 2200); }
+  function withTimeout(ms) { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; }
   async function post(url, body) {
     try {
-      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body || '' });
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body || '', signal: withTimeout(4000) });
       const j = await r.json().catch(() => ({ ok: r.ok }));
       if (!j.ok) toast(ERR_TEXT[j.err] || j.msg || j.err || 'Refused', true); else if (j.msg) toast(j.msg);
       return j;
@@ -176,14 +181,33 @@ label.chk { font-size:.8rem; color:var(--dim); display:inline-flex; gap:.3rem; a
   document.querySelectorAll('[data-light]').forEach(b => b.onclick = () => send(':PL' + b.dataset.light));
   $('stopBtn').onclick = () => post('/api/stop');
   $('stopShowBtn').onclick = () => post('/api/stop');
-  $('estopBtn').onclick = () => post('/api/estop');
+  // E-STOP: fire at the dedicated port 81 listener AND the web server, on fresh connections, every
+  // 300 ms until the board's status confirms the latch (bench 2026-09-27: a single request could
+  // sit behind a stalled connection or a lost packet while the lifter ran). Opaque no-cors requests
+  // are fine: nothing here needs the answer, the status poll is the confirmation.
+  let estopTimer = 0, estopSince = 0;
+  function setEstop(mode, text) { const b = $('estopBtn'); b.className = 'estop ' + mode; b.textContent = text; }
+  function fireEstop() {
+    fetch('http://' + location.hostname + ':81/estop', { method: 'POST', mode: 'no-cors', keepalive: true, body: 'estop', signal: withTimeout(1500) }).catch(() => {});
+    fetch('/api/estop', { method: 'POST', body: 'estop', signal: withTimeout(1500) }).catch(() => {});
+  }
+  function estop() {
+    if (estopTimer) return;
+    estopSince = Date.now(); setEstop('sending', 'SENDING E-STOP…'); fireEstop();
+    estopTimer = setInterval(() => {
+      if (lastState && lastState.estop && lastStateAt > estopSince) { clearInterval(estopTimer); estopTimer = 0; setEstop('latched', 'E-STOP LATCHED'); return; }
+      if (Date.now() - estopSince > 8000) { clearInterval(estopTimer); estopTimer = 0; setEstop('failed', 'NO ANSWER: USE THE POWER SWITCH'); setTimeout(() => setEstop('', 'E-STOP'), 4000); return; }
+      fireEstop();
+    }, 300);
+  }
+  $('estopBtn').onclick = estop;
   $('resetBtn').onclick = () => post('/api/estop/reset');
   $('clearFaultBtn').onclick = () => send('#PCLEARFAULT');
   $('unlockBtn').onclick = () => { if ($('unlockBtn').dataset.armed) { send('#PUNLOCK'); delete $('unlockBtn').dataset.armed; $('unlockBtn').textContent = 'Unlock (bench)'; } else { $('unlockBtn').dataset.armed = '1'; $('unlockBtn').textContent = 'Really unlock?'; setTimeout(() => { delete $('unlockBtn').dataset.armed; $('unlockBtn').textContent = 'Unlock (bench)'; }, 4000); } };
   $('cmdForm').onsubmit = (e) => { e.preventDefault(); const v = $('cmd').value.trim(); if (v) { send(v); $('cmd').value = ''; } };
 
-  // ---- state polling (2 Hz, diffed) ----
-  let lastState = null, misses = 0, seededTheme = false;
+  // ---- state polling (diffed; a poll that gets no answer in 2 s counts as a miss) ----
+  let lastState = null, lastStateAt = 0, misses = 0, seededTheme = false, polling = false;
   function setText(id, v) { const el = $(id); if (el.textContent !== String(v)) el.textContent = v; }
   function show(id, on) { $(id).classList.toggle('hidden', !on); }
   function render(s) {
@@ -200,30 +224,36 @@ label.chk { font-size:.8rem; color:var(--dim); display:inline-flex; gap:.3rem; a
     setText('persist', s.persist);
     show('randomState', s.random.on);
     document.querySelectorAll('[data-light]').forEach(b => b.classList.toggle('on', +b.dataset.light === s.light));
+    if (!estopTimer) { if (s.estop) setEstop('latched', 'E-STOP LATCHED'); else if ($('estopBtn').classList.contains('latched')) setEstop('', 'E-STOP'); }
     if (!seededTheme) { seededTheme = true; if (!theme && s.theme === 1) applyTheme('dark'); }
   }
   async function poll() {
+    if (polling) return;                                   // never stack polls on a slow link
+    polling = true;
     try {
-      const r = await fetch('/api/state', { cache: 'no-store' }); const s = await r.json();
-      misses = 0; lastState = s; render(s);
+      const r = await fetch('/api/state', { cache: 'no-store', signal: withTimeout(2000) }); const s = await r.json();
+      misses = 0; lastState = s; lastStateAt = Date.now(); render(s);
     } catch (e) { if (++misses >= 3) { const pill = $('pill'); pill.textContent = 'NO LINK'; pill.className = 'pill NOLINK'; } }
+    polling = false;
   }
-  poll(); setInterval(poll, 500);
+  poll(); setInterval(poll, 600);
 
   // ---- log tail (1 Hz) ----
-  let logNext = -1;
+  let logNext = -1, logPolling = false;
   async function pollLog() {
-    if ($('pause').checked) return;
+    if ($('pause').checked || logPolling) return;
+    logPolling = true;
     try {
-      const r = await fetch('/api/log?since=' + (logNext < 0 ? 'tail' : logNext), { cache: 'no-store' }); const j = await r.json();
+      const r = await fetch('/api/log?since=' + (logNext < 0 ? 'tail' : logNext), { cache: 'no-store', signal: withTimeout(3000) }); const j = await r.json();
       const box = $('log');
       if (logNext >= 0 && j.from > logNext) box.textContent += '… (' + (j.from - logNext) + ' bytes missed) …\n';
       let text = j.text; if ($('hideTick').checked) text = text.split('\n').filter(l => !/ TICK /.test(l)).join('\n');
       if (text) { box.textContent += text; const lines = box.textContent.split('\n'); if (lines.length > 400) box.textContent = lines.slice(-400).join('\n'); box.scrollTop = box.scrollHeight; }
       logNext = j.next;
     } catch (e) {}
+    logPolling = false;
   }
-  pollLog(); setInterval(pollLog, 1000);
+  pollLog(); setInterval(pollLog, 1500);
 })();
 </script>
 </body>
