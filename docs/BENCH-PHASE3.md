@@ -200,3 +200,27 @@ carries the firmware hash instead of a compile stamp that the build cache can le
    once (`SEEK ABORTED CANCEL` then `SAFE_LOWER` on the monitor). Then Up, and while rising tap
    **50%**: same, it retargets. Home (`:PA0`) is deliberately not interruptible.
 4. `#PSTATUS` afterwards: `hits=`, `webEstops=`, `stalledDropped=`.
+
+## Results 2026-09-27, third run (build e08ab885, over-WiFi update)
+
+**E-STOP from the page works during motion.** Six presses, each landing within a few hundred
+milliseconds of the tap (`ESTOP PORT from 192.168.4.2: latch` then `SEEK ABORTED ESTOP` mid-rise
+at 75, 81, 87 and 93 s; `SPIN ABORTED ESTOP` at 112 and 119 s), on both paths, 18 hits each.
+The boot with the mast mid-travel resolved `lifter=UNKNOWN`, and the first `:PH` raised to the
+top to reference before lowering, as designed. The firmware now reports its build hash.
+
+**Interrupting a rise with Down failed with fault 0x20** (encoder direction): the descent
+started one millisecond after the cancelled rise, while the lead screw was still climbing, and
+the seek's wiring check saw the count going the wrong way. Fix: after any interrupted job the
+supervisor waits until both counts have been still for 30 ms (400 ms at most) before starting
+the next one. Reproduced in the simulator with a heavy rotor; 116 host tests.
+
+## Re-test for this build (short)
+
+1. Boot line `build <8 hex>`; `#PSTATE` shows `faults=0x0`.
+2. Tap **Up**, and while rising tap **Down**: `SEEK ABORTED CANCEL`, a pause of well under half
+   a second, then `SAFE_LOWER` runs to the bottom with **no** `ENCODER_DIRECTION` and no fault
+   banner. Then Up, and while rising tap **50%**: same, it settles at 50 %. Three times each.
+3. One E-STOP mid-move, to confirm it still lands.
+4. Optional, if the droid is otherwise ready: random mode for a few minutes with the page open,
+   watching that the pill and readouts keep up.

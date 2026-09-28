@@ -444,11 +444,14 @@ TEST(a_new_seek_interrupts_a_running_seek_but_not_a_home) {
     CHECK(g.sup.activeJob() == JobKind::LifterSeek);
     Ticks mid = g.snap().lifterTicks; CHECK(mid > 20 && mid < 430);
     uint32_t id2 = g.seek(112, 700); g.runMs(5);
-    CHECK_EQ(g.snap().activeJobId, id2);                                       // the new seek took over within a few ms
+    { const Event* e = g.last(Ev::JobEnd); CHECK(e && e->a == (int)JobKind::LifterSeek && e->b == (int)JobResult::Aborted); }   // the rise was cancelled at once
+    g.runMs(450);
+    CHECK(g.snap().activeJobId == id2 || g.snap().lastProgramId == id2);       // and the new seek took over once the mast was at rest
     g.runUntilIdle(20000);
     CHECK(absl(g.snap().lifterTicks - 112) <= 12);
-    int aborted = 0; for (auto& e : g.log) if (e.code == Ev::JobEnd && e.a == (int)JobKind::LifterSeek && e.b == (int)JobResult::Aborted) ++aborted;
-    CHECK_EQ(aborted, 1);
+    int aborted = 0, dirFaults = 0;
+    for (auto& e : g.log) if (e.code == Ev::JobEnd && e.a == (int)JobKind::LifterSeek) { if (e.b == (int)JobResult::Aborted) ++aborted; if (e.c == (int)Reason::EncoderDirection) ++dirFaults; }
+    CHECK_EQ(aborted, 1); CHECK_EQ(dirFaults, 0);
     // a home in progress is never interrupted: the request waits for it
     g.seek(450, 700, true); g.runUntilIdle(20000);
     g.req(JobKind::RotaryHome); g.runMs(300);
@@ -459,4 +462,21 @@ TEST(a_new_seek_interrupts_a_running_seek_but_not_a_home) {
     CHECK(g.snap().lastProgramId == id3);
     int homeAborts = 0; for (auto& e : g.log) if (e.code == Ev::JobEnd && e.a == (int)JobKind::RotaryHome && e.b == (int)JobResult::Aborted) ++homeAborts;
     CHECK_EQ(homeAborts, 0);
+}
+
+// Bench 2026-09-27: a descent started 1 ms after a cancelled rise, while the lead screw was still
+// climbing, and failed ENCODER_DIRECTION (fault 0x20). A heavy rotor in the simulator reproduces
+// it without the rest gate; with it the next seek waits until the count is still.
+TEST(interrupted_seek_waits_for_the_mast_to_stop_before_the_next_one) {
+    Rig g(gregConfig()); { sim::LifterParams p = g.hal.lifter.params(); p.tauBrakeMs = 60; g.hal.lifter.setParams(p); } g.boot();
+    g.seek(450, 700, true); g.runMs(500);
+    Ticks atCancel = g.snap().lifterTicks; CHECK(atCancel > 40); CHECK(g.sup.activeJob() == JobKind::LifterSeek);
+    uint32_t id2 = g.seek(20, 700); g.runMs(3);
+    CHECK(g.sup.activeJob() == JobKind::None);                                 // cancelled, and NOT yet restarted
+    Ms gap = 0; for (int i = 0; i < 600; ++i) { g.runMs(1); if (g.snap().activeJobId == id2 && g.sup.activeJob() != JobKind::None) { gap = i; break; } }
+    CHECK(gap >= 25 && gap <= 420);                                            // waited for rest, but not for ever
+    g.runUntilIdle(20000);
+    CHECK(absl(g.snap().lifterTicks - 20) <= 12);
+    for (auto& e : g.log) if (e.code == Ev::JobEnd) CHECK(e.c != (int)Reason::EncoderDirection);
+    CHECK_EQ(g.snap().faults, 0u);
 }

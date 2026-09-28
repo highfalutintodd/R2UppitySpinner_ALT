@@ -67,6 +67,12 @@ class MotionSupervisor {
     static constexpr Ms kEnCycleLowMs = 50;      // EN held low to clear the TB9051FTG latch
     static constexpr Ms kEnVerifyMs = 400;       // then enabled while DIAG is re-evaluated
     static constexpr int kMaxSteps = 4;
+    // After an interrupted job the mechanism is still coasting; the next job waits until both
+    // counts have been still for kRestStillTicks, or kRestMaxMs at most (a noisy encoder must
+    // not block for ever). Bench 2026-09-27: a descent started 1 ms after a cancelled rise and
+    // failed ENCODER_DIRECTION because the lead screw was still climbing.
+    static constexpr int kRestStillTicks = 30;
+    static constexpr Ms  kRestMaxMs = 400;
 
     MotionSupervisor(Hal& hal, EstopLatch& estop, CommandQueue& queue, SnapshotPublisher& pub, EventLog& events);
 
@@ -178,6 +184,7 @@ class MotionSupervisor {
     bool clearFaultReq_ = false;
     std::atomic<bool> holdIntake_{false};
     uint32_t lastProgramId_ = 0;
+    bool restRequired_ = false; Ticks stillL_ = 0, stillR_ = 0; uint16_t stillTicks_ = 0;
     uint8_t enCycle_ = 0;
     Ms enCycleAt_ = 0;
     bool enableRequested_ = false;

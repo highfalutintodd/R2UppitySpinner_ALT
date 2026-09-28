@@ -459,6 +459,7 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
         rotary_.lastEdgeArcTicks = lastChar_.arcMean;
     }
 
+    if (o.result != StepResult::Done) restRequired_ = true;   // interrupted: the next program waits for rest
     job_ = JobKind::None; arming_ = false;
 
     // ---- program continuation ----
@@ -538,6 +539,8 @@ void MotionSupervisor::tick(Ms now) {
     in.enabled = enabled;
     in.jogLeaseLive = queue_.jogLeaseLive(now);
     lifter_.ticks = raw.lifterTicks; rotary_.ticks = raw.rotaryTicks;
+    if (in.lifterTicks == stillL_ && in.rotaryTicks == stillR_) { if (stillTicks_ < 65535) ++stillTicks_; }
+    else { stillTicks_ = 0; stillL_ = in.lifterTicks; stillR_ = in.rotaryTicks; }
 
     BridgeCommand lifterOut = brakeCmd(), rotaryOut = brakeCmd();
     bool rotaryBusy = isRotaryJob(job_) || (lastOut_[1].mode == Bridge::Drive && lastOut_[1].duty != 0);
@@ -596,12 +599,14 @@ void MotionSupervisor::tick(Ms now) {
     // ---- program intake ----
     if (job_ == JobKind::None) {
         MotionRequest r;
-        if (holdIntake()) { /* NVS commit in progress: leave requests queued */ }
+        bool resting = restRequired_ && stillTicks_ < kRestStillTicks && elapsed(now, idleSince_) < kRestMaxMs;
+        if (holdIntake() || resting) { /* NVS commit in progress, or the mechanism is still coasting: leave requests queued */ }
         else if (queue_.pop(r)) {
+            restRequired_ = false;
             stepCount_ = expandRequest(r, in, steps_); stepIdx_ = 0; programId_ = r.id; programKind_ = r.kind;
             runProgram(in);
             if (job_ != JobKind::None) { arming_ = !enabled; armingSince_ = now; }
-        } else if (holdTarget_ >= 0 && cfg_.driftPct > 0 && elapsed(now, holdCheckAt_) >= 5000) {
+        } else if (!resting && holdTarget_ >= 0 && cfg_.driftPct > 0 && elapsed(now, holdCheckAt_) >= 5000) {
             // ---- hold: drift correction as an idle behaviour ----
             holdCheckAt_ = now;
             Ticks tr = travel();
