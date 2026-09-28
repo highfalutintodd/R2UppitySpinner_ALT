@@ -126,6 +126,9 @@ class MotionSupervisor {
     bool rotaryHomeKnown() const { return rotary_.confidence == HomeConfidence::Latched || rotary_.confidence == HomeConfidence::SwitchLive; }
     bool isRotaryJob(JobKind k) const { return k == JobKind::RotaryAbsolute || k == JobKind::RotaryRelative || k == JobKind::RotarySpin || k == JobKind::RotaryJog || k == JobKind::RotaryHome || k == JobKind::RotaryCharacterise; }
     bool isPreemptible(JobKind k) const { return k == JobKind::RotarySpin || k == JobKind::RotaryJog || k == JobKind::LifterCreep; }
+    // a plain seek or rotation is interrupted by the next request (the page's Down while rising must
+    // not wait for the rise); a home, a characterisation or a calibration always finishes
+    bool isRetargetable(JobKind k) const { return k == JobKind::LifterSeek || k == JobKind::RotaryAbsolute || k == JobKind::RotaryRelative; }
     void publish(const TickInputs& in, BridgeCommand lifterOut, BridgeCommand rotaryOut);
     void emit(Ev code, int32_t a, int32_t b, int32_t c, Ms t) { events_.push(code, a, b, c, t); }
 

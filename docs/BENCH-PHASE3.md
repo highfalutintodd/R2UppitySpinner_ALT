@@ -163,3 +163,40 @@ doc says; the OTA step above corrected.
    land during the move, not after it, most of the time. If some still wait for the move to
    end, that is the radio; note how often.
 6. OTA per step 14 above (the corrected command), with the periscope idle.
+
+## Results 2026-09-27, second run (fix build 60024f5, over-WiFi update)
+
+OTA over WiFi worked (`espota.py` direct, `Result: OK`, board rebooted into the new build).
+`late 0` at boot. `NO LINK` now appears. Commands from the page **reach the board during
+lifter moves** (eight `SEQ replaced` / `QUEUED=SEEK` lines mid-travel) but the running move
+finished before the new one started: the sequencer replaced the pending chain and left the
+running job alone. E-STOP: the board received two E-STOP requests in the whole 321 s session
+(`hits=2`, one latch at 73 s while idle). Taps on the other buttons during moves produced
+requests; E-STOP taps during moves produced none, not even at the separate port, so those
+presses were dying inside the page on the phone, cause unknown from the log.
+
+Fix build: a new lifter or rotary command now **interrupts** a running seek or rotation (a
+home, a characterisation or a calibration still finishes); the E-STOP button fires through four
+independent channels (port 81 by fetch and by image request, the web server by fetch and by
+sendBeacon), on the touch itself as well as the click, and shows a send counter; the board
+prints `ESTOP PORT from <ip>: latch` / `ESTOP WEB from <ip>` for every arrival; the version line
+carries the firmware hash instead of a compile stamp that the build cache can leave stale.
+
+## Re-test for this build (short)
+
+1. Boot line reads `phase 3  build <8 hex digits>`; `#PSTATUS` shows the same digits and the
+   `WIFI=` line ends `estopPort=81 hits=0 webEstops=0 stalledDropped=0`.
+2. Tap **Up**, and while the mast is rising tap **E-STOP**. Watch the button: it must change to
+   `SENDING E-STOP… (1)` at once and the number must climb about three times a second. Tell me
+   the number it reached and what it said at the end (`E-STOP LATCHED`, or
+   `NO ANSWER: USE THE POWER SWITCH`). On the monitor, `ESTOP PORT from ...` / `ESTOP WEB
+   from ...` lines show what arrived and when. Repeat three times.
+   - Button never changes: the tap is not reaching the page's code; say so, that is the
+     answer I need.
+   - Button counts but no `ESTOP ...` line on the monitor until the move ends: the phone's
+     requests are not leaving or not arriving while the motor runs (radio).
+   - `ESTOP PORT ... latch` mid-move and the motor stops: fixed.
+3. Tap **Up**, and while rising tap **Down**: the rise must stop and the descent start at
+   once (`SEEK ABORTED CANCEL` then `SAFE_LOWER` on the monitor). Then Up, and while rising tap
+   **50%**: same, it retargets. Home (`:PA0`) is deliberately not interruptible.
+4. `#PSTATUS` afterwards: `hits=`, `webEstops=`, `stalledDropped=`.

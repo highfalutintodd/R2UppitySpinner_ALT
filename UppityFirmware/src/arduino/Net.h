@@ -77,7 +77,7 @@ class Net {
     char staSsid_[33] = {};                       // credentials as they were at boot: a change waits for #PRESTART
     char staPass_[65] = {};
     int curFd_ = -1; uint32_t curFdSince_ = 0; bool handledSince_ = false;
-    uint32_t stalledDropped_ = 0, estopHits_ = 0;
+    uint32_t stalledDropped_ = 0, estopHits_ = 0, webEstops_ = 0;
     char apSsid_[24] = "R2Uppity";
     bool up_ = false, portalUp_ = false, staPauseLogged_ = false;
     std::atomic<uint8_t> staState_{0};            // 0 off/idle, 1 joining, 2 connected

@@ -590,8 +590,8 @@ void MotionSupervisor::tick(Ms now) {
         return;
     }
 
-    // ---- pre-emption: a continuous job yields to the next request ----
-    if (job_ != JobKind::None && isPreemptible(job_) && queue_.size() > 0) in.cancel = true;
+    // ---- pre-emption: a continuous job yields to the next request; a seek or rotation is interrupted by it ----
+    if (job_ != JobKind::None && (isPreemptible(job_) || isRetargetable(job_)) && queue_.size() > 0) in.cancel = true;
 
     // ---- program intake ----
     if (job_ == JobKind::None) {

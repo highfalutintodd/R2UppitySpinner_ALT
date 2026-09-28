@@ -437,3 +437,26 @@ TEST(random_light_policy_sets_the_light_kit) {
     CmdRig z;                                                                  // policy 0: never touched
     z.line(":PM"); z.run(60000); CHECK_EQ(z.lightSets, 0);
 }
+
+TEST(a_new_seek_interrupts_a_running_seek_but_not_a_home) {
+    Rig g(gregConfig(false)); g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks); g.boot();
+    g.seek(450, 700, true); g.runMs(150);
+    CHECK(g.sup.activeJob() == JobKind::LifterSeek);
+    Ticks mid = g.snap().lifterTicks; CHECK(mid > 20 && mid < 430);
+    uint32_t id2 = g.seek(112, 700); g.runMs(5);
+    CHECK_EQ(g.snap().activeJobId, id2);                                       // the new seek took over within a few ms
+    g.runUntilIdle(20000);
+    CHECK(absl(g.snap().lifterTicks - 112) <= 12);
+    int aborted = 0; for (auto& e : g.log) if (e.code == Ev::JobEnd && e.a == (int)JobKind::LifterSeek && e.b == (int)JobResult::Aborted) ++aborted;
+    CHECK_EQ(aborted, 1);
+    // a home in progress is never interrupted: the request waits for it
+    g.seek(450, 700, true); g.runUntilIdle(20000);
+    g.req(JobKind::RotaryHome); g.runMs(300);
+    CHECK(g.sup.activeJob() == JobKind::RotaryHome);
+    uint32_t id3 = g.seek(200, 700); g.runMs(50);
+    CHECK(g.sup.activeJob() == JobKind::RotaryHome);
+    g.runUntilIdle(60000);
+    CHECK(g.snap().lastProgramId == id3);
+    int homeAborts = 0; for (auto& e : g.log) if (e.code == Ev::JobEnd && e.a == (int)JobKind::RotaryHome && e.b == (int)JobResult::Aborted) ++homeAborts;
+    CHECK_EQ(homeAborts, 0);
+}

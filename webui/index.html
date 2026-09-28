@@ -185,22 +185,31 @@ label.chk { font-size:.8rem; color:var(--dim); display:inline-flex; gap:.3rem; a
   // 300 ms until the board's status confirms the latch (bench 2026-09-27: a single request could
   // sit behind a stalled connection or a lost packet while the lifter ran). Opaque no-cors requests
   // are fine: nothing here needs the answer, the status poll is the confirmation.
-  let estopTimer = 0, estopSince = 0;
+  let estopTimer = 0, estopSince = 0, estopFires = 0;
   function setEstop(mode, text) { const b = $('estopBtn'); b.className = 'estop ' + mode; b.textContent = text; }
+  // Four independent channels, each in its own try/catch so no browser quirk can silence the rest:
+  // the port-81 listener (fetch and a plain image GET), the web server (fetch and sendBeacon).
   function fireEstop() {
-    fetch('http://' + location.hostname + ':81/estop', { method: 'POST', mode: 'no-cors', keepalive: true, body: 'estop', signal: withTimeout(1500) }).catch(() => {});
-    fetch('/api/estop', { method: 'POST', body: 'estop', signal: withTimeout(1500) }).catch(() => {});
+    ++estopFires;
+    const p81 = 'http://' + location.hostname + ':81/estop?t=' + Date.now();
+    try { fetch(p81, { method: 'POST', mode: 'no-cors', cache: 'no-store', body: 'estop', signal: withTimeout(1500) }).catch(() => {}); } catch (e) {}
+    try { fetch('/api/estop?t=' + Date.now(), { method: 'POST', cache: 'no-store', body: 'estop', signal: withTimeout(1500) }).catch(() => {}); } catch (e) {}
+    try { if (navigator.sendBeacon) navigator.sendBeacon('/api/estop', 'estop'); } catch (e) {}
+    try { const img = new Image(); img.src = p81 + '&img=1'; } catch (e) {}
+    $('estopBtn').textContent = 'SENDING E-STOP… (' + estopFires + ')';
   }
-  function estop() {
+  function estop(ev) {
+    if (ev && ev.preventDefault) ev.preventDefault();
     if (estopTimer) return;
-    estopSince = Date.now(); setEstop('sending', 'SENDING E-STOP…'); fireEstop();
+    estopFires = 0; estopSince = Date.now(); setEstop('sending', 'SENDING E-STOP…'); fireEstop();
     estopTimer = setInterval(() => {
       if (lastState && lastState.estop && lastStateAt > estopSince) { clearInterval(estopTimer); estopTimer = 0; setEstop('latched', 'E-STOP LATCHED'); return; }
       if (Date.now() - estopSince > 8000) { clearInterval(estopTimer); estopTimer = 0; setEstop('failed', 'NO ANSWER: USE THE POWER SWITCH'); setTimeout(() => setEstop('', 'E-STOP'), 4000); return; }
       fireEstop();
     }, 300);
   }
-  $('estopBtn').onclick = estop;
+  $('estopBtn').addEventListener('pointerdown', estop);   // fires on the touch itself, before any click synthesis
+  $('estopBtn').addEventListener('click', estop);
   $('resetBtn').onclick = () => post('/api/estop/reset');
   $('clearFaultBtn').onclick = () => send('#PCLEARFAULT');
   $('unlockBtn').onclick = () => { if ($('unlockBtn').dataset.armed) { send('#PUNLOCK'); delete $('unlockBtn').dataset.armed; $('unlockBtn').textContent = 'Unlock (bench)'; } else { $('unlockBtn').dataset.armed = '1'; $('unlockBtn').textContent = 'Really unlock?'; setTimeout(() => { delete $('unlockBtn').dataset.armed; $('unlockBtn').textContent = 'Unlock (bench)'; }, 4000); } };

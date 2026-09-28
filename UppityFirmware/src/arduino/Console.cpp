@@ -1,6 +1,7 @@
 #ifdef ARDUINO
 #include <Arduino.h>
 #include <esp_random.h>
+#include <esp_app_desc.h>
 #include "Console.h"
 #include "../core/EventFormat.h"
 #include "../../Version.h"
@@ -9,6 +10,15 @@
 namespace uppity {
 
 uint32_t EspRandom::next() { return esp_random(); }
+
+// Eight hex digits of the ELF hash: unique per build, unlike __DATE__/__TIME__, which come from
+// whichever source file happened to recompile (bench 2026-09-27: #PSTATUS showed a five-hour-old
+// stamp on a fresh build because Console.cpp was served from the build cache).
+const char* Console::buildId() {
+    static char id[9] = {};
+    if (!id[0]) { const esp_app_desc_t* d = esp_app_get_description(); std::snprintf(id, sizeof id, "%02x%02x%02x%02x", d->app_elf_sha256[0], d->app_elf_sha256[1], d->app_elf_sha256[2], d->app_elf_sha256[3]); }
+    return id;
+}
 
 void Console::begin(const Deps& d) { d_ = d; }
 
@@ -34,6 +44,7 @@ void Console::writeStateJson(JsonWriter& j) {
     j.kv("travelSet", static_cast<long>(effectiveTravel(s_, cal_)));
     j.kv("persist", d_.persist->pending() ? "pending" : "saved");
     j.kv("theme", static_cast<int>(s_.theme));
+    j.kv("build", buildId());
     j.kv("inputs", static_cast<int>(d_.i2c->inputs()));
 }
 
@@ -325,7 +336,7 @@ void Console::printSequences() {
 
 void Console::printStatus() {
     Ms up = elapsed(millis(), bootMs_) / 1000;
-    printf("VERSION=%s phase3 built %s %s", UPPITY_FW_VERSION, __DATE__, __TIME__);
+    printf("VERSION=%s phase3 build %s", UPPITY_FW_VERSION, buildId());
     printf("UPTIME=%lus commissioned=%u random=%s seq=%s persist=%s saves=%lu", static_cast<unsigned long>(up), s_.commissioned, d_.dir->active() ? "on" : "off", d_.seq->active() ? "running" : "idle", d_.persist->pending() ? "pending" : "saved", static_cast<unsigned long>(d_.persist->saves()));
     printf("SERIAL=usb+cmd@%lu id=%u dedup=%ums droppedForId=%lu duplicates=%lu cmdTx=%u", static_cast<unsigned long>(s_.cmdBaud), s_.marcId, s_.dedupMs, static_cast<unsigned long>(d_.disp->droppedForId()), static_cast<unsigned long>(d_.disp->droppedDuplicates()), s_.cmdTx);
     printf("EXPANDER=%s errors=%lu inputs=%u light=%u", d_.i2c->ok() ? "ok" : "FAILING", static_cast<unsigned long>(d_.i2c->errors()), d_.i2c->inputs(), d_.i2c->lightKit());

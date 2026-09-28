@@ -112,6 +112,7 @@ void Net::serviceEstopPort() {
     bool hit = false;
     for (int i = 0; i + 5 <= n && !hit; ++i) hit = strncasecmp(buf + i, "estop", 5) == 0;
     if (hit) { d_.estop->trip(EstopLatch::Source::Web, millis()); ++estopHits_; }
+    d_.console->printf("ESTOP PORT from %s: %s", c.remoteIP().toString().c_str(), hit ? "latch" : "ignored (no 'estop' in the request)");
     const char* body = hit ? "{\"ok\":true,\"msg\":\"E-STOP latched\"}" : "{\"ok\":false,\"err\":\"not an estop\"}";
     c.printf("HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s",
              hit ? 200 : 400, hit ? "OK" : "Bad Request", static_cast<int>(std::strlen(body)), body);
@@ -216,7 +217,7 @@ void Net::registerRoutes() {
     server_.on("/api/config", HTTP_POST, [this]() { handleConfigPost(); });
     server_.on("/api/log", HTTP_GET, [this]() { handleLog(); });
     // E-STOP: no auth, no rate limit, any method; it latches before this handler returns
-    auto estop = [this]() { d_.estop->trip(EstopLatch::Source::Web, millis()); ok("E-STOP latched"); };
+    auto estop = [this]() { d_.estop->trip(EstopLatch::Source::Web, millis()); ++webEstops_; d_.console->printf("ESTOP WEB from %s", server_.client().remoteIP().toString().c_str()); ok("E-STOP latched"); };
     server_.on("/api/estop", HTTP_POST, estop);
     server_.on("/api/estop", HTTP_GET, estop);
     server_.on("/api/estop/reset", HTTP_POST, [this]() { bool was = d_.estop->release(millis()); ok(was ? "E-STOP released" : "E-STOP was not latched"); });
@@ -261,7 +262,7 @@ void Net::writeWifiJson(JsonWriter& j) {
     uint8_t st = staState_.load();
     j.kv("sta", staSsid_[0] == '\0' ? "off" : st == 2 ? "up" : st == 1 ? "joining" : "down");
     j.kv("ssid", staSsid_);
-    j.kv("estopPort", 81); j.kv("estopHits", static_cast<unsigned long>(estopHits_)); j.kv("stalled", static_cast<unsigned long>(stalledDropped_));
+    j.kv("estopPort", 81); j.kv("estopHits", static_cast<unsigned long>(estopHits_)); j.kv("webEstops", static_cast<unsigned long>(webEstops_)); j.kv("stalled", static_cast<unsigned long>(stalledDropped_));
     j.kv("ip", st == 2 ? WiFi.localIP().toString().c_str() : WiFi.softAPIP().toString().c_str());
     j.kv("rssi", st == 2 ? static_cast<int>(WiFi.RSSI()) : 0);
     j.kv("host", kHost);
@@ -271,9 +272,9 @@ void Net::writeWifiJson(JsonWriter& j) {
 void Net::printStatus(TextSink& out) {
     if (!up_) { out.line("WIFI=off"); return; }
     uint8_t st = staState_.load();
-    out.printf("WIFI=ap \"%s\" %s clients=%u  home=%s%s%s  http://%s.local  estopPort=81 hits=%lu stalledDropped=%lu", apSsid_, WiFi.softAPIP().toString().c_str(), (unsigned)apClients_.load(),
+    out.printf("WIFI=ap \"%s\" %s clients=%u  home=%s%s%s  http://%s.local  estopPort=81 hits=%lu webEstops=%lu stalledDropped=%lu", apSsid_, WiFi.softAPIP().toString().c_str(), (unsigned)apClients_.load(),
                staSsid_[0] ? staSsid_ : "(none)", st == 2 ? " up " : st == 1 ? " joining" : staSsid_[0] ? " down" : "",
-               st == 2 ? WiFi.localIP().toString().c_str() : "", kHost, static_cast<unsigned long>(estopHits_), static_cast<unsigned long>(stalledDropped_));
+               st == 2 ? WiFi.localIP().toString().c_str() : "", kHost, static_cast<unsigned long>(estopHits_), static_cast<unsigned long>(webEstops_), static_cast<unsigned long>(stalledDropped_));
 }
 
 // ":P..."/"#P..." lines from the page go to loop() like any other serial source

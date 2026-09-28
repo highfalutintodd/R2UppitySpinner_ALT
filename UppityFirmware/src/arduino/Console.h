@@ -55,6 +55,7 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     // Dispatcher::ConfigHandler
     void onConfig(const Command& c, const char* line, ReqSource src) override;
 
+    static const char* buildId();
     void printState(); void printConfig(); void printCal(); void printStatus(); void printHelp(); void printV3(); void printSequences();
   private:
     void applySettings(bool boot);

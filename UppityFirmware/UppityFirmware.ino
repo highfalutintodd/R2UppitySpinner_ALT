@@ -95,7 +95,7 @@ void setup() {
     d.seq = &gSeq; d.disp = &gDisp; d.dir = &gDir; d.hal = &gHal; d.usb = &Serial; d.cmd = &Serial2; d.log = &gLog; d.web = &gWebLines;
     gConsole.begin(d);                                 // from here on every line also lands in the log ring
     Serial.println();
-    gConsole.printf("Uppity Spinner ALT v%s  phase 3 (%s %s)", UPPITY_FW_VERSION, __DATE__, __TIME__);
+    gConsole.printf("Uppity Spinner ALT v%s  phase 3  build %s", UPPITY_FW_VERSION, Console::buildId());
     gEstop.setPanic(panicHook, nullptr);
     bool halOk = gHal.begin();
     gConsole.printf("HAL=%s%s", halOk ? "ok" : "FAILED ", halOk ? "" : gHal.lastError());
