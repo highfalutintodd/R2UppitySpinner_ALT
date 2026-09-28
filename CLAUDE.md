@@ -68,16 +68,24 @@ make -C UppityFirmware/test/native test            # host tests (UBSan on; `make
 arduino-cli compile --profile uppity UppityFirmware # ESP32, core 3.3.4 pinned in sketch.yaml
 ```
 Profile `uppity` = `esp32:esp32:esp32:PartitionScheme=min_spiffs,FlashSize=4M`. Baseline at
-Phase 0: 314 KB of 1,966,080 (15 %); end of Phase 1 bench: 381 KB (19 %); Phase 2: 408 KB; Phase 3 (WiFi): 1,139 KB (57 %). Paths under this repo
+Phase 0: 314 KB of 1,966,080 (15 %); end of Phase 1 bench: 381 KB (19 %); Phase 2: 408 KB; Phase 3 (WiFi): 1,139 KB (57 %);
+Phase 4 (full page, 24 KB gzipped): 1,174 KB (59 %). Paths under this repo
 contain spaces: always quote them. `arduino-cli` 1.5.1 is installed via Homebrew; the ESP32
 core 3.3.4 is installed; Apple Silicon needs Rosetta 2 for arduino-cli's `ctags` (installed
 2026-09-19). Todd flashes from the Terminal app with the three commands at the top of
-the current phase's bench doc (`docs/BENCH-PHASE3.md`). Work lands on a session worktree branch;
+the current phase's bench doc (`docs/BENCH-PHASE4.md`; OTA with `espota.py`). Work lands on a session worktree branch;
 Todd fast-forwards `v4-rewrite` in the main checkout himself (Claude's own merge attempts are
 blocked by the tool policy): `git -C "<repo>" merge --ff-only <session branch>`.
 
 Known local quirk: AddressSanitizer deadlocks in its own initialiser on this macOS build
 (Darwin 25, Apple clang 17), so the default test build uses UBSan only.
+
+Web page: `python3 webui/dev-server.py` (or the `uppity-dev` entry in `.claude/launch.json`,
+which is gitignored and may need re-creating in a new worktree) serves `webui/index.html` against
+a simulated board at http://127.0.0.1:8765; the in-app browser can open it. After any page edit,
+`python3 webui/build-assets.py` regenerates `WebAssets.h`, and `node --check` on the extracted
+script catches syntax errors. The dev server is a stand-in for the API shape, not the motion core:
+check new state fields against what `Net.cpp`/`Console.cpp` actually write.
 
 ---
 
@@ -89,7 +97,7 @@ Known local quirk: AddressSanitizer deadlocks in its own initialiser on this mac
 | 1 Motion core + USB console | **Bench-verified on Todd's 19:1 periscope 2026-09-19/20** (branch `v4-rewrite`): every step of docs/BENCH-PHASE1.md incl. calibration and the extended rotary set; 82 host tests; ESP32 build 381 KB. Fixes from the bench are listed in that doc's results section (limit-edge contradiction guard, `#PINVERT`/`#PTRAVEL`/`#PSAFESPIN`/`#PROTARYTPR`/`#PHOMEPARK`/`#PWIGGLE`/`#PV3` bench commands, `:PH` ends on the switch and homes after characterising, top-only safe-spin default, switch-only two-move park that reproduces v3's home spot, rest-switch hold filter, tick-walking short rotary moves). |
 | 2 Command layer + settings | **Bench-passed 2026-09-20 evening** (commit `c0fc379`, fixes `e6e0602`): settings persist across a power cycle with a one-shot conservative v3 import, `#P<KEY>[=]<value>` + replayable `#PCONFIG`, command UART with its own assembler, non-blocking sequencer, stored sequences (Todd does not use them), random director, `#PRANDOMLIGHT`, trigger inputs, status LED. Todd's one-time lines after a fresh flash: `#PINVERT1 #PTRAVEL1150 #PROTARYTPR11855 #PUNLOCK` (safe-spin 904 comes from the v3 import). Four log findings fixed in `e6e0602` (nearest-zero home after a spin, TICK spam, home-if-needed for random, `:PP0` report); that fix build's re-test passed on the droid 2026-09-27 (all four fixes and `#PRANDOMLIGHT` confirmed; log in docs/BENCH-PHASE2.md results). Not yet tested: command UART, trigger inputs. 110 host tests; 408 KB. |
 | 3 Network + minimal UI | **Bench-verified 2026-09-27** (commits `67e6587`…`7b35682`, build `0551078b`): AP always up, optional home network with backoff, captive DNS, mDNS `uppity.local`, web task on core 0 with a 400 ms stall guard, JSON API, one gzipped Operate+console page, 16 KB log ring, OTA (`espota.py`; refused while armed), settings schema 3. E-STOP from the page lands mid-move via a dedicated port-81 listener plus four page channels with retries; a new command interrupts a running seek or rotation, and the supervisor waits for rest after any interrupted job. Four bench runs and their fixes: docs/BENCH-PHASE3.md. Not yet tested: two phones, command UART, trigger inputs. |
-| 4 Full web UI | **Next.** Start from **docs/PHASE4-BRIEF.md** (state, lessons, API, scope in build order, Todd's workflow, the session-start prompt). Sequences page parked (Todd does not use them). |
+| 4 Full web UI | **Implemented 2026-09-27, bench pending** (`docs/BENCH-PHASE4.md`): four pages (Operate, Setup, Diagnostics, Rescue) with banners and the unchanged E-STOP; Setup forms over every key with inline `(saved)` confirmation, WiFi, firmware upload, factory reset; Diagnostics (live sensors, rotary test report, log with filter/download, `#PCONFIG` text and restore); Rescue (`#POVERRIDE` 60 s lease, hold-to-jog via `/api/jog` with the 2 s lease, `#PSETHOME`); commissioning as a pure `CommissionFlow` (`src/core/Commissioning.h`, step persisted in settings schema 4) with a **measured** safe-spin step (`#PNUDGE` under the override, `#PSAFESPINHERE`). Policy tightened: the top switch is never "inside the opening"; `alignmentSuspect` after the override. Creeps stop on the wrong limit. 139 host tests; 1,173,871 B. Sequences page parked. |
 | 5 Mesh + DroidNet | not started |
 | 6 Release | not started |
 

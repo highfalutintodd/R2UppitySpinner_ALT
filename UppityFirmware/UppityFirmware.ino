@@ -2,9 +2,10 @@
  * Uppity Spinner ALT v4 — clean-sheet firmware for the Uppity Spinner periscope PCB.
  * https://github.com/highfalutintodd/R2UppitySpinner_ALT
  *
- * Phase 3: motion core + command layer + settings in flash + networking (access point, optional
- * home network, web page with E-STOP, JSON API, log tail, OTA). Read docs/REWRITE-PLAN.md and
- * docs/BENCH-PHASE3.md before changing anything here.
+ * Phase 4: motion core + command layer + settings in flash + networking (access point, optional
+ * home network, JSON API, log tail, OTA) + the full web UI (Operate, Setup with commissioning,
+ * Diagnostics, Rescue with the 60 s override and hold-to-jog). Read docs/REWRITE-PLAN.md and
+ * docs/BENCH-PHASE4.md before changing anything here.
  *
  * Licensed under the GNU Lesser General Public License v2.1 (see LICENSE).
  */
@@ -74,6 +75,7 @@ static void drainEvents() {
     while (gEvents.pop(e)) {
         if (e.code == Ev::LightKit) gI2c.setLightKit(static_cast<uint8_t>(e.a));
         if (e.code == Ev::Estop) gConsole.noteEstop(e.b != 0);
+        gConsole.onEvent(e);                                                        // commissioning watches these; hints for common failures
         if (e.code == Ev::Tick) {                                                   // quiet unless the tick is stressed
             static int32_t lastLate = 0;
             bool newLate = e.b != lastLate; lastLate = e.b;
@@ -95,7 +97,7 @@ void setup() {
     d.seq = &gSeq; d.disp = &gDisp; d.dir = &gDir; d.hal = &gHal; d.usb = &Serial; d.cmd = &Serial2; d.log = &gLog; d.web = &gWebLines;
     gConsole.begin(d);                                 // from here on every line also lands in the log ring
     Serial.println();
-    gConsole.printf("Uppity Spinner ALT v%s  phase 3  build %s", UPPITY_FW_VERSION, Console::buildId());
+    gConsole.printf("Uppity Spinner ALT v%s  phase 4  build %s", UPPITY_FW_VERSION, Console::buildId());
     gEstop.setPanic(panicHook, nullptr);
     bool halOk = gHal.begin();
     gConsole.printf("HAL=%s%s", halOk ? "ok" : "FAILED ", halOk ? "" : gHal.lastError());
@@ -114,7 +116,7 @@ void setup() {
     // The radio comes up before the 1 kHz control task: WiFi bring-up stalls both cores for tens of
     // milliseconds (flash access with the cache off) and would otherwise show as late ticks. The
     // E-STOP latch and its panic hook already exist, and nothing can move until the task runs.
-    Net::Deps nd; nd.console = &gConsole; nd.settings = &gConsole.settings(); nd.pub = &gSnapshot; nd.estop = &gEstop; nd.sup = &gSup; nd.lines = &gWebLines; nd.log = &gLog;
+    Net::Deps nd; nd.console = &gConsole; nd.settings = &gConsole.settings(); nd.pub = &gSnapshot; nd.estop = &gEstop; nd.sup = &gSup; nd.lines = &gWebLines; nd.log = &gLog; nd.q = &gQueue;
     gNet.begin(nd);
     gConsole.setNet(&gNetStatus);
     bool taskOk = gTask.start(gSup);

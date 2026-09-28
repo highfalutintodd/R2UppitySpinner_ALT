@@ -185,12 +185,13 @@ struct CreepParams {
     bool     jog = false;         // jog: lease-based, no stall exit; else wizard creep
     Ms       stallMs = 1500;      // wizard only
     Ms       maxMs = 30000;       // wizard only
+    Ticks    stopAfter = 0;       // step ("#PNUDGE"): stop after this much travel; 0 = run to a limit (or the lease)
 };
 
 class LifterCreep {
   public:
     static constexpr Ms kBrakeMs = 60;
-    void start(const CreepParams& p, Ticks current, Ms now) { p_ = p; startMs_ = now; lastTicks_ = current; lastMoveMs_ = now; braking_ = false; finished_ = false; }
+    void start(const CreepParams& p, Ticks current, Ms now) { p_ = p; startMs_ = now; start_ = current; lastTicks_ = current; lastMoveMs_ = now; braking_ = false; finished_ = false; primed_ = false; }
     StepOutcome step(const TickInputs& in, BridgeCommand& out) {
         Ticks pos = in.lifterTicks; Ms now = in.nowMs;
         StepOutcome o; out = brakeCmd();
@@ -198,7 +199,15 @@ class LifterCreep {
         if (universalExit(in, in.lifterDiag, o)) { pending_ = o; finished_ = true; return pending_; }
         if (braking_) { if (static_cast<int32_t>(now - brakeUntil_) >= 0) { finished_ = true; return pending_; } return StepOutcome::running(); }
         if ((p_.dir > 0 && in.topLimit) || (p_.dir < 0 && in.bottomLimit)) return beginBrake(StepOutcome::done(JobResult::DoneLimit, Reason::LimitReached, pos), now);
+        // The switch at the end we are moving AWAY from can only make if the mast is going the
+        // other way: a reversed mechanism (v3's "inverted") or swapped limit wires. The encoder
+        // rides the motor shaft, so it cannot tell; the switches can. Stop at once instead of
+        // driving on into the mechanical stop.
+        bool away = p_.dir > 0 ? in.bottomLimit : in.topLimit;
+        if (primed_ && away && !awayWas_) return beginBrake(StepOutcome::failed(JobResult::Failed, Reason::WrongLimit, pos), now);
+        awayWas_ = away; primed_ = true;
         if (p_.dir < 0 && pos <= p_.floorTicks) return beginBrake(StepOutcome::done(JobResult::Clamped, Reason::RotaryNotHome, pos), now);
+        if (p_.stopAfter > 0 && (pos - start_) * p_.dir >= p_.stopAfter) return beginBrake(StepOutcome::done(JobResult::DoneTarget, Reason::TargetReached, pos), now);
         if (p_.jog) {
             if (!in.jogLeaseLive) return beginBrake(StepOutcome::done(JobResult::Done, Reason::LeaseExpired, pos), now);
         } else {
@@ -211,12 +220,13 @@ class LifterCreep {
     }
     int dir() const { return p_.dir; }
     bool jog() const { return p_.jog; }
+    Ticks stopAfter() const { return p_.stopAfter; }
   private:
     StepOutcome beginBrake(StepOutcome pending, Ms now) { pending_ = pending; brakeUntil_ = now + kBrakeMs; braking_ = true; return StepOutcome::running(); }
     CreepParams p_;
     Ms startMs_ = 0, lastMoveMs_ = 0, brakeUntil_ = 0;
-    Ticks lastTicks_ = 0;
-    bool braking_ = false, finished_ = false;
+    Ticks start_ = 0, lastTicks_ = 0;
+    bool braking_ = false, finished_ = false, primed_ = false, awayWas_ = false;
     StepOutcome pending_;
 };
 
@@ -284,6 +294,16 @@ class LifterCalibrate {
     Phase phase() const { return phase_; }
     bool takePhaseChanged() { bool c = phaseChanged_; phaseChanged_ = false; return c; }
     const CalibrateResult& result() const { return res_; }
+    // Progress for the web page: P1 = limit-to-limit passes done (0..4), P2 = the power being
+    // tried (permille), P3 = the 5 % slot being measured (0..20); 0 otherwise.
+    int16_t progress() const {
+        switch (phase_) {
+            case Phase::P1Travel: return static_cast<int16_t>(sub_);
+            case Phase::P2MinUp: case Phase::P2MinDown: return static_cast<int16_t>(tryPower_);
+            case Phase::P3Up: case Phase::P3Down: return static_cast<int16_t>(slotIdx_);
+            default: return 0;
+        }
+    }
 
   private:
     // ---- creep helper (continuous drive to a limit) ----

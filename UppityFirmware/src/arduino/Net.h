@@ -37,6 +37,7 @@ class Net {
     struct Deps {
         Console* console = nullptr; Settings* settings = nullptr; SnapshotPublisher* pub = nullptr;
         EstopLatch* estop = nullptr; MotionSupervisor* sup = nullptr; WebLineQueue* lines = nullptr; LogRing* log = nullptr;
+        CommandQueue* q = nullptr;                    // only for the jog lease (an atomic): the jog itself starts as a #PJOG line
     };
     bool begin(const Deps& d);                    // radio, routes, task; false = WiFi disabled in settings
     bool up() const { return up_; }
@@ -67,6 +68,7 @@ class Net {
     void handleConfigGet();
     void handleConfigPost();
     void handleLog();
+    void handleJog();
     void handleUpdateDone();
     void handleUpdateUpload();
 
@@ -88,7 +90,7 @@ class Net {
     int otaLoggedPct_ = -1;
     uint32_t staNextTryMs_ = 0, staBackoffMs_ = 15000;
     bool otaRefused_ = false, otaFailed_ = false;
-    char json_[2048];
+    char json_[3072];
     char logBuf_[4096];
     char logJson_[6144];
     void* task_ = nullptr;

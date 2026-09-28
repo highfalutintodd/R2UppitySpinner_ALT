@@ -12,6 +12,13 @@
 //     override may bypass this.
 //  3. With the lifter position UNKNOWN only upward motion is allowed. No override.
 //  4. E-STOP latched, commissioning lock, or a blocking fault refuses everything.
+//
+// Rule 2 has one exemption: a head at or below the safe-spin height is inside the dome opening
+// and therefore aligned, because rules 1 and 2 never let it get there turned. The rescue
+// override breaks that argument (it lets a turned head descend, and lets the rotary jog below
+// the safe height), so the supervisor raises `alignmentSuspect` when it does either, and the
+// exemption is off until the head is home again. The top limit switch is never "inside the
+// opening", whatever the safe-spin setting says.
 namespace uppity {
 
 struct PolicyContext {
@@ -27,6 +34,7 @@ struct PolicyContext {
     bool  rotaryFault = false;
     bool  globalFault = false;
     bool  overrideLive = false;     // rescue override lease
+    bool  alignmentSuspect = false; // the override let the head turn or descend unaligned; cleared by a home
     bool  topLimit = false, bottomLimit = false, homeSwitch = false;
 };
 
@@ -77,10 +85,13 @@ inline Decision checkLifterSeek(const PolicyContext& c, Ticks current, Ticks tar
     if (c.lifterFault) { d.verdict = Verdict::Refuse; d.reason = Reason::DiagFault; return d; }
     if (target < current) {
         if (c.lifter.confidence == LifterConfidence::Unknown) { d.verdict = Verdict::Refuse; d.reason = Reason::LifterUnknown; return d; }
+        if (rotaryIsHome(c) || c.overrideLive) return d;
         // A head already at or below the safe-spin height is inside the dome opening and
-        // therefore aligned (the rotary is refused down there); it may keep descending.
-        bool crossing = current > c.safeSpinTicks;
-        Ticks floor = (rotaryIsHome(c) || c.overrideLive || !crossing) ? 0 : c.safeSpinTicks;
+        // therefore aligned (the rotary is refused down there); it may keep descending, unless
+        // the override has since let it turn or come down unaligned.
+        bool crossing = current > c.safeSpinTicks || c.topLimit;
+        if (!crossing && c.alignmentSuspect) { d.verdict = Verdict::Refuse; d.reason = Reason::RotaryNotHome; return d; }
+        Ticks floor = crossing ? c.safeSpinTicks : 0;
         if (target < floor) {
             d.verdict = Verdict::Clamp; d.reason = Reason::RotaryNotHome; d.value = floor; return d;
         }
@@ -96,7 +107,10 @@ inline Decision checkLifterCreep(const PolicyContext& c, int dir) {
     d.value = -2147483647;
     if (dir < 0) {
         if (c.lifter.confidence == LifterConfidence::Unknown) { d.verdict = Verdict::Refuse; d.reason = Reason::LifterUnknown; return d; }
-        if (!(rotaryIsHome(c) || c.overrideLive) && c.lifter.ticks > c.safeSpinTicks) d.value = c.safeSpinTicks;   // stop at the threshold
+        if (rotaryIsHome(c) || c.overrideLive) return d;
+        bool crossing = c.lifter.ticks > c.safeSpinTicks || c.topLimit;
+        if (!crossing && c.alignmentSuspect) { d.verdict = Verdict::Refuse; d.reason = Reason::RotaryNotHome; return d; }
+        if (crossing) d.value = c.safeSpinTicks;                  // stop at the threshold
     }
     return d;
 }

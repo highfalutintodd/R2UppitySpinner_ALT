@@ -1,5 +1,10 @@
 # Phase 4 brief — full web UI
 
+**Status 2026-09-27 (night): implemented** on branch `claude/uppity-spinner-phase-4-1e5680`
+(what was built and where it deviates: `docs/REWRITE-PLAN.md` §5, "Status 2026-09-27 (night)");
+the bench procedure is `docs/BENCH-PHASE4.md`. This brief is kept as the record of what Phase 4
+started from.
+
 For the next session. Read `CLAUDE.md` first (hard rules, definition of done), then this file,
 then `docs/REWRITE-PLAN.md` §4 (the page designs) and §5 (the phase table). The bench docs
 `docs/BENCH-PHASE1.md` … `BENCH-PHASE3.md` hold every number measured on Todd's periscope and

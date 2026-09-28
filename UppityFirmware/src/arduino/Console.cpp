@@ -20,7 +20,31 @@ const char* Console::buildId() {
     return id;
 }
 
-void Console::begin(const Deps& d) { d_ = d; }
+// The commissioning flow's view of the console: settings, the job queue, the sequencer and the
+// random director, all touched from loop() only (the flow runs from Console::update and onConfig).
+struct Console::FlowHost final : CommissionFlow::Host {
+    Console& c;
+    explicit FlowHost(Console& con) : c(con) {}
+    Settings& settings() override { return c.s_; }
+    const Calibration& calibration() override { return c.cal_; }
+    const CharacteriseResult& characterisation() override { return c.d_.sup->lastCharacterisation(); }
+    void settingsChanged() override { c.applySettings(false); c.d_.persist->requestSaveSettings(); }
+    uint32_t pushJob(const MotionRequest& r) override { c.stopRandom("commissioning"); c.d_.seq->clear("commissioning"); return c.d_.q->push(r); }
+    bool runChain(const Command* els, int n) override { return c.d_.seq->submit(els, n, ReqSource::Commission, false); }
+    bool chainActive() override { return c.d_.seq->active(); }
+    void cancelMotion() override { c.stopRandom("commissioning stopped"); c.d_.seq->clear("commissioning stopped"); c.d_.q->cancel(); }
+    void randomStart(int level) override { c.d_.dir->startLevel(level, millis()); }
+    void randomStop() override { c.stopRandom("commissioning"); }
+    uint32_t randomActions() override { return c.d_.dir->actions(); }
+    bool expanderOk() override { return c.d_.i2c->ok(); }
+};
+
+void Console::begin(const Deps& d) {
+    d_ = d;
+    static FlowHost host(*this);
+    host_ = &host;
+    flow_.begin(host, *this);
+}
 
 void Console::line(const char* text) {
     d_.usb->println(text);
@@ -46,6 +70,23 @@ void Console::writeStateJson(JsonWriter& j) {
     j.kv("theme", static_cast<int>(s_.theme));
     j.kv("build", buildId());
     j.kv("inputs", static_cast<int>(d_.i2c->inputs()));
+    j.kv("expander", d_.i2c->ok());
+    j.key("commission"); j.beginObject();
+    j.kv("step", static_cast<int>(flow_.step())); j.kv("name", CommissionFlow::stepName(flow_.step())); j.kv("active", flow_.active());
+    j.kv("run", CommissionFlow::runName(flow_.run())); j.kv("msg", flow_.message()); j.kv("detail", static_cast<long>(flow_.detail()));
+    j.kv("prevSafeSpin", static_cast<long>(flow_.previousSafeSpin()));
+    j.endObject();
+}
+
+void Console::writePowersJson(JsonWriter& j) {
+    PowerSet p = powerSet(s_, cal_);
+    j.beginObject();
+    j.kv("floorUp", static_cast<int>(p.floorUp / 10)); j.kv("floorDown", static_cast<int>(p.floorDown / 10));
+    j.kv("slowUp", static_cast<int>(p.slowUp / 10)); j.kv("slowDown", static_cast<int>(p.slowDown / 10)); j.kv("cap", static_cast<int>(p.cap / 10));
+    j.kv("rotaryMin", static_cast<int>(p.rotaryMinPct)); j.kv("rotarySlow", static_cast<int>(p.rotarySlowPct));
+    j.kv("profile", profileFor(static_cast<LifterMotor>(s_.motor)).name);
+    j.kv("travel", static_cast<long>(effectiveTravel(s_, cal_)));
+    j.endObject();
 }
 
 // ---------------------------------------------------------------- boot / settings
@@ -67,7 +108,9 @@ void Console::boot() {
 }
 
 void Console::applySettings(bool boot) {
-    d_.sup->setConfig(toMotionConfig(s_, cal_));
+    MotionConfig m = toMotionConfig(s_, cal_);
+    m.commissioningActive = flow_.active();          // the flow lifts the lock for its own steps while it is active
+    d_.sup->setConfig(m);
     if (boot) {
         d_.hal->setSwitchActiveLow(SwitchId::LifterTop, s_.lifterLimitsNC == 0);
         d_.hal->setSwitchActiveLow(SwitchId::LifterBottom, s_.lifterLimitsNC == 0);
@@ -133,8 +176,10 @@ void Console::update(Ms now) {
         int v = triggers_.feed(d_.i2c->inputs());
         if (v) { char l[8]; std::snprintf(l, sizeof l, ":PS%d", v); printf("TRIGGER=%d", v); d_.disp->handleLine(l, ReqSource::Trigger, now); }
     }
-    // random director
     Snapshot snap; if (!d_.pub->read(snap)) return;
+    // commissioning: watches its own programs and queues the next stage
+    flow_.update(snap, now);
+    // random director
     Command chain[Sequencer::kMaxElements];
     int n = d_.dir->next(now, !d_.seq->active(), snap, limits(), chain, Sequencer::kMaxElements);
     if (n > 0) d_.disp->submitDirector(chain, n);
@@ -150,6 +195,86 @@ void Console::handleEcosystemLine(const char* l) {
 
 void Console::noteEstop(bool latched) {
     if (latched) { stopRandom("ESTOP"); d_.seq->clear("ESTOP"); }
+}
+
+void Console::onEvent(const Event& e) {
+    flow_.onEvent(e);
+    if (e.code == Ev::JobEnd && e.c == static_cast<int32_t>(Reason::NoEdge) && e.a == static_cast<int32_t>(JobKind::RotaryCharacterise))
+        line("HINT=the home switch never closed: check its wiring; a normally-closed switch needs #PROTARYNC1 then #PRESTART");
+    if (e.code == Ev::JobEnd && e.c == static_cast<int32_t>(Reason::WrongLimit))
+        printf("HINT=the mast moved the other way (the switch it was leaving closed again): #PINVERT%d, then try again", s_.inverted ? 0 : 1);
+}
+
+// Rescue (docs/REWRITE-PLAN.md §4): the 60 s override, hold-to-jog, the lifter nudge, "set home here".
+void Console::onRescue(const Command& c, ReqSource src) {
+    Ms now = millis();
+    switch (c.verb) {
+        case Verb::Override:
+            if (c.a == 0) { d_.q->setOverride(0); line("OVERRIDE=off"); return; }
+            // an attended, local action: never from the Marcduino bus (other boards) or the mesh
+            if (src != ReqSource::SerialUsb && src != ReqSource::Web) { line("OVERRIDE=refused (only from the USB console or the web page)"); return; }
+            if (d_.estop->tripped()) { line("OVERRIDE=refused (E-STOP latched: reset it first)"); return; }
+            d_.q->setOverride(now + CommandQueue::kOverrideMs);
+            line("OVERRIDE=on (60 s; #POVERRIDE0 ends it)");
+            return;
+        case Verb::Jog: {
+            if (c.letter == 0) { d_.q->jogRelease(now); return; }
+            stopRandom("jog"); d_.seq->clear("jog");
+            // A typed #PJOG runs for one lease (2 s). The page's lease comes from /api/jog alone: renewing
+            // it here too would restart a jog whose button was already released before this line ran.
+            if (src != ReqSource::Web) d_.q->jogKeepalive(now);
+            PowerSet pw = powerSet(s_, cal_);
+            MotionRequest r; r.source = src;
+            int pct;
+            if (c.letter == 'L') { pct = clampv<int>(c.a ? c.a : (c.b > 0 ? pw.slowUp : pw.slowDown) / 10, 12, pw.cap / 10); r.kind = JobKind::LifterCreep; r.a = c.b; r.b = pct * 10; r.c = 1; }
+            else { pct = clampv<int>(c.a ? c.a : pw.rotarySlowPct, 12, 100); r.kind = JobKind::RotaryJog; r.a = c.b * pct * 10; }
+            uint32_t id = d_.q->push(r);
+            if (id == 0) { line("BUSY=queue_full"); return; }
+            printf("JOG=%s %s at %d%% id=%lu (held while the page renews it; stops 2 s after the last renewal)", c.letter == 'L' ? "lifter" : "rotary",
+                   c.letter == 'L' ? (c.b > 0 ? "up" : "down") : (c.b > 0 ? "+" : "-"), pct, static_cast<unsigned long>(id));
+            return;
+        }
+        case Verb::Nudge: {
+            stopRandom("nudge"); d_.seq->clear("nudge");
+            int32_t t = clampv<int32_t>(c.a, -MotionSupervisor::kMaxStepTicks, MotionSupervisor::kMaxStepTicks);
+            PowerSet pw = powerSet(s_, cal_);
+            MotionRequest r; r.kind = JobKind::LifterCreep; r.a = t; r.c = 2; r.source = src;
+            uint32_t id = d_.q->push(r);
+            if (id == 0) { line("BUSY=queue_full"); return; }
+            printf("NUDGE=%+ld ticks at %d%% id=%lu (continuous; stops on a switch, a stall, the policy floor, or after %ld ticks)", static_cast<long>(t),
+                   (t > 0 ? pw.slowUp : pw.slowDown) / 10, static_cast<unsigned long>(id), static_cast<long>(t < 0 ? -t : t));
+            return;
+        }
+        case Verb::SetHome:
+            if (d_.estop->tripped()) { line("SETHOME=refused (E-STOP latched)"); return; }
+            if (s_.rotaryDisabled) { line("SETHOME=refused (the rotary is disabled)"); return; }
+            if (refuseWhileMoving("SETHOME")) return;
+            d_.sup->requestSetRotaryHome();
+            line("SETHOME=requested (the head's position now becomes home)");
+            return;
+        default: return;
+    }
+}
+
+void Console::onCommission(const Command& c) {
+    Snapshot snap; if (!d_.pub->read(snap)) { line("BUSY"); return; }
+    switch (c.verb) {
+        case Verb::SafeSpinHere: flow_.safeSpinHere(snap); return;
+        case Verb::Commission:
+            switch (c.letter) {
+                case 'S': flow_.start(snap); return;
+                case 'P': flow_.stop("operator"); return;
+                case 'R': flow_.runStep(snap, millis()); return;
+                case 'N': flow_.next(snap); return;
+                case 'X': flow_.reset(); return;
+                case 'B': flow_.bypass(); return;
+                default:
+                    printf("COMMISSION=step %d/%d (%s) active=%d run=%s commissioned=%u%s%s", flow_.step(), CommissionFlow::kSteps, CommissionFlow::stepName(flow_.step()),
+                           flow_.active(), CommissionFlow::runName(flow_.run()), s_.commissioned, flow_.message()[0] ? " msg=" : "", flow_.message());
+                    return;
+            }
+        default: return;
+    }
 }
 
 // ---------------------------------------------------------------- sequencer listener
@@ -184,8 +309,10 @@ void Console::pushOperatorJob(JobKind k, int32_t a) {
 }
 
 void Console::onConfig(const Command& c, const char* raw, ReqSource src) {
-    (void)raw; (void)src;
+    (void)raw;
     switch (c.verb) {
+        case Verb::Override: case Verb::Jog: case Verb::Nudge: case Verb::SetHome: onRescue(c, src); break;
+        case Verb::Commission: case Verb::SafeSpinHere: onCommission(c); break;
         case Verb::Resume: line(d_.estop->release(millis()) ? "ESTOP=released" : "ESTOP=not_latched"); break;
         case Verb::State: printState(); break;
         case Verb::Status: printStatus(); break;
@@ -273,9 +400,8 @@ void Console::setKey(const Command& c) {
     bool changed = std::memcmp(&before, &s_, sizeof s_) != 0;
     const char* note = "";
     if (std::strcmp(k->name, "MOTOR") == 0 && before.motor != s_.motor) {
-        // a different lifter is a different mechanism: everything measured on the old one goes
-        s_.commissioned = 0; s_.travelTicks = 0; s_.safeSpinTicks = 0; s_.minPowerUpPct = s_.minPowerDownPct = s_.approachPowerPct = 0;
-        note = " (new profile: LOCKED again, travel/safe-spin/min powers cleared, calibration ignored until #PSC)";
+        onMotorChanged(s_);
+        note = " (new profile: LOCKED again, travel/safe-spin/min powers cleared, calibration ignored until #PSC, commissioning back to step 1)";
     } else if (std::strcmp(k->name, "INVERT") == 0) note = " (re-referenced from the limit switches)";
     else if (std::strcmp(k->name, "TRAVEL") == 0 && s_.safeSpinTicks) note = " (SAFESPIN kept: it is ticks above the bottom switch, not a share of travel)";
     else if (std::strcmp(k->name, "ROTARYTPR") == 0) note = s_.ticksPerRev > 0 ? " (marked confident: no two-turn measurement on the first rotary move)" : " (cleared: the next rotary move measures it)";
@@ -293,12 +419,12 @@ void Console::setKey(const Command& c) {
 
 void Console::printState() {
     Snapshot s; if (!d_.pub->read(s)) return;
-    printf("STATE=%s lifter=%ld/%ld(%d%%) lifterConf=%s rotary=%ld ticks %ddeg homeConf=%s tpr=%.1f",
+    printf("STATE=%s lifter=%ld/%ld(%d%%) lifterConf=%s rotary=%ld ticks %ddeg homeConf=%s(%s) tpr=%.1f",
            stateName(static_cast<int>(s.state)), (long)s.lifterTicks, (long)s.lifterTravel, s.lifterPct, lifterConfName(static_cast<int>(s.lifterConf)),
-           (long)s.rotaryTicks, s.rotaryDeg, homeConfName(static_cast<int>(s.homeConf)), s.ticksPerRev);
-    printf("LIMITS=top:%d bot:%d home:%d diag=[%d %d] enabled=%d faults=0x%lx estop=%d(%s) override=%lus",
+           (long)s.rotaryTicks, s.rotaryDeg, homeConfName(static_cast<int>(s.homeConf)), homeProvName(static_cast<int>(s.homeProv)), s.ticksPerRev);
+    printf("LIMITS=top:%d bot:%d home:%d diag=[%d %d] enabled=%d faults=0x%lx estop=%d(%s) override=%lus alignment=%s",
            s.topLimit, s.bottomLimit, s.homeSwitch, s.lifterDiag, s.rotaryDiag, s.enabled, (unsigned long)s.faults, s.estop,
-           EstopLatch::sourceName(static_cast<EstopLatch::Source>(s.estopSource)), (unsigned long)(s.overrideRemainingMs / 1000));
+           EstopLatch::sourceName(static_cast<EstopLatch::Source>(s.estopSource)), (unsigned long)(s.overrideRemainingMs / 1000), s.alignmentSuspect ? "SUSPECT" : "ok");
     printf("JOB=%s id=%lu last=%s %s %s (id %lu) tick=[max %luus late %lu n %lu]", jobName(static_cast<int>(s.activeJob)), (unsigned long)s.activeJobId, jobName(static_cast<int>(s.lastJob)),
            resultName(static_cast<int>(s.lastResult)), reasonName(s.lastReason), (unsigned long)s.lastProgramId, (unsigned long)s.cycleUsMax, (unsigned long)s.lateTicks, (unsigned long)s.tickCount);
     printf("SEQ=%s random=%s light=%u inputs=%u persist=%s", d_.seq->active() ? "running" : "idle", d_.dir->active() ? "on" : "off", d_.i2c->lightKit(), d_.i2c->inputs(), d_.persist->pending() ? "pending" : "saved");
@@ -336,7 +462,7 @@ void Console::printSequences() {
 
 void Console::printStatus() {
     Ms up = elapsed(millis(), bootMs_) / 1000;
-    printf("VERSION=%s phase3 build %s", UPPITY_FW_VERSION, buildId());
+    printf("VERSION=%s phase4 build %s", UPPITY_FW_VERSION, buildId());
     printf("UPTIME=%lus commissioned=%u random=%s seq=%s persist=%s saves=%lu", static_cast<unsigned long>(up), s_.commissioned, d_.dir->active() ? "on" : "off", d_.seq->active() ? "running" : "idle", d_.persist->pending() ? "pending" : "saved", static_cast<unsigned long>(d_.persist->saves()));
     printf("SERIAL=usb+cmd@%lu id=%u dedup=%ums droppedForId=%lu duplicates=%lu cmdTx=%u", static_cast<unsigned long>(s_.cmdBaud), s_.marcId, s_.dedupMs, static_cast<unsigned long>(d_.disp->droppedForId()), static_cast<unsigned long>(d_.disp->droppedDuplicates()), s_.cmdTx);
     printf("EXPANDER=%s errors=%lu inputs=%u light=%u", d_.i2c->ok() ? "ok" : "FAILING", static_cast<unsigned long>(d_.i2c->errors()), d_.i2c->inputs(), d_.i2c->lightKit());
@@ -356,6 +482,8 @@ void Console::printHelp() {
     line("CMDS=:PP<0-100>[,spd] :PPR :PH[spd] :PA<deg>[,spd][,max] :PAR :PD<deg>[,spd][,max] :PDR :PR<+-spd> :PRR[max] :PL<0-7> :PLR :PW[R]<s> :PS<n> :PM :PMG/M/A :PM,lift,rot,min,max :PX  (chain with ':')");
     line("CFG=#PRESUME #PSTATE #PSTATUS #PCONFIG #PCAL #PSC #PROTARYTEST[n] #PCLEARFAULT #PUNLOCK #PLOCK #PS<n>:<seq> #PL #PD<n> #PSEQNAME<n>=<name> #PZERO #PR #PNCL/#PNOL/#PNCR/#PNOR #PV3 #PV3IMPORT #PRESTART #PFACTORY #PHELP");
     line("WIFI=#PSSID=<home network> #PPASS=<its password> #PAPPASS=<access point password> #PWIFI0/1 #PAPCHANNEL<1-13> #PWIFIRESET (all after #PRESTART)");
+    line("RESCUE=#POVERRIDE (60 s) #POVERRIDE0 #PJOGL+/- #PJOGR+/-[pct] (2 s) #PNUDGE<+-ticks> #PSETHOME");
+    line("SETUP=#PCOMMISSION (status) #PCOMMISSIONSTART #PCOMMISSIONRUN #PCOMMISSIONNEXT #PCOMMISSIONSTOP #PCOMMISSIONRESET #PCOMMISSIONBYPASS #PSAFESPINHERE (step 6)");
     String keys = "KEYS=";
     for (int i = 0; i < kSettingKeyCount; ++i) { keys += "#P"; keys += kSettingKeys[i].name; keys += ' '; }
     keys += " (#PKEY<n> or #PKEY=<n> sets and saves, #PKEY reads)";

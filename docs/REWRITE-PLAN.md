@@ -559,6 +559,34 @@ E-STOP listener, four-channel retrying E-STOP button, 400 ms stall guard, poll t
 interruption with a post-interrupt rest gate, ELF-hash build id) are recorded in that doc.
 Phase 4 starts from `docs/PHASE4-BRIEF.md`.
 
+**Status 2026-09-27 (night): Phase 4 implemented**, awaiting the bench (`docs/BENCH-PHASE4.md`).
+One page file with four pages (Operate, Setup, Diagnostics, Rescue; bottom tabs on a phone, a left
+column on a laptop), the sticky banners, and the Phase 3 E-STOP untouched. Setup: every settings key
+as a form field whose "saved" comes from the board's own `#PKEY=… (saved)` line; WiFi; firmware
+upload with progress; restart; factory reset behind a confirm panel; theme. Diagnostics: live
+sensors, the rotary test with its report lines, the log (filter, pause, download, command box),
+the `#PCONFIG` text with copy/download and a line-by-line restore. Rescue: the override
+(`#POVERRIDE`, 3 s hold, 60 s countdown, accepted only from USB or the page), hold-to-jog through
+`POST /api/jog` (renewed every 500 ms, 2 s lease, release on every way a finger can leave),
+`#PSETHOME`, clear fault. The only new endpoints are `/api/jog` and `/api/jog/stop`; everything
+else is a `#P` line. Commissioning is a pure `CommissionFlow` whose step persists in
+`Settings.commissionStep` (schema 4) and which decides every pass from the supervisor's results.
+Deviations from §4, from the bench history and the v4 policy: (1) the steps run profile, wiring,
+**lift test**, rotary, calibration, **safe-spin (measured)**, acceptance; the lift test creeps
+**up** only, because with the rotary not yet homed the policy refuses a descent from the top, and
+the way down is proven by the calibration's first move; (2) the safe-spin height is measured: RUN
+clears it (only the top counts), raises and turns the head 90° at the top, the operator lowers it
+in bounded `#PNUDGE` steps under the override, and `#PSAFESPINHERE` stores the height plus 3 % of
+travel (at least 20 ticks), accepted only in that step with the head at least 45° off home and
+below the top; (3) the one bypass is on the commissioning page (`#PCOMMISSIONBYPASS`, the same as
+`#PUNLOCK`), and Rescue links there. Safety changes that came with the override: the top switch is
+never "inside the opening" (a turned head at exactly the travel count could have been let down
+with no safe-spin set); after the override lets the head descend unaligned or jog below the safe
+height, `alignmentSuspect` refuses further descents until a home; every creep stops when the
+switch it is leaving closes again (`WRONG_LIMIT`, a reversed mechanism); the E-STOP ends the
+override and the jog lease. 139 host tests (the full seven-step commissioning runs on the
+simulator), ESP32 build 1,173,871 bytes (59 %).
+
 ---
 
 ## 6. Verification strategy
@@ -669,6 +697,13 @@ forms accepted, canonical `:P` form stored).
 New ★: `#PRESUME` (release E-STOP; deliberately not a `:P` command) · `#PSTATE` (snapshot) ·
 `#PCOMMISSION[BYPASS]` · `#P<KEY>=<VALUE>` generic setter for every Settings field · `#PHB<sec>` ·
 `#PMESH…` fields · `#PSEQNAME<n>=<name>`.
+Phase 4 ★ (implemented): `#POVERRIDE[1|0]` 60 s rescue override (on: USB console or web only;
+off: any source; refused while E-STOP latched) · `#PJOG{L|R}{+|-}[pct]` a jog for one 2 s lease
+(the page renews it through `/api/jog`) · `#PJOG0` release · `#PNUDGE<±ticks>` bounded lifter
+step (≤ 100 ticks, continuous at the calibrated minimum) · `#PSETHOME` the head is lined up,
+make this home · `#PCOMMISSION` status, `…START`, `…STOP`, `…RUN`, `…NEXT`, `…RESET`,
+`…BYPASS` · `#PSAFESPINHERE` (commissioning step 6 only). None is a chain element, so a stored
+sequence can carry none of them.
 Removed (dropped features): `#PRC*`, `#PREMOTE*`, `#PRNAME`, `#PRSECRET`, `#PRPAIR`,
 `#PRUNPAIR`, `#PRMASTERKEY*`.
 

@@ -88,8 +88,15 @@ PolicyContext MotionSupervisor::policy(const TickInputs& in) const {
     c.rotaryFault = faults_.rotaryBlocked();
     c.globalFault = faults_.globalBlocked();
     c.overrideLive = queue_.overrideLive(in.nowMs);
+    c.alignmentSuspect = alignmentSuspect_;
     c.topLimit = in.topLimit; c.bottomLimit = in.bottomLimit; c.homeSwitch = in.homeSwitch;
     return c;
+}
+
+void MotionSupervisor::markAlignmentSuspect(Ms now) {
+    if (alignmentSuspect_ || cfg_.rotaryDisabled) return;
+    alignmentSuspect_ = true;
+    emit(Ev::Alignment, 1, 0, 0, now);
 }
 
 void MotionSupervisor::updateKnowledge(const TickInputs& in, bool rotaryBusy) {
@@ -231,6 +238,8 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             p.prof = prof_;
             if (!p.fullTravel && absl(target - in.lifterTicks) < 5) { lastReason_ = Reason::AlreadyThere; emit(Ev::JobEnd, static_cast<int32_t>(s.kind), static_cast<int32_t>(JobResult::Done), static_cast<int32_t>(Reason::AlreadyThere), in.nowMs); return 0; }
             if (p.fullTravel && ((target == 0 && in.bottomLimit) || (target == travel() && in.topLimit))) { lastReason_ = Reason::AlreadyThere; emit(Ev::JobEnd, static_cast<int32_t>(s.kind), static_cast<int32_t>(JobResult::Done), static_cast<int32_t>(Reason::AlreadyThere), in.nowMs); return 0; }
+            // only the override lets an unaligned head come down into the opening: remember that it did
+            if (dir < 0 && target <= safeSpin() && c.overrideLive && !rotaryIsHome(c)) markAlignmentSuspect(in.nowMs);
             seek_.start(p, in.lifterTicks, in.nowMs);
             job_ = JobKind::LifterSeek;
             emit(Ev::JobStart, static_cast<int32_t>(job_), target, static_cast<int32_t>(programId_), in.nowMs);
@@ -238,19 +247,29 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
         }
         case JobKind::LifterCreep: {
             int dir = s.a < 0 ? -1 : 1;
+            bool step = (s.c & 2) != 0;
             Decision d = checkLifterCreep(c, dir);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
             CreepParams p;
             p.dir = dir;
-            p.jog = (s.c & 1) != 0;
+            p.jog = (s.c & 1) != 0 && !step;
             Throttle cap = effectiveMaxThrottle(cfg_.motor, cfg_.expertMode);
+            Throttle profMin = pctToThrottle(prof_->defaultMinPowerPct);
             Throttle req = static_cast<Throttle>(s.b);
-            if (p.jog) p.power = clampv<Throttle>(req, 120, cap);
-            else p.power = clampv<Throttle>(req > 0 ? req : pctToThrottle(prof_->defaultMinPowerPct), pctToThrottle(prof_->defaultMinPowerPct), cap);
+            if (p.jog || step) {
+                // jog and #PNUDGE default to the slowest power that is known to move this lifter
+                // from rest (the calibrated minimum): continuous, never pulsed, so it creeps
+                Throttle slow = dir > 0 ? cfg_.jogPowerUp : cfg_.jogPowerDown;
+                if (slow <= 0) slow = profMin;
+                p.power = clampv<Throttle>(req > 0 ? req : slow, 120, cap);
+            } else p.power = clampv<Throttle>(req > 0 ? req : profMin, profMin, cap);
+            p.stallMs = prof_->stallTimeoutMs;       // the profile's figure (700 ms on a 19:1), as the calibration's creeps use
+            if (step) p.stopAfter = clampv<Ticks>(absl(s.a), 1, kMaxStepTicks);
             p.floorTicks = d.value;
+            if (dir < 0 && c.overrideLive && !rotaryIsHome(c) && (!step || in.lifterTicks - p.stopAfter <= safeSpin())) markAlignmentSuspect(in.nowMs);
             creep_.start(p, in.lifterTicks, in.nowMs);
             job_ = JobKind::LifterCreep;
-            emit(Ev::JobStart, static_cast<int32_t>(job_), dir, static_cast<int32_t>(programId_), in.nowMs);
+            emit(Ev::JobStart, static_cast<int32_t>(job_), step ? dir * p.stopAfter : dir, static_cast<int32_t>(programId_), in.nowMs);
             return 1;
         }
         case JobKind::RotaryAbsolute:
@@ -287,6 +306,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             bool jog = s.kind == JobKind::RotaryJog;
             Decision d = checkRotary(c, jog);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
+            if (jog && !lifterAboveSafe(c)) markAlignmentSuspect(in.nowMs);    // turning inside the opening: only the override allowed it
             RotarySpinParams p;
             p.rc = &cfg_.rotary; p.jog = jog;
             p.floor = jog ? pctToThrottle(cfg_.rotary.jogFloorPct) : rotaryFloor();
@@ -444,6 +464,7 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
         lastChar_ = rchar_.result();
         emit(Ev::Measure, 1, static_cast<int32_t>(lastChar_.meanTpr * 10.f), static_cast<int32_t>(lastChar_.spreadPct * 10.f), in.nowMs);
         emit(Ev::Measure, 2, lastChar_.arcMean, lastChar_.closures, in.nowMs);
+        emit(Ev::Measure, 5, lastChar_.confident ? 2 : lastChar_.probable ? 1 : 0, lastChar_.creepFits ? 1 : 0, in.nowMs);
         if (lastChar_.confident || lastChar_.probable) {
             cfg_.rotary.ticksPerRev = lastChar_.meanTpr;
             cfg_.rotary.confident = lastChar_.confident;
@@ -516,6 +537,19 @@ void MotionSupervisor::tick(Ms now) {
     applyPendingConfig();
 
     RawInputs raw; hal_.readInputs(raw);
+
+    // Rescue "set rotary home here": the operator vouches that the head is lined up right now.
+    if (setHomeReq_.exchange(false, std::memory_order_acq_rel)) {
+        Reason why = estop_.tripped() ? Reason::Estop : cfg_.rotaryDisabled ? Reason::RotaryDisabled : job_ != JobKind::None ? Reason::Busy : Reason::None;
+        emit(Ev::HomeManual, raw.rotaryTicks, static_cast<int32_t>(rotary_.confidence), static_cast<int32_t>(why), now);
+        if (why == Reason::None) {
+            Ticks at = cfg_.rotary.homeOffsetTicks;          // the visual home is where "0 degrees" sits
+            hal_.setEncoder(Axis::Rotary, at); raw.rotaryTicks = at; rotary_.ticks = at;
+            rotary_.confidence = HomeConfidence::Latched; rotary_.provenance = HomeProvenance::Manual; rotary_.referencedAt = now;
+            faults_.clear(F_RotaryStall);
+        }
+    }
+
     debounceSwitch(top_, raw.topLimit, kLimitMakeTicks, kLimitBreakTicks);
     debounceSwitch(bottom_, raw.bottomLimit, kLimitMakeTicks, kLimitBreakTicks);
     debounceSwitch(home_, raw.homeSwitch, kHomeMakeTicks, kHomeBreakTicks);
@@ -551,6 +585,8 @@ void MotionSupervisor::tick(Ms now) {
             wasStopped_ = true;
             abortJob(JobResult::Aborted, Reason::Estop, in);
             hal_.panicStop();
+            queue_.setOverride(0);                 // a stop ends the rescue override and any jog lease: both must be asked for again
+            queue_.jogRelease(now);
             emit(Ev::Estop, static_cast<int32_t>(estop_.source()), 1, 0, now);
             if (state_ != MotionState::Stopped) { emit(Ev::StateChange, static_cast<int32_t>(state_), static_cast<int32_t>(MotionState::Stopped), 0, now); state_ = MotionState::Stopped; }
         }
@@ -565,6 +601,12 @@ void MotionSupervisor::tick(Ms now) {
     if (wasStopped_) { wasStopped_ = false; emit(Ev::Estop, static_cast<int32_t>(estop_.source()), 0, 0, now); state_ = cfg_.commissioned ? MotionState::Idle : MotionState::Locked; emit(Ev::StateChange, static_cast<int32_t>(MotionState::Stopped), static_cast<int32_t>(state_), 0, now); idleSince_ = now; }
 
     updateKnowledge(in, rotaryBusy);
+
+    // ---- alignment: a home (or the switch at rest) makes "below the safe height = aligned" true again ----
+    if (alignmentSuspect_ && job_ == JobKind::None && (cfg_.rotaryDisabled || rotaryIsHome(policy(in)))) {
+        alignmentSuspect_ = false;
+        emit(Ev::Alignment, 0, 0, 0, now);
+    }
 
     // ---- driver fault recovery: EN low 50 ms, then EN high while DIAG is re-read ----
     if (faults_.takeEnCycleRequest() && enCycle_ == 0) {
@@ -689,7 +731,21 @@ void MotionSupervisor::publish(const TickInputs& in, BridgeCommand lifterOut, Br
     s.estop = in.estop; s.estopSource = static_cast<uint8_t>(estop_.source());
     Ms u = queue_.overrideUntil();
     s.overrideRemainingMs = (u != 0 && static_cast<int32_t>(u - in.nowMs) > 0) ? (u - in.nowMs) : 0;
+    bool ovr = s.overrideRemainingMs > 0;                     // one log line when it starts and one when it ends, however it ends
+    if (ovr != overrideWas_) { overrideWas_ = ovr; emit(Ev::Override, ovr ? 1 : 0, static_cast<int32_t>(s.overrideRemainingMs), 0, in.nowMs); }
+    s.alignmentSuspect = alignmentSuspect_;
+    s.commissioning = cfg_.commissioningActive;
     s.activeJob = job_; s.activeJobId = programId_; s.lastProgramId = lastProgramId_;
+    s.activeProgram = job_ != JobKind::None ? programKind_ : JobKind::None;
+    s.jobPhase = 0; s.jobDetail = 0;
+    switch (job_) {
+        case JobKind::LifterSeek: s.jobPhase = static_cast<uint8_t>(seek_.phase()); break;
+        case JobKind::RotaryHome: s.jobPhase = static_cast<uint8_t>(rhome_.phase()); break;
+        case JobKind::LifterCalibrate: s.jobPhase = static_cast<uint8_t>(calib_.phase()); s.jobDetail = calib_.progress(); break;
+        case JobKind::RotaryCharacterise: s.jobDetail = static_cast<int16_t>(rchar_.detections()); break;
+        case JobKind::LifterCreep: s.jobDetail = static_cast<int16_t>(creep_.stopAfter() > 0 ? creep_.dir() * creep_.stopAfter() : creep_.dir()); break;
+        default: break;
+    }
     s.lastJob = lastJob_; s.lastResult = lastResult_; s.lastReason = static_cast<uint8_t>(lastReason_);
     s.lifterOut = lifterOut.mode == Bridge::Drive ? lifterOut.duty : 0;
     s.rotaryOut = rotaryOut.mode == Bridge::Drive ? rotaryOut.duty : 0;

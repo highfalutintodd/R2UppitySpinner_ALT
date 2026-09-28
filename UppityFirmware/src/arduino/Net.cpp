@@ -223,6 +223,9 @@ void Net::registerRoutes() {
     server_.on("/api/estop/reset", HTTP_POST, [this]() { bool was = d_.estop->release(millis()); ok(was ? "E-STOP released" : "E-STOP was not latched"); });
     server_.on("/api/stop", HTTP_POST, [this]() { if (!d_.lines->push("!STOP", static_cast<uint8_t>(ReqSource::Web))) fail(503, "busy"); else ok("Stopping"); });
     server_.on("/api/restart", HTTP_POST, [this]() { if (!d_.lines->push("#PRESTART", static_cast<uint8_t>(ReqSource::Web))) fail(503, "busy"); else ok("Restarting"); });
+    // Rescue hold-to-jog: every call renews the 2 s lease; start=1 also queues the jog itself
+    server_.on("/api/jog", HTTP_POST, [this]() { handleJog(); });
+    server_.on("/api/jog/stop", HTTP_POST, [this]() { if (d_.q) d_.q->jogRelease(millis()); ok(); });
     server_.on("/update", HTTP_POST, [this]() { handleUpdateDone(); }, [this]() { handleUpdateUpload(); });
     server_.onNotFound([this]() {
         String uri = server_.uri();
@@ -239,14 +242,18 @@ void Net::handleState() {
     j.kv("fw", UPPITY_FW_VERSION); j.kv("up", static_cast<unsigned long>(millis() / 1000));
     j.kv("state", stateName(static_cast<int>(s.state)));
     j.key("lifter"); j.beginObject(); j.kv("ticks", static_cast<long>(s.lifterTicks)); j.kv("pct", static_cast<int>(s.lifterPct)); j.kv("travel", static_cast<long>(s.lifterTravel)); j.kv("conf", lifterConfName(static_cast<int>(s.lifterConf))); j.endObject();
-    j.key("rotary"); j.beginObject(); j.kv("ticks", static_cast<long>(s.rotaryTicks)); j.kv("deg", static_cast<int>(s.rotaryDeg)); j.kv("conf", homeConfName(static_cast<int>(s.homeConf))); j.kvf("tpr", s.ticksPerRev, 1); j.endObject();
+    j.key("rotary"); j.beginObject(); j.kv("ticks", static_cast<long>(s.rotaryTicks)); j.kv("deg", static_cast<int>(s.rotaryDeg)); j.kv("conf", homeConfName(static_cast<int>(s.homeConf))); j.kv("prov", homeProvName(static_cast<int>(s.homeProv))); j.kvf("tpr", s.ticksPerRev, 1); j.kv("off", s.rotaryDisabled); j.endObject();
     j.key("limits"); j.beginObject(); j.kv("top", s.topLimit); j.kv("bot", s.bottomLimit); j.kv("home", s.homeSwitch); j.endObject();
+    j.key("diag"); j.beginObject(); j.kv("lifter", s.lifterDiag); j.kv("rotary", s.rotaryDiag); j.endObject();
+    j.key("out"); j.beginObject(); j.kv("lifter", static_cast<int>(s.lifterOut)); j.kv("rotary", static_cast<int>(s.rotaryOut)); j.endObject();
     j.kv("enabled", s.enabled); j.kv("estop", s.estop); j.kv("estopSource", EstopLatch::sourceName(static_cast<EstopLatch::Source>(s.estopSource)));
     j.kv("faults", static_cast<unsigned long>(s.faults));
     j.kv("job", jobName(static_cast<int>(s.activeJob))); j.kv("jobId", static_cast<unsigned long>(s.activeJobId));
+    j.kv("program", jobName(static_cast<int>(s.activeProgram))); j.kv("phase", static_cast<int>(s.jobPhase)); j.kv("detail", static_cast<int>(s.jobDetail));
+    j.kv("alignment", s.alignmentSuspect ? "suspect" : "ok"); j.kv("commissioning", s.commissioning);
     j.key("last"); j.beginObject(); j.kv("job", jobName(static_cast<int>(s.lastJob))); j.kv("result", resultName(static_cast<int>(s.lastResult))); j.kv("reason", reasonName(s.lastReason)); j.kv("id", static_cast<unsigned long>(s.lastProgramId)); j.endObject();
     j.kv("override", static_cast<unsigned long>(s.overrideRemainingMs / 1000));
-    j.kv("commissioned", s.commissioned);
+    j.kv("commissioned", static_cast<int>(d_.settings->commissioned));   // 0 locked, 1 bench unlock, 2 commissioned (the snapshot only knows locked or not)
     j.key("tick"); j.beginObject(); j.kv("maxUs", static_cast<unsigned long>(s.cycleUsMax)); j.kv("late", static_cast<unsigned long>(s.lateTicks)); j.endObject();
     d_.console->writeStateJson(j);
     j.kv("log", static_cast<unsigned long>(d_.log->total()));
@@ -277,6 +284,24 @@ void Net::printStatus(TextSink& out) {
                st == 2 ? WiFi.localIP().toString().c_str() : "", kHost, static_cast<unsigned long>(estopHits_), static_cast<unsigned long>(webEstops_), static_cast<unsigned long>(stalledDropped_));
 }
 
+// POST /api/jog axis=l|r dir=1|-1 [pct=0..100] [start=1]. The lease is renewed here, at once
+// (an atomic, safe from this task); the jog job itself is queued as a "#PJOG" line so loop()
+// can end random mode and clear a chain first, and so it lands in the log like everything else.
+// The page renews every 500 ms while the button is held; 2 s without a renewal stops the motor,
+// which is also what happens when the radio drops out mid-jog.
+void Net::handleJog() {
+    String axis = server_.arg("axis"), dir = server_.arg("dir");
+    long pct = server_.hasArg("pct") ? server_.arg("pct").toInt() : 0;
+    char a = axis.length() ? static_cast<char>(toupper(axis[0])) : 0;
+    if ((a != 'L' && a != 'R') || (dir != "1" && dir != "-1") || pct < 0 || pct > 100 || !d_.q) { fail(400, "invalid", "axis=l|r dir=1|-1 pct=0..100"); return; }
+    d_.q->jogKeepalive(millis());
+    if (server_.arg("start") == "1") {
+        char line[24]; std::snprintf(line, sizeof line, "#PJOG%c%c%ld", a, dir == "1" ? '+' : '-', pct);
+        if (!d_.lines->push(line, static_cast<uint8_t>(ReqSource::Web))) { fail(503, "busy", "command queue full"); return; }
+    }
+    ok();
+}
+
 // ":P..."/"#P..." lines from the page go to loop() like any other serial source
 void Net::handleCmd() {
     String line = server_.hasArg("line") ? server_.arg("line") : server_.arg("plain");
@@ -294,7 +319,9 @@ void Net::handleConfigGet() {
     for (int i = 0; i < kStringKeyCount; ++i) { const StringKey& k = kStringKeys[i]; if (k.secret) j.kv(k.name, stringField(s, k)[0] ? "(set)" : ""); else j.kv(k.name, stringField(s, k)); }
     j.kv("apSsid", apSsid_);
     const Calibration& c = d_.console->calibration();
-    j.key("cal"); j.beginObject(); j.kv("valid", c.valid != 0); j.kv("travel", static_cast<long>(c.travel)); j.kv("minUp", static_cast<long>(c.minUp)); j.kv("minDown", static_cast<long>(c.minDown)); j.kv("motor", static_cast<long>(c.motor)); j.endObject();
+    j.key("cal"); j.beginObject(); j.kv("valid", c.valid != 0); j.kv("applies", calibrationApplies(s, c)); j.kv("travel", static_cast<long>(c.travel)); j.kv("minUp", static_cast<long>(c.minUp)); j.kv("minDown", static_cast<long>(c.minDown)); j.kv("motor", static_cast<long>(c.motor)); j.endObject();
+    j.key("pw"); d_.console->writePowersJson(j);
+    j.kv("fw", UPPITY_FW_VERSION); j.kv("build", Console::buildId());
     j.endObject();
     if (j.overflowed()) { fail(500, "overflow"); return; }
     sendJson(200, json_);

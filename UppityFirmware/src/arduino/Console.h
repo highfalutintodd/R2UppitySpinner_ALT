@@ -16,10 +16,12 @@
 #include "Esp32Hal.h"
 #include "../core/TextRing.h"
 #include "../core/LineQueue.h"
+#include "../core/Commissioning.h"
 // The operator's side of the firmware: owns the settings and the calibration in RAM, answers
 // every "#P" command, feeds the random director and the trigger inputs into the dispatcher,
-// pulls calibration/characterisation results back out of the supervisor so they persist, and
-// prints everything as KEY=VALUE lines on the USB console (and the command UART if #PCMDTX1).
+// pulls calibration/characterisation results back out of the supervisor so they persist, runs
+// the commissioning flow, and prints everything as KEY=VALUE lines on the USB console (and the
+// command UART if #PCMDTX1).
 namespace uppity {
 
 struct EspRandom final : RandomSource { uint32_t next() override; };
@@ -40,7 +42,9 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     void handleWebLine(const char* line);        // from the web line queue: "!STOP" or a :P/#P line
     void setNet(NetStatus* n) { net_ = n; }
     void writeStateJson(JsonWriter& j);          // the console's part of /api/state (any task; plain reads)
+    void writePowersJson(JsonWriter& j);         // jog / floor / cap powers for the page's labels (any task; plain reads)
     void noteEstop(bool latched);
+    void onEvent(const Event& e);                // every supervisor event, from loop() before it is printed
     Settings& settings() { return s_; }
     const Calibration& calibration() const { return cal_; }
     bool randomActive() const;
@@ -58,8 +62,11 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     static const char* buildId();
     void printState(); void printConfig(); void printCal(); void printStatus(); void printHelp(); void printV3(); void printSequences();
   private:
+    struct FlowHost;                              // the commissioning flow's view of the console (Console.cpp)
     void applySettings(bool boot);
     void setKey(const Command& c);
+    void onRescue(const Command& c, ReqSource src);
+    void onCommission(const Command& c);
     void importV3Now(bool forced);
     void pushOperatorJob(JobKind k, int32_t a);
     void stopRandom(const char* why);
@@ -73,6 +80,8 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     bool restartPending_ = false; Ms restartAt_ = 0;
     NetStatus* net_ = nullptr;
     Ms bootMs_ = 0;
+    CommissionFlow flow_;
+    FlowHost* host_ = nullptr;
 };
 
 } // namespace uppity

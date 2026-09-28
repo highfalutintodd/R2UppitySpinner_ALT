@@ -527,6 +527,7 @@ class RotaryCharacterise {
         return StepOutcome::running();
     }
     const CharacteriseResult& result() const { return res_; }
+    int detections() const { return res_.detections; }    // switch passes so far (revs + 1 finishes it)
   private:
     void finishUp() {
         res_.revs = n_;

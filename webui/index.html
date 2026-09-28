@@ -11,66 +11,127 @@ html { font-size: 20px; }
   --sans: "Schibsted Grotesk", "Hanken Grotesk", "Helvetica Neue", system-ui, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
   --bg:#F3EEE2; --raise:#FBF9F3; --raise2:#ECE6D8; --well:#EAE3D4; --field:#FFFEFA;
-  --text:#211C17; --dim:rgba(33,28,23,.64); --keyline:rgba(118,106,88,.25); --keyline-hd:rgba(118,106,88,.45);
+  --text:#211C17; --dim:rgba(33,28,23,.68); --keyline:rgba(118,106,88,.25); --keyline-hd:rgba(118,106,88,.5);
   --accent:#7A2230; --accent-hi:#93293A; --on-accent:#fff; --ok:#38754F; --warn:#8F6B22; --bad:#93293A;
-  --card-shadow:0 1px 3px rgba(33,28,23,.07);
+  --card-shadow:0 1px 3px rgba(33,28,23,.07); --nav-h:3.3rem; --nav-w:11rem;
 }
 html[data-theme="dark"] {
   --bg:#15171C; --raise:#1C1F25; --raise2:#262A31; --well:#101216; --field:#101216;
-  --text:#E9E9E6; --dim:rgba(233,233,230,.62); --keyline:rgba(206,212,222,.14); --keyline-hd:rgba(206,212,222,.34);
+  --text:#E9E9E6; --dim:rgba(233,233,230,.66); --keyline:rgba(206,212,222,.14); --keyline-hd:rgba(206,212,222,.34);
   --accent:#A93246; --accent-hi:#C7475B; --ok:#55A877; --warn:#D8AC52; --bad:var(--accent-hi); --card-shadow:none;
 }
 * { box-sizing:border-box; }
 html, body { margin:0; padding:0; }
-body { background:var(--bg); color:var(--text); font:400 1rem/1.45 var(--sans); min-height:100vh; -webkit-font-smoothing:antialiased; padding-bottom:5.5rem; }
-header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:.6rem; padding:.55rem .8rem; background:var(--raise); border-bottom:1px solid var(--keyline-hd); flex-wrap:wrap; }
+body { background:var(--bg); color:var(--text); font:400 1rem/1.45 var(--sans); min-height:100vh; -webkit-font-smoothing:antialiased;
+       padding-bottom:calc(var(--nav-h) + 4.6rem + env(safe-area-inset-bottom)); }
+main p a, main .note a { color:var(--accent); }
+html[data-theme="dark"] main p a, html[data-theme="dark"] main .note a { color:var(--accent-hi); }
+header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:.6rem; padding:.5rem .8rem; background:var(--raise); border-bottom:1px solid var(--keyline-hd); flex-wrap:wrap; }
 .wordmark { font-weight:700; letter-spacing:.01em; }
 .wordmark small { color:var(--dim); font-weight:400; font-size:.7rem; margin-left:.3rem; }
-.pill { display:inline-block; padding:.15rem .6rem; border-radius:999px; font-size:.75rem; font-weight:700; letter-spacing:.04em; border:2px solid transparent; }
+.pill { display:inline-block; padding:.15rem .6rem; border-radius:999px; font-size:.75rem; font-weight:700; letter-spacing:.04em; border:2px solid transparent; white-space:nowrap; }
 .pill.IDLE { background:var(--ok); color:#fff; } .pill.MOVING { background:var(--warn); color:#fff; }
-.pill.STOPPED { background:var(--bad); color:#fff; } .pill.FAULT { background:var(--bad); color:#fff; }
+.pill.STOPPED, .pill.FAULT { background:var(--bad); color:#fff; }
 .pill.LOCKED { background:var(--raise2); color:var(--text); border-color:var(--warn); }
 .pill.NOLINK { background:transparent; color:var(--warn); border:2px dashed var(--warn); }
-.readouts { display:flex; gap:.9rem; margin-left:auto; font-family:var(--mono); font-size:.8rem; }
-.readouts b { font-weight:600; }
-.readouts span { color:var(--dim); }
-main { max-width:52rem; margin:0 auto; padding:.8rem; display:grid; gap:.8rem; }
-.card { background:var(--raise); border:1px solid var(--keyline); border-radius:.6rem; padding:.8rem; box-shadow:var(--card-shadow); }
-.card h2 { margin:0 0 .5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
+.readouts { display:flex; gap:.9rem; margin-left:auto; font-family:var(--mono); font-size:.8rem; align-items:baseline; }
+.readouts b { font-weight:600; } .readouts span { color:var(--dim); }
+nav { position:fixed; left:0; right:0; bottom:0; z-index:6; display:flex; background:var(--raise); border-top:1px solid var(--keyline-hd); padding-bottom:env(safe-area-inset-bottom); }
+nav a { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.1rem; min-height:var(--nav-h); text-decoration:none; color:var(--dim); font-size:.7rem; font-weight:600; }
+nav a svg { width:1.15rem; height:1.15rem; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+nav a[aria-current="page"] { color:var(--accent); }
+html[data-theme="dark"] nav a[aria-current="page"] { color:var(--accent-hi); }
+main { max-width:55rem; margin:0 auto; padding:.8rem; }
+.page { display:none; gap:.8rem; } .page.on { display:grid; }
+#banners { max-width:55rem; margin:0 auto; padding:.8rem .8rem 0; display:grid; gap:.5rem; }
+#banners:empty { display:none; }
+.card { background:var(--raise); border:1px solid var(--keyline); border-radius:.6rem; padding:.8rem; box-shadow:var(--card-shadow); min-width:0; }
+.card h2 { margin:0 0 .5rem; font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
+.card h3 { margin:.6rem 0 .3rem; font-size:.95rem; }
+.card p { margin:.3rem 0; }
+.note { color:var(--dim); font-size:.8rem; }
 .row { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
-button { font:600 .9rem/1 var(--sans); min-height:44px; min-width:44px; padding:.5rem .9rem; border-radius:.5rem; border:1px solid var(--keyline-hd); background:var(--raise2); color:var(--text); cursor:pointer; }
+.row + .row { margin-top:.5rem; }
+button { font:600 .9rem/1.1 var(--sans); min-height:44px; min-width:44px; padding:.45rem .85rem; border-radius:.5rem; border:1px solid var(--keyline-hd); background:var(--raise2); color:var(--text); cursor:pointer; }
 button:active { transform:translateY(1px); }
 button.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
 button.primary:hover { background:var(--accent-hi); }
 button.ghost { background:transparent; }
-button:disabled { opacity:.5; cursor:default; }
+button.danger { border-color:var(--bad); color:var(--bad); background:transparent; }
+button.armed { background:var(--bad); border-color:var(--bad); color:#fff; }
+button:disabled { opacity:.45; cursor:default; }
 .seg { display:inline-flex; border:1px solid var(--keyline-hd); border-radius:.5rem; overflow:hidden; }
 .seg button { border:0; border-radius:0; border-right:1px solid var(--keyline); min-width:3.6rem; }
 .seg button:last-child { border-right:0; }
 .seg button.on { background:var(--accent); color:var(--on-accent); }
 .pills button { border-radius:999px; }
 .pills button.on { background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
-.banner { border-radius:.6rem; padding:.7rem .9rem; display:flex; gap:.8rem; align-items:center; font-weight:600; }
-.banner.stop { background:var(--bad); color:#fff; } .banner.warn { background:var(--warn); color:#fff; } .banner.info { background:var(--raise2); }
-.banner button { margin-left:auto; }
-.estop { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(.8rem + env(safe-area-inset-bottom)); z-index:6; width:min(92vw, 30rem); min-height:3.6rem; font-size:1.2rem; letter-spacing:.06em; background:var(--bad); color:#fff; border:2px solid #fff; border-radius:.8rem; box-shadow:0 6px 18px rgba(0,0,0,.35); }
+.subnav { display:flex; gap:.4rem; overflow-x:auto; padding-bottom:.2rem; scrollbar-width:none; }
+.subnav a { flex:none; padding:.5rem .8rem; min-height:44px; display:inline-flex; align-items:center; border-radius:999px; border:1px solid var(--keyline-hd); text-decoration:none; color:var(--text); font-size:.8rem; font-weight:600; background:var(--raise); }
+.subnav a[aria-current="true"] { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+.banner { border-radius:.6rem; padding:.6rem .8rem; display:flex; gap:.6rem; align-items:center; font-weight:600; flex-wrap:wrap; font-size:.9rem; }
+.banner span { flex:1 1 12rem; }
+.banner.stop { background:var(--bad); color:#fff; } .banner.warn { background:var(--warn); color:#fff; } .banner.info { background:var(--raise2); border:1px solid var(--keyline-hd); }
+.banner button { background:rgba(255,255,255,.92); color:#211C17; border-color:transparent; }
+.banner.info button { background:var(--raise); color:var(--text); border-color:var(--keyline-hd); }
+.estop { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(var(--nav-h) + .55rem + env(safe-area-inset-bottom)); z-index:7; width:min(92vw, 30rem); min-height:3.4rem; font-size:1.15rem; letter-spacing:.06em; background:var(--bad); color:#fff; border:2px solid #fff; border-radius:.8rem; box-shadow:0 6px 18px rgba(0,0,0,.35); touch-action:manipulation; }
 .estop:hover { background:#B0364A; }
 .estop.sending { animation:pulse .5s infinite alternate; }
 .estop.latched { background:#3a3a3a; border-color:var(--bad); }
 .estop.failed { background:var(--warn); }
 @keyframes pulse { from { background:var(--bad); } to { background:#ff5a6e; } }
-.status { display:grid; grid-template-columns:repeat(auto-fit, minmax(7rem, 1fr)); gap:.4rem .8rem; font-size:.8rem; }
-.status div { display:flex; justify-content:space-between; border-bottom:1px solid var(--keyline); padding:.15rem 0; }
-.status span:first-child { color:var(--dim); }
-.log { background:var(--well); border-radius:.5rem; padding:.5rem; height:14rem; overflow:auto; font:.72rem/1.35 var(--mono); white-space:pre-wrap; word-break:break-all; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(9.5rem, 1fr)); gap:.35rem .9rem; font-size:.8rem; }
+.grid > div { display:flex; justify-content:space-between; gap:.4rem; border-bottom:1px solid var(--keyline); padding:.2rem 0; min-width:0; }
+.grid > div > span:first-child { color:var(--dim); }
+.grid b { font-weight:600; text-align:right; overflow-wrap:anywhere; }
+.lamps { display:flex; flex-wrap:wrap; gap:.4rem; }
+.lamp { display:inline-flex; align-items:center; gap:.35rem; padding:.3rem .6rem; border-radius:.5rem; border:1px solid var(--keyline-hd); font-size:.8rem; font-weight:600; min-height:2rem; }
+.lamp::before { content:""; width:.7rem; height:.7rem; border-radius:50%; background:var(--raise2); border:1px solid var(--keyline-hd); }
+.lamp.on::before { background:var(--ok); border-color:var(--ok); }
+.lamp.bad::before { background:var(--bad); border-color:var(--bad); }
+.log { background:var(--well); border-radius:.5rem; padding:.5rem; height:18rem; overflow:auto; font:.7rem/1.35 var(--mono); white-space:pre-wrap; word-break:break-all; }
+.report { background:var(--well); border-radius:.5rem; padding:.5rem; font:.72rem/1.4 var(--mono); white-space:pre-wrap; word-break:break-word; min-height:2.2rem; }
+textarea.cfg { width:100%; min-height:12rem; font:.72rem/1.4 var(--mono); background:var(--field); color:var(--text); border:1px solid var(--keyline-hd); border-radius:.5rem; padding:.5rem; }
+input, select { font:.9rem var(--sans); min-height:44px; padding:.3rem .55rem; border:1px solid var(--keyline-hd); border-radius:.5rem; background:var(--field); color:var(--text); }
+input[type=number] { width:7rem; } input[type=text], input[type=password] { width:min(100%, 16rem); }
+input[type=checkbox] { min-height:auto; width:1.2rem; height:1.2rem; accent-color:var(--accent); }
 .cmdrow { display:flex; gap:.5rem; margin-top:.5rem; }
-.cmdrow input { flex:1; min-height:44px; font:.9rem var(--mono); padding:.4rem .6rem; border:1px solid var(--keyline-hd); border-radius:.5rem; background:var(--field); color:var(--text); }
-.toast { position:fixed; top:.6rem; left:50%; transform:translateX(-50%); z-index:7; background:var(--text); color:var(--bg); padding:.5rem .9rem; border-radius:.5rem; font-size:.85rem; opacity:0; transition:opacity .2s; pointer-events:none; max-width:92vw; }
-.toast.show { opacity:.95; }
-.toast.bad { background:var(--bad); color:#fff; }
-label.chk { font-size:.8rem; color:var(--dim); display:inline-flex; gap:.3rem; align-items:center; }
+.cmdrow input { flex:1; min-width:0; font-family:var(--mono); }
+.field { padding:.55rem 0; border-bottom:1px solid var(--keyline); }
+.field:last-child { border-bottom:0; }
+.field label.fl { display:block; font-weight:600; font-size:.9rem; margin-bottom:.25rem; }
+.field .unit { color:var(--dim); font-size:.8rem; }
+.fst { font-size:.8rem; min-height:1rem; margin-top:.2rem; }
+.ok-t { color:var(--ok); } .bad-t { color:var(--bad); } .warn-t { color:var(--warn); }
+label.chk { display:flex; gap:.5rem; align-items:flex-start; font-size:.85rem; padding:.3rem 0; }
+label.chk input { margin-top:.15rem; flex:none; }
+.steps { list-style:none; margin:.4rem 0; padding:0; display:grid; gap:.25rem; }
+.steps li { display:flex; gap:.5rem; align-items:center; font-size:.85rem; color:var(--dim); }
+.steps li b { width:1.4rem; height:1.4rem; flex:none; display:inline-flex; align-items:center; justify-content:center; border-radius:50%; border:1px solid var(--keyline-hd); font-size:.7rem; }
+.steps li.done { color:var(--text); } .steps li.done b { background:var(--ok); border-color:var(--ok); color:#fff; }
+.steps li.cur { color:var(--text); font-weight:700; } .steps li.cur b { background:var(--accent); border-color:var(--accent); color:#fff; }
+.callout { border-left:4px solid var(--warn); background:var(--raise2); padding:.5rem .7rem; border-radius:.3rem; font-size:.85rem; margin:.5rem 0; }
+.callout.bad { border-left-color:var(--bad); }
+.result { margin-top:.5rem; padding:.5rem .7rem; border-radius:.4rem; background:var(--raise2); font-size:.85rem; }
+.result.pass { border-left:4px solid var(--ok); } .result.fail { border-left:4px solid var(--bad); } .result.busy { border-left:4px solid var(--warn); }
+.big { font:600 1.4rem/1.2 var(--mono); }
+.hold { touch-action:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; min-width:6.5rem; min-height:3.4rem; font-size:1rem; }
+.hold.held { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+.bar { height:.5rem; background:var(--raise2); border-radius:.25rem; overflow:hidden; margin-top:.4rem; }
+.bar i { display:block; height:100%; width:0; background:var(--accent); transition:width .3s; }
+.toast { position:fixed; top:.6rem; left:50%; transform:translateX(-50%); z-index:9; background:var(--text); color:var(--bg); padding:.5rem .9rem; border-radius:.5rem; font-size:.85rem; opacity:0; transition:opacity .2s; pointer-events:none; max-width:92vw; }
+.toast.show { opacity:.95; } .toast.bad { background:var(--bad); color:#fff; }
 .hidden { display:none !important; }
-@media (max-width: 600px) { .readouts { margin-left:0; width:100%; } html { font-size:18px; } }
+details summary { cursor:pointer; min-height:44px; display:flex; align-items:center; font-weight:600; }
+@media (max-width: 600px) { .readouts { margin-left:0; width:100%; order:3; } #themeBtn { margin-left:auto; } html { font-size:18px; } }
+@media (max-width: 440px) { .wordmark small { display:none; } }
+@media (min-width: 900px) {
+  body { padding-left:var(--nav-w); padding-bottom:5rem; }
+  nav { top:0; bottom:0; right:auto; width:var(--nav-w); flex-direction:column; justify-content:flex-start; padding-top:4.2rem; border-top:0; border-right:1px solid var(--keyline-hd); }
+  nav a { flex:none; flex-direction:row; justify-content:flex-start; gap:.6rem; padding:0 1rem; font-size:.85rem; }
+  header { padding-left:1rem; }
+  .estop { left:calc(var(--nav-w) + (100vw - var(--nav-w)) / 2); bottom:.8rem; }
+}
 </style>
 </head>
 <body>
@@ -78,117 +139,350 @@ label.chk { font-size:.8rem; color:var(--dim); display:inline-flex; gap:.3rem; a
   <div class="wordmark">Uppity Spinner<small id="fw"></small></div>
   <span id="pill" class="pill NOLINK">NO LINK</span>
   <div class="readouts"><b id="height">–</b><span>height</span><b id="rot">–</b><span>rotation</span></div>
-  <button class="ghost" id="themeBtn" title="Theme" aria-label="Toggle dark theme">◐</button>
+  <button class="ghost" id="themeBtn" title="Theme" aria-label="Switch between the paper and dark themes">◐</button>
 </header>
-<div id="toast" class="toast" role="status"></div>
+<nav id="nav" aria-label="Pages">
+  <a href="#operate" data-page="operate"><svg viewBox="0 0 24 24"><path d="M12 3v14M6 9l6-6 6 6M5 21h14"/></svg>Operate</a>
+  <a href="#setup" data-page="setup"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>Setup</a>
+  <a href="#diag" data-page="diag"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>Diagnostics</a>
+  <a href="#rescue" data-page="rescue"><svg viewBox="0 0 24 24"><path d="M12 2l9 4v6c0 5-4 9-9 10-5-1-9-5-9-10V6z"/><path d="M12 8v8M8 12h8"/></svg>Rescue</a>
+</nav>
+<div id="banners" aria-live="polite"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 <main>
-  <div id="bStop" class="banner stop hidden">E-STOP is latched. Nothing moves until you reset it.<button id="resetBtn">Reset E-STOP</button></div>
-  <div id="bFault" class="banner warn hidden"><span id="faultText">Driver fault</span><button id="clearFaultBtn">Clear fault</button></div>
-  <div id="bLocked" class="banner info hidden">LOCKED: the motors are refused until the board is commissioned (Phase 4) or unlocked on the bench.<button id="unlockBtn">Unlock (bench)</button></div>
-  <div id="bOverride" class="banner warn hidden">Safety override active: <span id="ovr"></span> s left</div>
-  <div id="bUpdate" class="banner info hidden">Firmware update in progress, do not power off.</div>
 
-  <section class="card">
+<!-- ============================================================ OPERATE -->
+<section class="page" id="p-operate">
+  <div class="card">
     <h2>Lifter</h2>
     <div class="row">
       <button class="primary" data-cmd=":PP100">Up</button>
       <button class="primary" data-cmd=":PH">Down</button>
       <button data-lift="25">25%</button><button data-lift="50">50%</button><button data-lift="75">75%</button>
-      <span class="seg" id="liftSpeed"><button data-v="50">Gentle</button><button data-v="75" class="on">Normal</button><button data-v="100">Fast</button></span>
     </div>
-  </section>
-
-  <section class="card">
+    <div class="row"><span class="note">Speed</span><span class="seg" id="liftSpeed"><button data-v="50">Gentle</button><button data-v="75" class="on">Normal</button><button data-v="100">Fast</button></span></div>
+  </div>
+  <div class="card">
     <h2>Rotary</h2>
     <div class="row">
       <button class="primary" data-cmd=":PA0">Home</button>
       <button data-rot="90">90°</button><button data-rot="180">180°</button><button data-rot="270">270°</button>
       <button data-spin="-1">Spin ◀</button><button data-spin="1">Spin ▶</button>
-      <button id="stopBtn">Soft stop</button>
-      <span class="seg" id="rotSpeed"><button data-v="40">Gentle</button><button data-v="70" class="on">Normal</button><button data-v="100">Fast</button></span>
+      <button data-stop>Soft stop</button>
     </div>
-  </section>
-
-  <section class="card">
+    <div class="row"><span class="note">Speed</span><span class="seg" id="rotSpeed"><button data-v="40">Gentle</button><button data-v="70" class="on">Normal</button><button data-v="100">Fast</button></span></div>
+  </div>
+  <div class="card">
     <h2>Show</h2>
     <div class="row">
       <button data-cmd=":PMG">Random gentle</button><button data-cmd=":PMM">Random medium</button><button data-cmd=":PMA">Random aggressive</button>
-      <button id="stopShowBtn">Stop show</button>
-      <span id="randomState" class="pill hidden">RANDOM ON</span>
+      <button data-stop>Stop show</button>
+      <span id="randomState" class="pill IDLE hidden">RANDOM ON</span>
     </div>
-    <div class="row pills" id="lights" style="margin-top:.5rem">
+    <div class="row pills" id="lights">
       <button data-light="0">Cycle</button><button data-light="1">Off</button><button data-light="2">Obi-Wan</button><button data-light="3">Yoda</button>
       <button data-light="4">Sith</button><button data-light="5">Search</button><button data-light="6">Dagobah</button><button data-light="7">Sparkle</button>
     </div>
-  </section>
+  </div>
+</section>
 
-  <section class="card">
-    <h2>Status</h2>
-    <div class="status">
-      <div><span>Job</span><b id="job">–</b></div><div><span>Last</span><b id="last">–</b></div>
-      <div><span>Limits</span><b id="limits">–</b></div><div><span>Drivers</span><b id="enabled">–</b></div>
-      <div><span>Rotary home</span><b id="homeConf">–</b></div><div><span>Lifter</span><b id="lifterConf">–</b></div>
-      <div><span>Safe spin</span><b id="safeSpin">–</b></div><div><span>Faults</span><b id="faults">–</b></div>
-      <div><span>WiFi</span><b id="wifi">–</b></div><div><span>Settings</span><b id="persist">–</b></div>
-    </div>
-  </section>
+<!-- ============================================================ SETUP -->
+<section class="page" id="p-setup">
+  <div class="subnav" id="setupNav" role="navigation" aria-label="Setup sections">
+    <a href="#setup/commission" data-sec="commission">Commissioning</a>
+    <a href="#setup/motor" data-sec="motor">Motor</a>
+    <a href="#setup/tuning" data-sec="tuning">Tuning</a>
+    <a href="#setup/serial" data-sec="serial">Serial</a>
+    <a href="#setup/wifi" data-sec="wifi">WiFi</a>
+    <a href="#setup/firmware" data-sec="firmware">Firmware</a>
+    <a href="#setup/theme" data-sec="theme">Theme</a>
+  </div>
 
-  <section class="card">
-    <h2>Console</h2>
-    <div class="row" style="justify-content:space-between">
-      <label class="chk"><input type="checkbox" id="pause"> pause</label>
-      <label class="chk"><input type="checkbox" id="hideTick" checked> hide TICK</label>
-      <button class="ghost" data-cmd="#PSTATE">#PSTATE</button><button class="ghost" data-cmd="#PCONFIG">#PCONFIG</button>
+  <div class="card setsec" data-sec="commission">
+    <h2>Commissioning</h2>
+    <p id="cmState" class="note"></p>
+    <ol class="steps" id="cmSteps"></ol>
+    <div class="row" id="cmControls">
+      <button class="primary" id="cmStart">Start</button>
+      <button id="cmPause">Pause</button>
+      <button class="danger" id="cmReset">Start over</button>
     </div>
-    <div id="log" class="log" aria-live="polite"></div>
-    <form class="cmdrow" id="cmdForm"><input id="cmd" placeholder=":PP50  or  #PWIGGLE3" autocomplete="off" autocapitalize="characters"><button class="primary" type="submit">Send</button></form>
-  </section>
+    <div id="cmBody"></div>
+    <details id="cmBypassBox" style="margin-top:.8rem">
+      <summary>Expert bypass (unlock without commissioning)</summary>
+      <p class="note">This is the only bypass. The motors then run on the profile's guesses and whatever numbers are already stored; only the top counts as clear for turning the head until a safe-spin height is set.</p>
+      <label class="chk"><input type="checkbox" id="cmBypassAck"> I understand the motors will run without the commissioning measurements.</label>
+      <button class="danger" id="cmBypass" disabled>Unlock without commissioning</button>
+    </details>
+  </div>
+
+  <div class="card setsec" data-sec="motor">
+    <h2>Motor &amp; calibration</h2>
+    <div id="f-motor"></div>
+    <h3>Lifter calibration</h3>
+    <p class="note">Measures travel, the lowest power that moves the lifter each way, and a speed table (several minutes on a 19:1). It homes the head first and moves the mast end to end many times; keep the E-STOP in reach.</p>
+    <div class="grid" id="calNow"></div>
+    <div class="row" style="margin-top:.5rem"><button class="primary" id="calRun">Run calibration</button></div>
+    <div id="calProg" class="result busy hidden"><span id="calProgText"></span><div class="bar"><i id="calBar"></i></div></div>
+    <div id="calResult" class="result hidden"></div>
+    <p class="note">The rotary's ticks per turn come from the rotary test on the Diagnostics page.</p>
+  </div>
+
+  <div class="card setsec" data-sec="tuning">
+    <h2>Tuning</h2>
+    <div id="f-tuning"></div>
+  </div>
+
+  <div class="card setsec" data-sec="serial">
+    <h2>Serial (Marcduino bus)</h2>
+    <div id="f-serial"></div>
+  </div>
+
+  <div class="card setsec" data-sec="wifi">
+    <h2>WiFi</h2>
+    <div class="grid" id="wifiNow"></div>
+    <div id="f-wifi"></div>
+    <p class="note">WiFi changes take effect after a restart. The access point (the board's own network) is always there; if the home network does not work you can still reach the page on the access point at 192.168.4.1.</p>
+    <div class="row"><button class="danger" id="wifiRestart">Restart to apply</button></div>
+  </div>
+
+  <div class="card setsec" data-sec="firmware">
+    <h2>Firmware</h2>
+    <div class="grid" id="fwNow"></div>
+    <h3>Update</h3>
+    <p class="note">Pick the app image, <code>UppityFirmware.ino.bin</code>. The board refuses an update while a motor is enabled or a job is running; nothing can move during the upload. Releases: <a href="https://github.com/highfalutintodd/R2UppitySpinner_ALT/releases" target="_blank" rel="noopener">github.com/highfalutintodd/R2UppitySpinner_ALT/releases</a></p>
+    <div class="row"><input type="file" id="fwFile" accept=".bin,application/octet-stream"><button class="primary" id="fwUpload" disabled>Upload</button></div>
+    <div id="fwProg" class="result busy hidden"><span id="fwProgText"></span><div class="bar"><i id="fwBar"></i></div></div>
+    <h3>Restart and reset</h3>
+    <div class="row"><button id="fwRestart">Restart</button><button class="danger" id="fwFactory">Factory reset…</button></div>
+    <div id="factoryBox" class="callout bad hidden">
+      <p><b>Factory reset erases every v4 setting</b>: motor profile, inversion, travel, safe-spin height, rotary numbers, tuning, the home WiFi network and the access point password, plus the calibration and any stored sequences. The board then restarts LOCKED on its own network (R2Uppity-…, password Astromech). v3's stored values are not touched and are imported again at the next boot.</p>
+      <p>Save your settings first: Diagnostics → Configuration → Get the settings text.</p>
+      <div class="row"><button class="armed" id="factoryGo">Erase everything and restart</button><button id="factoryCancel">Cancel</button></div>
+    </div>
+  </div>
+
+  <div class="card setsec" data-sec="theme">
+    <h2>Theme</h2>
+    <p class="note">Paper is the default. The choice is stored on the board too, so a new phone starts with it.</p>
+    <span class="seg" id="themeSeg"><button data-t="paper">Paper</button><button data-t="dark">Dark</button></span>
+  </div>
+</section>
+
+<!-- ============================================================ DIAGNOSTICS -->
+<section class="page" id="p-diag">
+  <div class="card">
+    <h2>Live sensors</h2>
+    <div class="lamps" id="dLamps"></div>
+    <div class="grid" id="dGrid" style="margin-top:.6rem"></div>
+  </div>
+  <div class="card">
+    <h2>Rotary test</h2>
+    <p class="note">Raises the mast to the top first if needed, then turns the head and measures ticks per turn from the home switch. Stores the result when the turns agree. Rotary moves are refused below the safe-spin height; the raise takes care of that.</p>
+    <div class="row"><span class="note">Turns</span><span class="seg" id="rtRevs"><button data-v="3" class="on">3</button><button data-v="5">5</button><button data-v="10">10</button></span><button class="primary" id="rtRun">Run the rotary test</button></div>
+    <div id="rtProg" class="note" style="margin-top:.4rem"></div>
+    <div class="report" id="rtReport" style="margin-top:.4rem">No test run yet.</div>
+  </div>
+  <div class="card">
+    <h2>Log</h2>
+    <div class="row">
+      <input type="text" id="logFilter" placeholder="Filter (e.g. HOME or SEEK)" autocomplete="off" style="flex:1;min-width:8rem">
+      <label class="chk"><input type="checkbox" id="logTick" checked> hide TICK</label>
+      <label class="chk"><input type="checkbox" id="logPause"> pause</label>
+    </div>
+    <div id="log" class="log" aria-live="off" style="margin-top:.5rem"></div>
+    <div class="row" style="margin-top:.5rem"><button class="ghost" id="logDownload">Download</button><button class="ghost" id="logClear">Clear view</button><button class="ghost" data-cmd="#PSTATE">#PSTATE</button><button class="ghost" data-cmd="#PSTATUS">#PSTATUS</button></div>
+    <form class="cmdrow" id="cmdForm"><input id="cmd" placeholder=":PP50  or  #PWIGGLE3" autocomplete="off" autocapitalize="characters" spellcheck="false"><button class="primary" type="submit">Send</button></form>
+  </div>
+  <div class="card">
+    <h2>Configuration</h2>
+    <p class="note">Every setting as <code>#P</code> lines you can paste back later (passwords are never included).</p>
+    <div class="row"><button class="primary" id="cfgGet">Get the settings text</button><button class="ghost" id="cfgCopy" disabled>Copy</button><button class="ghost" id="cfgSave" disabled>Download</button></div>
+    <textarea class="cfg" id="cfgText" readonly placeholder="Press 'Get the settings text'." style="margin-top:.5rem"></textarea>
+    <details style="margin-top:.5rem">
+      <summary>Restore from a saved text</summary>
+      <p class="note">Paste lines saved earlier. Only <code>#P</code> setting and sequence lines are sent, one at a time; each is saved on the board as it lands.</p>
+      <textarea class="cfg" id="cfgRestore" placeholder="#PMOTOR=1&#10;#PINVERT=1&#10;..."></textarea>
+      <div class="row"><button class="danger" id="cfgSend">Send these lines</button><span id="cfgSendSt" class="note"></span></div>
+    </details>
+  </div>
+</section>
+
+<!-- ============================================================ RESCUE -->
+<section class="page" id="p-rescue">
+  <div class="card">
+    <h2>Now</h2>
+    <div class="lamps" id="rLamps"></div>
+    <div class="grid" id="rGrid" style="margin-top:.5rem"></div>
+    <div class="row" style="margin-top:.6rem"><button class="primary" id="rReset" disabled>Reset E-STOP</button><button data-stop>Soft stop</button></div>
+  </div>
+  <div class="card">
+    <h2>Safety override</h2>
+    <p class="note">For 60 seconds the mast may come down with the head not home, and the head may be jogged below the safe-spin height. Nothing else is relaxed: with the height unknown only Up works, and the E-STOP ends the override at once.</p>
+    <div class="row"><button class="danger hold" id="ovrHold">Hold 3 s to turn on</button><button id="ovrEnd" class="hidden">End the override</button><span class="big" id="ovrLeft"></span></div>
+  </div>
+  <div class="card">
+    <h2>Lifter jog</h2>
+    <p class="note">Hold to move, let go to stop (it also stops by itself 2 s after the last renewal if the WiFi drops). Continuous drive, capped to the profile. Down stops at the safe-spin height unless the head is home or the override is on.</p>
+    <div class="row"><span class="note">Power</span><span class="seg" id="ljSpeed"><button data-v="slow" class="on">Slow</button><button data-v="normal">Normal</button></span><span class="note" id="ljPw"></span></div>
+    <div class="row"><button class="hold" data-jog="l" data-dir="1">▲ Up</button><button class="hold" data-jog="l" data-dir="-1">▼ Down</button></div>
+  </div>
+  <div class="card">
+    <h2>Rotary jog</h2>
+    <p class="note">Hold to turn. Above the safe-spin height this works like a slow spin; below it only with the override on (the head is inside the dome there).</p>
+    <div class="row"><span class="note">Power</span><span class="seg" id="rjSpeed"><button data-v="slow" class="on">Slow</button><button data-v="normal">Normal</button></span><span class="note" id="rjPw"></span></div>
+    <div class="row"><button class="hold" data-jog="r" data-dir="-1">◀ Turn</button><button class="hold" data-jog="r" data-dir="1">Turn ▶</button></div>
+  </div>
+  <div class="card">
+    <h2>Head and faults</h2>
+    <div class="row">
+      <button class="primary" data-cmd=":PA0">Home the head</button>
+      <button class="danger" id="setHome">Set home here…</button>
+      <button id="clearFault">Clear fault</button>
+    </div>
+    <p class="note">"Set home here" tells the board that the head is lined up with the dome opening right now. Use it only when you can see that it is; the next descent trusts it.</p>
+    <p class="note" id="rLockedNote"></p>
+  </div>
+</section>
 </main>
 <button class="estop" id="estopBtn">E-STOP</button>
 <script>
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
+  const qa = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const ERR_TEXT = { busy: 'The board is busy (queue full); try again', invalid: 'Not a command the board knows', estop: 'E-STOP is latched: reset it first',
-                     locked: 'The motors are locked (bench unlock or commissioning)', armed: 'Refused while a motor is enabled', nolink: 'No answer from the board' };
-  let toastT = 0;
-  function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : ''); clearTimeout(toastT); toastT = setTimeout(() => t.className = 'toast', 2200); }
+                     locked: 'The motors are locked (commissioning)', armed: 'Refused while a motor is enabled or a job runs', nolink: 'No answer from the board',
+                     update: 'The update failed; the old firmware is intact', overflow: 'The board could not build its answer' };
+  const FAULTS = [[1, 'lifter driver fault'], [2, 'rotary driver fault'], [4, 'repeated driver faults'], [8, 'lifter stall'], [16, 'rotary stall'], [32, 'lifter encoder counts the wrong way'],
+                  [64, 'encoder noise'], [128, 'both limit switches closed'], [256, 'limit switch where the count says it cannot be'], [512, 'home switch stuck'], [1024, 'I/O expander not answering'], [2048, 'control tick overrun']];
+  let toastT = 0, S = null, stateAt = 0, misses = 0, Cfg = null, uploading = false;
+  function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : ''); clearTimeout(toastT); toastT = setTimeout(() => t.className = 'toast', 2600); }
   function withTimeout(ms) { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; }
-  async function post(url, body) {
+  async function post(url, body, opt) {
+    opt = opt || {};
     try {
-      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body || '', signal: withTimeout(4000) });
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body || '', signal: withTimeout(opt.timeout || 4000) });
       const j = await r.json().catch(() => ({ ok: r.ok }));
-      if (!j.ok) toast(ERR_TEXT[j.err] || j.msg || j.err || 'Refused', true); else if (j.msg) toast(j.msg);
+      if (!opt.quiet) { if (!j.ok) toast(ERR_TEXT[j.err] || j.msg || j.err || 'Refused', true); else if (j.msg) toast(j.msg); }
       return j;
-    } catch (e) { toast(ERR_TEXT.nolink, true); return { ok: false, err: 'nolink' }; }
+    } catch (e) { if (!opt.quiet) toast(ERR_TEXT.nolink, true); return { ok: false, err: 'nolink' }; }
   }
-  function send(line) { $('log').dataset.follow = '1'; return post('/api/cmd', 'line=' + encodeURIComponent(line)); }
+  function send(line, opt) { return post('/api/cmd', 'line=' + encodeURIComponent(line), opt); }
+  const fmtPct = (v) => v == null ? '–' : v + ' %';
+  function faultText(m) { const out = FAULTS.filter(([b]) => m & b).map(([, t]) => t); return out.length ? out.join(', ') : (m ? '0x' + m.toString(16) : 'none'); }
 
-  // ---- theme: paper by default, remembered per phone, seeded from the device once ----
+  // Two-step inline confirm: the first tap arms the button (red, says what it will do), the second does it.
+  function confirmTap(btn, armedText, fn) {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.armed) { delete btn.dataset.armed; btn.classList.remove('armed'); btn.textContent = btn.dataset.label; fn(); return; }
+      btn.dataset.label = btn.textContent; btn.dataset.armed = '1'; btn.classList.add('armed'); btn.textContent = armedText;
+      setTimeout(() => { if (btn.dataset.armed) { delete btn.dataset.armed; btn.classList.remove('armed'); btn.textContent = btn.dataset.label; } }, 5000);
+    });
+  }
+
+  // ---------------------------------------------------------------- log service
+  // One tail of /api/log for the whole page: the log view, command replies and report boxes all
+  // read from here. Waiters see only lines that arrive after they were registered.
+  const Log = {
+    next: -1, partial: '', lines: [], waiters: [], subs: [], busy: false, last: 0,
+    async poll(force) {
+      if (this.busy || uploading) return;
+      const due = this.waiters.length ? 250 : (page === 'diag' && !$('logPause').checked) ? 1000 : 3000;
+      if (!force && Date.now() - this.last < due) return;
+      this.busy = true; this.last = Date.now();
+      try {
+        const r = await fetch('/api/log?since=' + (this.next < 0 ? 'tail' : this.next), { cache: 'no-store', signal: withTimeout(3000) });
+        const j = await r.json();
+        const first = this.next < 0;
+        if (!first && j.from > this.next) this.add('… (' + (j.from - this.next) + ' bytes of log missed) …', false);
+        const parts = (this.partial + j.text).split('\n');
+        this.partial = parts.pop();
+        this.next = j.next;
+        for (const l of parts) this.add(l, first);
+      } catch (e) {}
+      this.busy = false;
+    },
+    add(line, old) {
+      this.lines.push(line); if (this.lines.length > 1500) this.lines.splice(0, this.lines.length - 1200);
+      if (!old) for (const w of this.waiters.slice()) w.feed(line);
+      for (const s of this.subs) s(line, old);
+    },
+    async ready() { if (this.next < 0) await this.poll(true); },
+    // resolves with the first new line matching re, or null after ms
+    wait(re, ms) {
+      let w; const p = new Promise((res) => {
+        w = { feed: (l) => { if (re.test(l)) done(l); } };
+        const done = (v) => { clearTimeout(w.t); this.waiters = this.waiters.filter((x) => x !== w); res(v); };
+        w.t = setTimeout(() => done(null), ms); w.cancel = () => done(null);
+        this.waiters.push(w);
+      });
+      p.cancel = () => w.cancel(); return p;
+    },
+    // lines from the first match of startRe through endRe
+    collect(startRe, endRe, ms) {
+      return new Promise((res) => {
+        const got = []; let on = false;
+        const w = { feed: (l) => { if (!on && startRe.test(l)) on = true; if (on) got.push(l); if (on && endRe.test(l)) done(got); } };
+        const done = (v) => { clearTimeout(w.t); this.waiters = this.waiters.filter((x) => x !== w); res(v); };
+        w.t = setTimeout(() => done(on ? got : null), ms);
+        this.waiters.push(w);
+      });
+    },
+  };
+  setInterval(() => Log.poll(false), 250);
+  // Send a line (or run fn) and wait for the board's reply line.
+  async function ask(fnOrLine, re, ms) {
+    await Log.ready();
+    const w = Log.wait(re, ms || 5000);
+    const r = typeof fnOrLine === 'string' ? await send(fnOrLine, { quiet: true }) : await fnOrLine();
+    if (!r.ok) { w.cancel(); await w; toast(ERR_TEXT[r.err] || r.msg || 'Refused', true); return null; }
+    return w;
+  }
+
+  // ---------------------------------------------------------------- theme
   const themeKey = 'uppity-theme';
-  function applyTheme(t) { document.documentElement.dataset.theme = t === 'dark' ? 'dark' : ''; }
+  function applyTheme(t) { document.documentElement.dataset.theme = t === 'dark' ? 'dark' : ''; qa('#themeSeg button').forEach((b) => b.classList.toggle('on', b.dataset.t === (t === 'dark' ? 'dark' : 'paper'))); }
   let theme = null; try { theme = localStorage.getItem(themeKey); } catch (e) {}
-  if (theme) applyTheme(theme);
-  $('themeBtn').onclick = () => { theme = document.documentElement.dataset.theme === 'dark' ? 'paper' : 'dark'; applyTheme(theme); try { localStorage.setItem(themeKey, theme); } catch (e) {} send('#PTHEME=' + (theme === 'dark' ? 1 : 0)); };
+  applyTheme(theme);
+  function setTheme(t) { theme = t; applyTheme(t); try { localStorage.setItem(themeKey, t); } catch (e) {} send('#PTHEME=' + (t === 'dark' ? 1 : 0), { quiet: true }); }
+  $('themeBtn').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'paper' : 'dark');
+  qa('#themeSeg button').forEach((b) => b.onclick = () => setTheme(b.dataset.t));
 
-  // ---- controls ----
+  // ---------------------------------------------------------------- router
+  let page = 'operate', setupSec = 'commission';
+  function route() {
+    const h = (location.hash || '#operate').slice(1).split('/');
+    page = ['operate', 'setup', 'diag', 'rescue'].includes(h[0]) ? h[0] : 'operate';
+    if (page === 'setup' && h[1]) setupSec = h[1];
+    qa('.page').forEach((p) => p.classList.toggle('on', p.id === 'p-' + page));
+    qa('#nav a').forEach((a) => { if (a.dataset.page === page) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+    qa('#setupNav a').forEach((a) => a.setAttribute('aria-current', a.dataset.sec === setupSec ? 'true' : 'false'));
+    qa('.setsec').forEach((c) => c.classList.toggle('hidden', c.dataset.sec !== setupSec));
+    if (page === 'setup' || page === 'rescue') loadConfig();
+    if (page === 'diag') { Log.poll(true); renderLog(true); }
+    if (S) renderAll();
+    window.scrollTo(0, 0);
+  }
+  window.addEventListener('hashchange', route);
+
+  // ---------------------------------------------------------------- operate
   const speed = (id) => { const on = document.querySelector('#' + id + ' button.on'); return on ? on.dataset.v : ''; };
-  document.querySelectorAll('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.onclick = () => { seg.querySelectorAll('button').forEach(x => x.classList.remove('on')); b.classList.add('on'); }));
-  document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => send(b.dataset.cmd));
-  document.querySelectorAll('[data-lift]').forEach(b => b.onclick = () => { const s = speed('liftSpeed'); send(':PP' + b.dataset.lift + (s === '100' ? '' : ',' + s)); });
-  document.querySelectorAll('[data-rot]').forEach(b => b.onclick = () => { const s = speed('rotSpeed'); send(':PA' + b.dataset.rot + (s === '100' ? '' : ',' + s)); });
-  document.querySelectorAll('[data-spin]').forEach(b => b.onclick = () => send(':PR' + (b.dataset.spin < 0 ? '-' : '') + speed('rotSpeed')));
-  document.querySelectorAll('[data-light]').forEach(b => b.onclick = () => send(':PL' + b.dataset.light));
-  $('stopBtn').onclick = () => post('/api/stop');
-  $('stopShowBtn').onclick = () => post('/api/stop');
-  // E-STOP: fire at the dedicated port 81 listener AND the web server, on fresh connections, every
-  // 300 ms until the board's status confirms the latch (bench 2026-09-27: a single request could
-  // sit behind a stalled connection or a lost packet while the lifter ran). Opaque no-cors requests
-  // are fine: nothing here needs the answer, the status poll is the confirmation.
+  qa('.seg').forEach((seg) => { if (seg.id === 'themeSeg') return; qa('button', seg).forEach((b) => b.addEventListener('click', () => { qa('button', seg).forEach((x) => x.classList.remove('on')); b.classList.add('on'); })); });
+  qa('[data-cmd]').forEach((b) => b.onclick = () => send(b.dataset.cmd));
+  qa('[data-lift]').forEach((b) => b.onclick = () => { const s = speed('liftSpeed'); send(':PP' + b.dataset.lift + (s === '100' ? '' : ',' + s)); });
+  qa('[data-rot]').forEach((b) => b.onclick = () => { const s = speed('rotSpeed'); send(':PA' + b.dataset.rot + (s === '100' ? '' : ',' + s)); });
+  qa('[data-spin]').forEach((b) => b.onclick = () => send(':PR' + (b.dataset.spin < 0 ? '-' : '') + speed('rotSpeed')));
+  qa('[data-light]').forEach((b) => b.onclick = () => send(':PL' + b.dataset.light));
+  qa('[data-stop]').forEach((b) => b.onclick = () => post('/api/stop'));
+
+  // ---------------------------------------------------------------- E-STOP (unchanged from Phase 3; bench-verified 2026-09-27)
+  // Fire at the dedicated port 81 listener AND the web server, on fresh connections, every 300 ms
+  // until the board's status confirms the latch. Four independent channels, each in its own
+  // try/catch so no browser quirk can silence the rest.
   let estopTimer = 0, estopSince = 0, estopFires = 0;
   function setEstop(mode, text) { const b = $('estopBtn'); b.className = 'estop ' + mode; b.textContent = text; }
-  // Four independent channels, each in its own try/catch so no browser quirk can silence the rest:
-  // the port-81 listener (fetch and a plain image GET), the web server (fetch and sendBeacon).
   function fireEstop() {
     ++estopFires;
     const p81 = 'http://' + location.hostname + ':81/estop?t=' + Date.now();
@@ -200,69 +494,515 @@ label.chk { font-size:.8rem; color:var(--dim); display:inline-flex; gap:.3rem; a
   }
   function estop(ev) {
     if (ev && ev.preventDefault) ev.preventDefault();
+    Jog.stop();
     if (estopTimer) return;
     estopFires = 0; estopSince = Date.now(); setEstop('sending', 'SENDING E-STOP…'); fireEstop();
     estopTimer = setInterval(() => {
-      if (lastState && lastState.estop && lastStateAt > estopSince) { clearInterval(estopTimer); estopTimer = 0; setEstop('latched', 'E-STOP LATCHED'); return; }
+      if (S && S.estop && stateAt > estopSince) { clearInterval(estopTimer); estopTimer = 0; setEstop('latched', 'E-STOP LATCHED'); return; }
       if (Date.now() - estopSince > 8000) { clearInterval(estopTimer); estopTimer = 0; setEstop('failed', 'NO ANSWER: USE THE POWER SWITCH'); setTimeout(() => setEstop('', 'E-STOP'), 4000); return; }
       fireEstop();
     }, 300);
   }
-  $('estopBtn').addEventListener('pointerdown', estop);   // fires on the touch itself, before any click synthesis
+  $('estopBtn').addEventListener('pointerdown', estop);
   $('estopBtn').addEventListener('click', estop);
-  $('resetBtn').onclick = () => post('/api/estop/reset');
-  $('clearFaultBtn').onclick = () => send('#PCLEARFAULT');
-  $('unlockBtn').onclick = () => { if ($('unlockBtn').dataset.armed) { send('#PUNLOCK'); delete $('unlockBtn').dataset.armed; $('unlockBtn').textContent = 'Unlock (bench)'; } else { $('unlockBtn').dataset.armed = '1'; $('unlockBtn').textContent = 'Really unlock?'; setTimeout(() => { delete $('unlockBtn').dataset.armed; $('unlockBtn').textContent = 'Unlock (bench)'; }, 4000); } };
-  $('cmdForm').onsubmit = (e) => { e.preventDefault(); const v = $('cmd').value.trim(); if (v) { send(v); $('cmd').value = ''; } };
+  const resetEstop = () => post('/api/estop/reset');
 
-  // ---- state polling (diffed; a poll that gets no answer in 2 s counts as a miss) ----
-  let lastState = null, lastStateAt = 0, misses = 0, seededTheme = false, polling = false;
-  function setText(id, v) { const el = $(id); if (el.textContent !== String(v)) el.textContent = v; }
-  function show(id, on) { $(id).classList.toggle('hidden', !on); }
-  function render(s) {
+  // ---------------------------------------------------------------- banners
+  function banners(s) {
+    const out = [];
+    if (s.estop) out.push(['stop', 'E-STOP is latched (' + s.estopSource + '). Nothing moves until you reset it.', 'Reset E-STOP', resetEstop]);
+    const f = s.faults & ~4096;
+    if (f && !s.estop) out.push(['warn', 'Fault: ' + faultText(f) + '.', 'Clear fault', () => send('#PCLEARFAULT')]);
+    if (s.override > 0) out.push(['warn', 'SAFETY OVERRIDE ON: ' + s.override + ' s left. Descents without a home and rotary jog below the safe-spin height are allowed.', 'End now', () => send('#POVERRIDE0')]);
+    if (s.alignment === 'suspect' && !s.override) out.push(['warn', 'The head may be turned below the safe-spin height: descents are refused until it is home.', 'Home the head', () => send(':PA0')]);
+    if (s.commission && s.commission.active) out.push(['info', 'Commissioning step ' + s.commission.step + ' of 7 (' + s.commission.name + ') is active: its steps may move the motors.', 'Open', () => { location.hash = '#setup/commission'; }]);
+    else if (s.state === 'LOCKED') out.push(['info', 'LOCKED: the motors are refused until the board is commissioned.', 'Commissioning', () => { location.hash = '#setup/commission'; }]);
+    if (uploading) out.push(['info', 'Firmware update in progress. Do not power off.', null, null]);
+    const box = $('banners'); const key = JSON.stringify(out.map((b) => b[0] + b[1]));
+    if (box.dataset.key === key) return;
+    box.dataset.key = key; box.innerHTML = '';
+    for (const [cls, text, label, fn] of out) {
+      const d = document.createElement('div'); d.className = 'banner ' + cls;
+      const t = document.createElement('span'); t.textContent = text; d.appendChild(t);
+      if (label) { const b = document.createElement('button'); b.textContent = label; b.onclick = fn; d.appendChild(b); }
+      box.appendChild(d);
+    }
+  }
+
+  // ---------------------------------------------------------------- state polling
+  function setText(id, v) { const el = $(id); if (el && el.textContent !== String(v)) el.textContent = v; }
+  function lamp(name, on, bad) { return '<span class="lamp' + (on ? (bad ? ' bad' : ' on') : '') + '">' + esc(name) + '</span>'; }
+  function setHtml(id, html) { const el = $(id); if (el && el.dataset.h !== html) { el.dataset.h = html; el.innerHTML = html; } }
+  function gridHtml(rows) { return rows.map(([k, v]) => '<div><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>').join(''); }
+  function renderHeader(s) {
     setText('fw', 'v' + s.fw);
     const pill = $('pill'); pill.textContent = s.state; pill.className = 'pill ' + s.state;
-    setText('height', s.lifter.pct + '%'); setText('rot', s.rotary.deg + '°');
-    show('bStop', s.estop); show('bFault', s.faults !== 0 && !s.estop); show('bLocked', s.state === 'LOCKED'); show('bOverride', s.override > 0); setText('ovr', s.override);
-    setText('faultText', s.faults ? 'Fault 0x' + s.faults.toString(16) + (s.job === 'NONE' ? '' : ' (' + s.job + ')') : 'Driver fault');
-    setText('job', s.job); setText('last', s.last.job + ' ' + s.last.result + (s.last.reason !== '-' ? ' ' + s.last.reason : ''));
-    setText('limits', (s.limits.top ? 'TOP ' : '') + (s.limits.bot ? 'BOTTOM ' : '') + (s.limits.home ? 'HOME' : '') || 'none');
-    setText('enabled', s.enabled ? 'enabled' : 'off'); setText('homeConf', s.rotary.conf); setText('lifterConf', s.lifter.conf);
-    setText('safeSpin', s.safeSpin ? s.safeSpin + ' ticks' : 'top only'); setText('faults', s.faults ? '0x' + s.faults.toString(16) : 'none');
-    setText('wifi', s.wifi.sta === 'up' ? s.wifi.ip + ' (' + s.wifi.rssi + ' dBm)' : s.wifi.ap + ' · ' + s.wifi.clients + ' on AP');
-    setText('persist', s.persist);
-    show('randomState', s.random.on);
-    document.querySelectorAll('[data-light]').forEach(b => b.classList.toggle('on', +b.dataset.light === s.light));
+    setText('height', s.lifter.pct + '%'); setText('rot', s.rotary.off ? 'off' : s.rotary.deg + '°');
     if (!estopTimer) { if (s.estop) setEstop('latched', 'E-STOP LATCHED'); else if ($('estopBtn').classList.contains('latched')) setEstop('', 'E-STOP'); }
-    if (!seededTheme) { seededTheme = true; if (!theme && s.theme === 1) applyTheme('dark'); }
+    banners(s);
   }
+  function renderAll() {
+    const s = S; if (!s) return;
+    renderHeader(s);
+    if (page === 'operate') renderOperate(s);
+    else if (page === 'setup') renderSetup(s);
+    else if (page === 'diag') renderDiag(s);
+    else if (page === 'rescue') renderRescue(s);
+  }
+  let seededTheme = false, polling = false;
   async function poll() {
-    if (polling) return;                                   // never stack polls on a slow link
+    if (polling || uploading) return;
     polling = true;
     try {
       const r = await fetch('/api/state', { cache: 'no-store', signal: withTimeout(2000) }); const s = await r.json();
-      misses = 0; lastState = s; lastStateAt = Date.now(); render(s);
+      misses = 0; S = s; stateAt = Date.now(); renderAll();
+      if (!seededTheme) { seededTheme = true; if (!theme && s.theme === 1) applyTheme('dark'); }
     } catch (e) { if (++misses >= 3) { const pill = $('pill'); pill.textContent = 'NO LINK'; pill.className = 'pill NOLINK'; } }
     polling = false;
   }
-  poll(); setInterval(poll, 600);
+  setInterval(poll, 600);
 
-  // ---- log tail (1 Hz) ----
-  let logNext = -1, logPolling = false;
-  async function pollLog() {
-    if ($('pause').checked || logPolling) return;
-    logPolling = true;
-    try {
-      const r = await fetch('/api/log?since=' + (logNext < 0 ? 'tail' : logNext), { cache: 'no-store', signal: withTimeout(3000) }); const j = await r.json();
-      const box = $('log');
-      if (logNext >= 0 && j.from > logNext) box.textContent += '… (' + (j.from - logNext) + ' bytes missed) …\n';
-      let text = j.text; if ($('hideTick').checked) text = text.split('\n').filter(l => !/ TICK /.test(l)).join('\n');
-      if (text) { box.textContent += text; const lines = box.textContent.split('\n'); if (lines.length > 400) box.textContent = lines.slice(-400).join('\n'); box.scrollTop = box.scrollHeight; }
-      logNext = j.next;
-    } catch (e) {}
-    logPolling = false;
+  function renderOperate(s) {
+    $('randomState').classList.toggle('hidden', !s.random.on);
+    qa('[data-light]').forEach((b) => b.classList.toggle('on', +b.dataset.light === s.light));
   }
-  pollLog(); setInterval(pollLog, 1500);
+
+  // ---------------------------------------------------------------- configuration fields
+  async function loadConfig() {
+    try { const r = await fetch('/api/config', { cache: 'no-store', signal: withTimeout(3000) }); Cfg = await r.json(); renderFields(); renderRescuePowers(); } catch (e) {}
+  }
+  const onOff = [[0, 'Off'], [1, 'On']];
+  const FIELDS = {
+    motor: [
+      { k: 'MOTOR', label: 'Lifter motor profile', type: 'sel', opts: [[0, 'Pololu 4757 (6.3:1, original)'], [1, 'Pololu 4751 (19:1, high-torque)'], [2, 'IA-Parts']],
+        confirm: 'Changing the profile locks the motors and clears travel, safe-spin and minimum powers' },
+      { k: 'INVERT', label: 'Mechanism runs backwards (v3 "inverted")', type: 'sel', opts: onOff, confirm: 'The height is re-read from the switches',
+        help: 'Turn on if the mast moves down when told to go up (v3 builds with the inverted option set).' },
+      { k: 'EXPERT', label: 'Expert mode (19:1 only)', type: 'sel', opts: onOff, confirm: 'Lifts the 19:1 caps to 100 %',
+        help: 'Lifts the 19:1 profile\'s 75 % throttle and 85 % calibration caps. A 19:1 at full power has cracked a lifter frame; leave it off unless your frame is known to take it.' },
+      { k: 'TRAVEL', label: 'Lifter travel', type: 'num', min: 0, max: 5000, unit: 'ticks', help: '0 = the calibrated figure (or the profile guess before calibration). A number here wins over the calibration.' },
+      { k: 'ROTARYTPR', label: 'Rotary ticks per turn', type: 'num', min: 0, max: 5000, scale: 10, step: 0.1, unit: 'ticks', help: 'Measured by the rotary test (Diagnostics). 0 = measure it on the next rotary move.' },
+      { k: 'ROTARYOFF', label: 'No rotary fitted', type: 'sel', opts: onOff, help: 'On: no homing, and descents never wait for the head.' },
+      { k: 'DRIVESIGN', label: 'Rotary drive polarity', type: 'sel', opts: [[-1, '-1 (v3 wiring)'], [1, '+1']] },
+      { k: 'LIFTERNC', label: 'Limit switches', type: 'sel', opts: [[0, 'Normally open'], [1, 'Normally closed']], help: 'Takes effect after a restart.' },
+      { k: 'ROTARYNC', label: 'Rotary home switch', type: 'sel', opts: [[0, 'Normally open'], [1, 'Normally closed']], help: 'Takes effect after a restart.' },
+    ],
+    tuning: [
+      { k: 'SAFESPIN', label: 'Safe-spin height', type: 'num', min: 0, max: 5000, unit: 'ticks', lowerConfirm: true,
+        help: 'The head may only turn above this height (ticks above the bottom switch). 0 = only the top counts. Only enter a height measured on this periscope: Commissioning step 6 measures it.' },
+      { k: 'MINUP', label: 'Lowest lifter power going up', type: 'num', min: 0, max: 100, unit: '%', help: '0 = the calibrated figure, else the profile\'s.' },
+      { k: 'MINDOWN', label: 'Lowest lifter power going down', type: 'num', min: 0, max: 100, unit: '%', help: '0 = the calibrated figure, else the profile\'s.' },
+      { k: 'APPROACH', label: 'Approach power near a switch', type: 'num', min: 0, max: 100, unit: '%', help: '0 = the profile\'s.' },
+      { k: 'DRIFT', label: 'Hold: re-seek after drifting', type: 'num', min: 0, max: 20, unit: '%', help: '0 = off.' },
+      { k: 'AGGRESSION', label: 'Random mode default level', type: 'sel', opts: [[0, 'Gentle'], [1, 'Medium'], [2, 'Aggressive']] },
+      { k: 'RANDOMLIGHT', label: 'Light kit in random mode', type: 'sel', opts: [[0, 'Leave alone'], [1, 'Off'], [2, 'Obi-Wan'], [3, 'Yoda'], [4, 'Sith'], [5, 'Search'], [6, 'Dagobah'], [7, 'Sparkle'], [8, 'A new one each action']] },
+      { k: 'ROTARYMIN', label: 'Lowest rotary power', type: 'num', min: 10, max: 100, unit: '%' },
+      { k: 'HOMEPARK', label: 'Where home parks', type: 'sel', opts: [[0, 'Switch arc centre (by count)'], [1, 'First contact, against the sweep (v3)'], [2, 'First contact, with the sweep']] },
+      { k: 'WIGGLE', label: 'Settle wiggle before parking', type: 'num', min: 0, max: 20, unit: '°', help: '0 = none.' },
+      { k: 'HOMEOFFSET', label: 'Home offset', type: 'num', min: -600, max: 600, unit: 'ticks', help: 'Where the head looks straight, from the switch.' },
+      { k: 'DEBUG', label: 'Verbose motion log', type: 'sel', opts: onOff },
+    ],
+    serial: [
+      { k: 'ID', label: 'Marcduino ID', type: 'num', min: 0, max: 255, help: ':P<id>… lines with another ID are ignored; 0 = no ID.' },
+      { k: 'BAUD', label: 'Command serial speed', type: 'sel', opts: [[2400, '2400'], [9600, '9600'], [19200, '19200'], [38400, '38400'], [57600, '57600'], [115200, '115200']] },
+      { k: 'CMDTX', label: 'Echo replies on the command serial', type: 'sel', opts: onOff, help: 'Only if TX (GPIO0) is wired.' },
+      { k: 'DEDUP', label: 'Duplicate window across transports', type: 'num', min: 0, max: 5000, unit: 'ms' },
+    ],
+    wifi: [
+      { k: 'SSID', label: 'Home network name', type: 'text', max: 32, help: 'Empty = the board\'s own network only.' },
+      { k: 'PASS', label: 'Home network password', type: 'secret', max: 64 },
+      { k: 'APPASS', label: 'The board\'s own network password', type: 'secret', max: 32, min: 8, help: '8 to 32 characters. Phones already joined will need the new one.' },
+      { k: 'APCHANNEL', label: 'Own network channel', type: 'num', min: 1, max: 13 },
+      { k: 'WIFI', label: 'WiFi radio', type: 'sel', opts: onOff, confirm: 'Off = no page at all after the restart (USB only)' },
+    ],
+  };
+  function fieldValue(f) { if (!Cfg) return ''; const v = Cfg[f.k]; if (f.type === 'secret') return ''; if (f.scale) return v / f.scale; return v; }
+  function renderFields() {
+    for (const sec of Object.keys(FIELDS)) {
+      const box = $('f-' + sec); if (!box) continue;
+      if (!box.dataset.built) { box.dataset.built = '1'; box.innerHTML = ''; for (const f of FIELDS[sec]) box.appendChild(buildField(f)); }
+      for (const f of FIELDS[sec]) { const inp = $('in-' + f.k); if (!inp || document.activeElement === inp || inp.dataset.dirty) continue; inp.value = fieldValue(f); if (f.type === 'secret') inp.placeholder = Cfg && Cfg[f.k] ? '(set — type to change)' : '(not set)'; }
+    }
+    renderCalNow(); renderFwNow();
+  }
+  function buildField(f) {
+    const d = document.createElement('div'); d.className = 'field';
+    let input;
+    if (f.type === 'sel') input = '<select id="in-' + f.k + '">' + f.opts.map(([v, t]) => '<option value="' + v + '">' + esc(t) + '</option>').join('') + '</select>';
+    else if (f.type === 'num') input = '<input id="in-' + f.k + '" type="number" inputmode="decimal" min="' + f.min + '" max="' + f.max + '" step="' + (f.step || 1) + '">';
+    else input = '<input id="in-' + f.k + '" type="' + (f.type === 'secret' ? 'password' : 'text') + '" maxlength="' + f.max + '" autocomplete="off" autocapitalize="off" spellcheck="false">';
+    d.innerHTML = '<label class="fl" for="in-' + f.k + '">' + esc(f.label) + '</label><div class="row">' + input + (f.unit ? '<span class="unit">' + esc(f.unit) + '</span>' : '') +
+      '<button id="sv-' + f.k + '">Save</button></div>' + (f.help ? '<div class="note">' + esc(f.help) + '</div>' : '') + '<div class="fst" id="st-' + f.k + '" aria-live="polite"></div>';
+    const inp = d.querySelector('#in-' + f.k), btn = d.querySelector('#sv-' + f.k);
+    inp.addEventListener('input', () => { inp.dataset.dirty = '1'; });
+    btn.addEventListener('click', () => saveField(f, inp, btn));
+    return d;
+  }
+  function fieldStatus(k, text, cls) { const el = $('st-' + k); if (el) { el.textContent = text; el.className = 'fst ' + (cls || ''); } }
+  async function saveField(f, inp, btn) {
+    let raw = inp.value.trim(), value = raw;
+    if (f.type === 'num') {
+      const n = Number(raw);
+      if (raw === '' || !isFinite(n) || n < f.min || n > f.max) { fieldStatus(f.k, 'Out of range: ' + f.min + ' to ' + f.max, 'bad-t'); return; }
+      value = String(Math.round(f.scale ? n * f.scale : n));
+    }
+    if (f.type === 'secret' && raw === '') { fieldStatus(f.k, 'Type a new password first (the stored one is never shown).', 'warn-t'); return; }
+    if (f.type === 'secret' && f.min && raw.length < f.min) { fieldStatus(f.k, 'At least ' + f.min + ' characters.', 'bad-t'); return; }
+    if (/[\x00-\x1f]/.test(raw)) { fieldStatus(f.k, 'No control characters.', 'bad-t'); return; }
+    const cur = Cfg ? Cfg[f.k] : null;
+    let warn = f.confirm && String(cur) !== value ? f.confirm : null;
+    if (f.lowerConfirm && cur != null && Number(value) !== 0 && (Number(cur) === 0 || Number(value) < Number(cur))) warn = 'Lets the head turn lower: only a measured height';
+    if (warn && !btn.dataset.armed) { btn.dataset.armed = '1'; btn.classList.add('armed'); btn.textContent = 'Tap again to save'; fieldStatus(f.k, warn + '. Tap again to save.', 'warn-t'); setTimeout(() => { delete btn.dataset.armed; btn.classList.remove('armed'); btn.textContent = 'Save'; }, 5000); return; }
+    delete btn.dataset.armed; btn.classList.remove('armed'); btn.textContent = 'Save';
+    btn.disabled = true; fieldStatus(f.k, 'Sending…');
+    const re = new RegExp('^(#P' + f.k + '=|OUT_OF_RANGE=#P' + f.k + '|INVALID=#P' + f.k + ')');
+    const line = await ask(() => post('/api/config', 'key=' + f.k + '&value=' + encodeURIComponent(value), { quiet: true }), re, 5000);
+    btn.disabled = false;
+    if (line == null) { fieldStatus(f.k, 'No reply seen (check the log on Diagnostics).', 'bad-t'); return; }
+    if (/^(OUT_OF_RANGE|INVALID)/.test(line)) { fieldStatus(f.k, line, 'bad-t'); return; }
+    const m = line.match(/\((saved|unchanged)[^)]*\)(.*)$/);
+    fieldStatus(f.k, m ? (m[1] === 'saved' ? 'Saved' : 'Unchanged') + (m[2] ? ':' + m[2].replace(/[()]/g, '') : '') : line, 'ok-t');
+    delete inp.dataset.dirty; if (f.type === 'secret') inp.value = '';
+    loadConfig();
+  }
+
+  // ---------------------------------------------------------------- setup: motor & calibration, wifi, firmware
+  function renderCalNow() {
+    if (!Cfg) return; const c = Cfg.cal || {};
+    setHtml('calNow', gridHtml([['Profile', Cfg.pw ? Cfg.pw.profile : '–'], ['Calibration', c.valid ? (c.applies ? 'in use' : 'from another profile (ignored)') : 'none'],
+      ['Travel measured', c.valid ? c.travel + ' ticks' : '–'], ['Travel in use', Cfg.pw ? Cfg.pw.travel + ' ticks' : '–'],
+      ['Lowest power up / down', c.valid ? (c.minUp / 10) + ' / ' + (c.minDown / 10) + ' %' : '–'], ['Minimum overrides', Cfg.MINUP || Cfg.MINDOWN ? Cfg.MINUP + ' / ' + Cfg.MINDOWN + ' %' : 'none']]));
+  }
+  const CAL_PHASES = ['', 'Measuring travel', 'Lowest power going up', 'Lowest power going down', 'Speed table going up', 'Speed table going down', 'Returning to the bottom'];
+  function calProgress(s) {
+    if (s.job === 'CALIBRATE') {
+      const p = s.phase, d = s.detail;
+      let t = CAL_PHASES[p] || 'Calibrating', frac = 0;
+      if (p === 1) { t += ': pass ' + Math.min(d + 1, 4) + ' of 4'; frac = d / 4 * 0.25; }
+      else if (p === 2 || p === 3) { t += ': trying ' + Math.round(d / 10) + ' %'; frac = p === 2 ? 0.3 : 0.4; }
+      else if (p === 4 || p === 5) { t += ': ' + d * 5 + ' %'; frac = (p === 4 ? 0.45 : 0.7) + d / 20 * 0.25; }
+      else if (p === 6) frac = 0.97;
+      return [t, frac];
+    }
+    if (s.program === 'CALIBRATE') return ['Getting ready: ' + (s.job === 'SEEK' ? 'raising' : s.job === 'HOME' ? 'homing the head' : s.job.toLowerCase()), 0.02];
+    return null;
+  }
+  $('calRun').onclick = async () => {
+    const line = await ask('#PSC', /^(QUEUED=CALIBRATE|CALIBRATE REFUSED|.*REFUSED)/, 4000);
+    if (line && /REFUSED/.test(line)) toast(line, true);
+    $('calResult').classList.add('hidden');
+    const done = await Log.wait(/CAL stored|CALIBRATE (FAILED|ABORTED|STALLED|FAULT|REFUSED)/, 900000);
+    if (done) { const r = $('calResult'); r.textContent = done.replace(/^t=[\d.]+ /, ''); r.className = 'result ' + (/stored/.test(done) ? 'pass' : 'fail'); loadConfig(); }
+  };
+  function renderSetup(s) {
+    if (setupSec === 'commission') renderCommission(s);
+    if (setupSec === 'motor') {
+      const p = calProgress(s);
+      $('calProg').classList.toggle('hidden', !p); $('calRun').disabled = !!p;
+      if (p) { setText('calProgText', p[0]); $('calBar').style.width = Math.round(p[1] * 100) + '%'; }
+    }
+    if (setupSec === 'wifi') setHtml('wifiNow', gridHtml([['Own network', s.wifi.ap + ' (' + s.wifi.clients + ' joined)'], ['Home network', s.wifi.ssid ? s.wifi.ssid + ': ' + s.wifi.sta : 'none stored'],
+      ['Address', s.wifi.ip], ['Signal', s.wifi.sta === 'up' ? s.wifi.rssi + ' dBm' : '–']]));
+    if (setupSec === 'firmware') renderFwNow();
+  }
+  function renderFwNow() { if (S) setHtml('fwNow', gridHtml([['Version', S.fw], ['Build', S.build], ['Up', Math.floor(S.up / 60) + ' min ' + (S.up % 60) + ' s'], ['Settings', S.persist]])); }
+  confirmTap($('wifiRestart'), 'Tap again: restart now', () => post('/api/restart'));
+  confirmTap($('fwRestart'), 'Tap again: restart now', () => post('/api/restart'));
+  $('fwFactory').onclick = () => $('factoryBox').classList.remove('hidden');
+  $('factoryCancel').onclick = () => $('factoryBox').classList.add('hidden');
+  $('factoryGo').onclick = async () => { $('factoryBox').classList.add('hidden'); const l = await ask('#PFACTORY', /^FACTORY=/, 4000); if (l) toast(l, /refused/.test(l)); };
+  $('fwFile').onchange = () => { $('fwUpload').disabled = !$('fwFile').files.length; };
+  $('fwUpload').onclick = async () => {
+    const file = $('fwFile').files[0]; if (!file) return;
+    const head = new Uint8Array(await file.slice(0, 1).arrayBuffer());
+    if (head[0] !== 0xE9 || file.size < 100000) { toast('That is not an ESP32 app image (UppityFirmware.ino.bin)', true); return; }
+    if (S && (S.enabled || S.job !== 'NONE')) { toast(ERR_TEXT.armed, true); return; }
+    const oldBuild = S ? S.build : '', oldUp = S ? S.up : 0, t0 = Date.now();
+    uploading = true; banners(S || {}); $('fwProg').classList.remove('hidden'); $('fwUpload').disabled = true;
+    const xhr = new XMLHttpRequest(); const fd = new FormData(); fd.append('update', file, file.name);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) { const p = Math.round(e.loaded * 100 / e.total); setText('fwProgText', 'Uploading ' + p + ' %'); $('fwBar').style.width = p + '%'; } };
+    xhr.onload = () => {
+      let j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status === 200 && j.ok) { setText('fwProgText', 'Written. The board is restarting…'); waitForBoard(oldBuild, oldUp + Math.round((Date.now() - t0) / 1000)); }
+      else { uploading = false; setText('fwProgText', (ERR_TEXT[j.err] || j.msg || 'Upload failed') + '.'); $('fwUpload').disabled = false; }
+    };
+    xhr.onerror = () => { uploading = false; setText('fwProgText', 'The connection dropped during the upload; the old firmware is intact unless the board says otherwise.'); $('fwUpload').disabled = false; };
+    xhr.open('POST', '/update'); xhr.send(fd);
+  };
+  // Back when the build id changed, or when the uptime went backwards (the same image uploaded again keeps its id).
+  async function waitForBoard(oldBuild, upAtUpload) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 90000) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try { const r = await fetch('/api/state', { cache: 'no-store', signal: withTimeout(2000) }); const s = await r.json(); if ((s.build && s.build !== oldBuild) || s.up < upAtUpload) { location.reload(); return; } } catch (e) {}
+    }
+    uploading = false; setText('fwProgText', 'The board has not come back after 90 s. Check the serial monitor.');
+  }
+
+  // ---------------------------------------------------------------- setup: commissioning
+  const STEPS = ['Profile', 'Wiring check', 'Lift test', 'Rotary', 'Calibration', 'Safe-spin height', 'Acceptance'];
+  const ACKS = ['The lifter frame is sound: no cracks, fasteners tight.', 'Both limit switches are wired and mounted.', 'The lifter encoder is wired.',
+                'Nothing is in the mast\'s or the head\'s way, inside or above the dome.', 'I understand the mast and the head will move under power, and I will keep the E-STOP in reach.'];
+  let cmBuiltFor = -1;
+  function nudgeTicks(pct) { const tr = S ? S.lifter.travel : 1000; return Math.max(2, Math.min(100, Math.round(tr * pct / 100))); }
+  function cmdBtn(label, line, cls) { return '<button class="' + (cls || '') + '" data-cm="' + esc(line) + '">' + esc(label) + '</button>'; }
+  function buildStep(step) {
+    const b = $('cmBody');
+    let h = '';
+    const next = '<div class="row" style="margin-top:.6rem"><button class="primary" id="cmNext">Next step</button></div>';
+    const res = '<div id="cmResult" class="result hidden"></div>';
+    if (step === 1) {
+      h = '<h3>1 · Profile</h3><p>Pick the lifter motor. The profile sets the power limits and stall times; a 19:1 is capped at 75 % because one cracked a frame at full power.</p>' +
+          '<div class="row"><select id="cmMotor"><option value="0">Pololu 4757 (6.3:1, original)</option><option value="1">Pololu 4751 (19:1, high-torque)</option><option value="2">IA-Parts</option></select></div>' +
+          ACKS.map((t, i) => '<label class="chk"><input type="checkbox" class="cmAck" id="ack' + i + '"> ' + esc(t) + '</label>').join('') + res + next;
+    } else if (step === 2) {
+      h = '<h3>2 · Wiring check</h3><p>Nothing moves in this step. Press each limit switch by hand and watch its lamp light and go out. A lamp lit with nothing touching it means the switch type is wrong (Setup → Motor → limit switches). The rotary home switch may be out of reach; if so, leave it.</p>' +
+          '<div class="lamps" id="cmLamps"></div><div class="grid" id="cmGrid" style="margin-top:.5rem"></div>' +
+          '<h3>Which way does your lifter run?</h3><p class="note">If this build ran on v3 with the lifter set as <i>inverted</i>, turn this on now. If you are not sure, leave it: step 3 will show it (the mast would go down, or stall on its bottom stop).</p>' +
+          '<div class="row"><span>Runs backwards:</span><b id="cmInv"></b><button id="cmInvFlip">Flip</button></div>' +
+          '<label class="chk"><input type="checkbox" id="cmWireAck"> The switches I can reach light up when pressed, and nothing is lit that should not be.</label>' + res + next;
+    } else if (step === 3) {
+      h = '<h3>3 · Lift test</h3><p>The first motion: the mast creeps up, continuously and at the profile\'s lowest power, until the top switch stops it. Watch it go <b>up</b>. If it goes down or grinds, press E-STOP.</p>' +
+          '<div class="row">' + cmdBtn('Run the lift test', '#PCOMMISSIONRUN', 'primary') + '</div><div id="cmLive" class="note"></div>' + res +
+          '<div id="cmInvFix" class="callout hidden">It ran the wrong way. <button id="cmInvFlip2">Flip "runs backwards"</button> then run the test again.</div>' + next;
+    } else if (step === 4) {
+      h = '<h3>4 · Rotary</h3><p>At the top the head turns three times while the board measures ticks per turn from the home switch, then it homes. Turning is only allowed at the top until step 6 measures a lower height.</p>' +
+          '<div class="row">' + cmdBtn('Measure the rotary', '#PCOMMISSIONRUN', 'primary') + '</div><div id="cmLive" class="note"></div>' + res + next;
+    } else if (step === 5) {
+      h = '<h3>5 · Lifter calibration</h3><p>The head is homed first if needed. Then the mast creeps down to the bottom switch (this is where the way down is proven), runs end to end four times to measure travel, finds the lowest power each way and builds a speed table. Several minutes on a 19:1.</p>' +
+          '<div class="row">' + cmdBtn('Calibrate the lifter', '#PCOMMISSIONRUN', 'primary') + '</div><div id="cmLive" class="note"></div><div class="bar"><i id="cmBar"></i></div>' + res + next;
+    } else if (step === 6) {
+      h = '<h3>6 · Safe-spin height (measured)</h3>' +
+          '<div class="callout bad">This is the height above which the head may turn. It is measured here, never guessed: on 2026-09-19 a guessed half-travel height let the head hit the lifter frame. Keep a hand near the E-STOP for the whole step.</div>' +
+          '<p><b>a.</b> Raise to the top and turn the head to 90°. The old height is cleared first, so until you store a new one only the top counts as clear.</p>' +
+          '<div class="row">' + cmdBtn('Raise and turn the head', '#PCOMMISSIONRUN', 'primary') + '</div>' +
+          '<p><b>b.</b> Allow lowering with the head turned (the safety override, 60 s; renew it as often as you need).</p>' +
+          '<div class="row">' + cmdBtn('Override on (60 s)', '#POVERRIDE', 'danger') + '<span class="big" id="cmOvr"></span></div>' +
+          '<p><b>c.</b> Lower in small steps and watch the whole path the head would sweep, not only what is under it now: the lowest part of the head must stay clear of the dome edge and of every frame part it could pass over when it turns. Stop while it is still clearly clear.</p>' +
+          '<div class="row"><button class="primary" id="cmLower1">Lower 1 %</button><button id="cmLower3">Lower 3 %</button><button id="cmRaise1">Raise 1 %</button></div>' +
+          '<div class="grid" id="cmHere" style="margin-top:.5rem"></div>' +
+          '<p><b>d.</b> Store this height. A margin of 3 % of travel (at least 20 ticks) is added.</p>' +
+          '<div class="row"><button class="danger" id="cmUseHere">Use this height…</button></div>' + res +
+          '<p><b>e.</b> Then raise and bring the head home, and end the override.</p>' +
+          '<div class="row">' + cmdBtn('Raise and home the head', ':PA0') + cmdBtn('End the override', '#POVERRIDE0') + '</div>' +
+          '<p class="note" id="cmPrev"></p>' + next;
+    } else if (step === 7) {
+      h = '<h3>7 · Acceptance</h3><p>Home, 0 %, 50 %, 100 %, home, then one gentle random action. Everything uses the numbers measured in steps 3 to 6.</p>' +
+          '<div class="row">' + cmdBtn('Run the acceptance', '#PCOMMISSIONRUN', 'primary') + '</div><div id="cmLive" class="note"></div>' + res +
+          '<div class="row" style="margin-top:.6rem"><button class="primary" id="cmNext">Finish: mark commissioned</button></div>';
+    } else if (step === 8) {
+      h = '<div class="result pass"><b>Commissioned.</b> Every step passed and the board keeps the measurements. You can run it again at any time (Start over).</div>';
+    } else h = '<p>Commissioning measures this periscope one step at a time: the lift direction, the rotary, the calibration and a safe-spin height you measure by eye. The E-STOP works throughout. It can be paused and resumed; the board remembers the step.</p>';
+    b.innerHTML = h;
+    qa('[data-cm]', b).forEach((x) => x.onclick = () => send(x.dataset.cm));
+    const nx = $('cmNext');
+    if (nx) nx.onclick = async () => {
+      if (step === 1) {
+        const want = $('cmMotor').value;
+        if (Cfg && String(Cfg.MOTOR) !== want) { const l = await ask(() => post('/api/config', 'key=MOTOR&value=' + want, { quiet: true }), /^(#PMOTOR=|OUT_OF_RANGE=#PMOTOR)/, 5000); if (!l || /^OUT/.test(l)) { toast('Could not set the profile', true); return; } }
+      }
+      const l = await ask('#PCOMMISSIONNEXT', /^(COMMISSION=step \d+\/7|COMMISSION=step \d+ not done|COMMISSIONED=2|COMMISSION=not active|COMMISSION=busy)/, 5000);
+      if (l && /not done|not active|busy/.test(l)) toast(l.replace(/^COMMISSION=/, ''), true);
+    };
+    if (step === 1) {
+      const sel = $('cmMotor'); if (Cfg) sel.value = Cfg.MOTOR;
+      const upd = () => { nx.disabled = qa('.cmAck').some((c) => !c.checked); }; qa('.cmAck').forEach((c) => c.onchange = upd); upd();
+    }
+    if (step === 2) {
+      const flip = () => { const v = Cfg && Cfg.INVERT ? 0 : 1; ask(() => post('/api/config', 'key=INVERT&value=' + v, { quiet: true }), /^#PINVERT=/, 5000).then(() => loadConfig()); };
+      $('cmInvFlip').onclick = flip;
+      const upd = () => { nx.disabled = !$('cmWireAck').checked; }; $('cmWireAck').onchange = upd; upd();
+    }
+    if (step === 3) $('cmInvFlip2').onclick = () => { const v = Cfg && Cfg.INVERT ? 0 : 1; ask(() => post('/api/config', 'key=INVERT&value=' + v, { quiet: true }), /^#PINVERT=/, 5000).then((l) => { if (l) toast('Runs backwards is now ' + (v ? 'on' : 'off')); loadConfig(); }); };
+    if (step === 6) {
+      $('cmLower1').onclick = () => send('#PNUDGE-' + nudgeTicks(1));
+      $('cmLower3').onclick = () => send('#PNUDGE-' + nudgeTicks(3));
+      $('cmRaise1').onclick = () => send('#PNUDGE+' + nudgeTicks(1));
+      confirmTap($('cmUseHere'), 'Tap again: store it', async () => { const l = await ask('#PSAFESPINHERE', /^(SAFESPIN=|SAFESPINHERE=refused)/, 5000); if (l && /refused/.test(l)) toast(l.replace(/^SAFESPINHERE=/, ''), true); });
+    }
+  }
+  function renderCommission(s) {
+    const c = s.commission || { step: 0, active: false, run: 'idle', msg: '' };
+    const done = c.step === 8 || (s.commissioned === 2 && c.step === 0);
+    setText('cmState', s.commissioned === 2 ? 'This board is commissioned.' : s.commissioned === 1 ? 'Unlocked on the bench (#PUNLOCK / bypass), not commissioned: the measurements have not all been made.' : 'LOCKED: the motors are refused until commissioning completes (or the expert bypass below).');
+    setHtml('cmSteps', STEPS.map((n, i) => { const k = i + 1; const cls = (done || c.step > k) ? 'done' : c.step === k ? 'cur' : ''; return '<li class="' + cls + '"><b>' + (cls === 'done' ? '✓' : k) + '</b>' + esc(n) + '</li>'; }).join(''));
+    $('cmStart').textContent = c.step > 0 && c.step < 8 ? 'Resume' : 'Start';
+    $('cmStart').classList.toggle('hidden', c.active || c.step === 8);
+    $('cmPause').classList.toggle('hidden', !c.active);
+    $('cmReset').classList.toggle('hidden', c.step === 0 && !done);
+    const view = c.step;
+    if (cmBuiltFor !== view) { cmBuiltFor = view; buildStep(view); }
+    const r = $('cmResult');
+    if (r) { r.classList.toggle('hidden', !c.msg); r.textContent = c.msg; r.className = 'result ' + (c.run === 'passed' ? 'pass' : c.run === 'failed' ? 'fail' : c.run === 'busy' ? 'busy' : '') + (c.msg ? '' : ' hidden'); }
+    const nx = $('cmNext');
+    if (nx && view >= 3) nx.disabled = c.run !== 'passed' || !c.active;
+    else if (nx && !c.active) nx.disabled = true;
+    qa('[data-cm="#PCOMMISSIONRUN"]').forEach((x) => { x.disabled = !c.active || c.run === 'busy' || s.job !== 'NONE'; });
+    const live = $('cmLive');
+    if (live) live.textContent = s.job !== 'NONE' ? 'Running: ' + s.job + (s.program !== s.job && s.program !== 'NONE' ? ' (in ' + s.program + ')' : '') + ' · height ' + s.lifter.pct + ' % (' + s.lifter.ticks + ' ticks) · head ' + s.rotary.deg + '°' + (s.job === 'ROTARYTEST' ? ' · switch passes ' + s.detail : '') : '';
+    if (view === 2) {
+      setHtml('cmLamps', lamp('Top switch', s.limits.top) + lamp('Bottom switch', s.limits.bot) + lamp('Home switch', s.limits.home) + lamp('Lifter driver fault', s.diag.lifter && s.enabled, true) + lamp('Rotary driver fault', s.diag.rotary && s.enabled, true) + lamp('Expander', s.expander));
+      setHtml('cmGrid', gridHtml([['Lifter count', s.lifter.ticks], ['Lifter', s.lifter.conf], ['Rotary count', s.rotary.ticks], ['Faults', faultText(s.faults & ~4096)]]));
+      setText('cmInv', Cfg ? (Cfg.INVERT ? 'yes' : 'no') : '–');
+    }
+    if (view === 3) $('cmInvFix').classList.toggle('hidden', !(c.run === 'failed' && /INVERT/.test(c.msg)));
+    if (view === 5) { const p = calProgress(s); $('cmBar').style.width = p ? Math.round(p[1] * 100) + '%' : (c.run === 'passed' ? '100%' : '0'); if (p) setText('cmLive', p[0]); }
+    if (view === 6) {
+      setText('cmOvr', s.override > 0 ? s.override + ' s' : 'off');
+      setHtml('cmHere', gridHtml([['Height now', s.lifter.ticks + ' ticks (' + s.lifter.pct + ' %)'], ['Head', s.rotary.deg + '°'], ['Top switch', s.limits.top ? 'closed' : 'open'], ['Safe-spin now', s.safeSpin ? s.safeSpin + ' ticks' : 'top only']]));
+      const turned = Math.min(s.rotary.deg, 360 - s.rotary.deg) >= 45;
+      $('cmUseHere').disabled = !c.active || s.job !== 'NONE' || s.limits.top || !turned || c.run === 'passed';
+      const down = !c.active || s.job !== 'NONE';
+      $('cmLower1').disabled = down; $('cmLower3').disabled = down; $('cmRaise1').disabled = down || s.limits.top;
+      setText('cmPrev', c.prevSafeSpin && c.run !== 'passed' ? 'The height before this step was ' + c.prevSafeSpin + ' ticks. To keep it instead, set it on Setup → Tuning (then this step does not pass).' : '');
+    }
+  }
+  $('cmStart').onclick = async () => { const l = await ask('#PCOMMISSIONSTART', /^COMMISSION=/, 5000); if (l && /refused|already/.test(l)) toast(l.replace(/^COMMISSION=/, ''), true); };
+  $('cmPause').onclick = () => send('#PCOMMISSIONSTOP');
+  confirmTap($('cmReset'), 'Tap again: back to step 1', () => send('#PCOMMISSIONRESET'));
+  $('cmBypassAck').onchange = () => { $('cmBypass').disabled = !$('cmBypassAck').checked; };
+  confirmTap($('cmBypass'), 'Tap again: unlock', () => { send('#PCOMMISSIONBYPASS'); $('cmBypassAck').checked = false; $('cmBypass').disabled = true; });
+
+  // ---------------------------------------------------------------- diagnostics
+  function renderDiag(s) {
+    setHtml('dLamps', lamp('Top switch', s.limits.top) + lamp('Bottom switch', s.limits.bot) + lamp('Home switch', s.limits.home) + lamp('Drivers enabled', s.enabled) +
+      lamp('Lifter DIAG', s.diag.lifter && s.enabled, true) + lamp('Rotary DIAG', s.diag.rotary && s.enabled, true) + lamp('Expander', s.expander));
+    setHtml('dGrid', gridHtml([
+      ['State', s.state], ['Job', s.job === 'NONE' ? 'none' : s.job + (s.program !== s.job ? ' in ' + s.program : '') + ' · phase ' + s.phase],
+      ['Last', s.last.job + ' ' + s.last.result + (s.last.reason !== '-' ? ' ' + s.last.reason : '')],
+      ['Lifter', s.lifter.ticks + ' / ' + s.lifter.travel + ' ticks (' + s.lifter.pct + ' %)'], ['Lifter known', s.lifter.conf],
+      ['Rotary', s.rotary.off ? 'disabled' : s.rotary.ticks + ' ticks · ' + s.rotary.deg + '°'], ['Rotary home', s.rotary.conf + ' (' + s.rotary.prov + ')'],
+      ['Ticks per turn', s.rotary.tpr || 'unknown'], ['Safe-spin', s.safeSpin ? s.safeSpin + ' ticks' : 'top only'],
+      ['Drive out', 'lifter ' + s.out.lifter / 10 + ' % · rotary ' + s.out.rotary / 10 + ' %'], ['Faults', faultText(s.faults & ~4096)],
+      ['Override', s.override ? s.override + ' s' : 'off'], ['Alignment', s.alignment], ['E-STOP', s.estop ? 'latched (' + s.estopSource + ')' : 'clear'],
+      ['Control tick', 'max ' + s.tick.maxUs + ' µs · late ' + s.tick.late], ['Random', s.random.on ? 'on (level ' + s.random.level + ')' : 'off'],
+      ['Light kit', s.light], ['Trigger inputs', s.inputs], ['Settings', s.persist], ['Commissioned', s.commissioned],
+      ['WiFi', s.wifi.ap + ' · ' + s.wifi.clients + ' joined · home ' + s.wifi.sta], ['E-STOP arrivals', 'port 81: ' + s.wifi.estopHits + ' · web: ' + s.wifi.webEstops],
+      ['Stalled links dropped', s.wifi.stalled], ['Up', Math.floor(s.up / 60) + ' min'], ['Build', s.build]]));
+    const rt = s.job === 'ROTARYTEST' ? 'Turning: switch passes ' + s.detail : s.program === 'ROTARYTEST' ? 'Getting ready (' + s.job.toLowerCase() + ')' : '';
+    setText('rtProg', rt); $('rtRun').disabled = s.job !== 'NONE';
+  }
+  let rtLines = null;
+  Log.subs.push((l, old) => { if (!old && rtLines && /ROTARY|HINT=|REFUSED/.test(l)) { rtLines.push(l.replace(/^t=[\d.]+ /, '')); $('rtReport').textContent = rtLines.join('\n'); } });
+  $('rtRun').onclick = async () => {
+    rtLines = []; $('rtReport').textContent = 'Starting…';
+    const l = await ask('#PROTARYTEST' + speed('rtRevs'), /^(QUEUED=ROTARYTEST|.*REFUSED)/, 4000);
+    if (!l) $('rtReport').textContent = 'No reply from the board.';
+  };
+  // the log view
+  let logDirty = true;
+  function logMatch(l) { if ($('logTick').checked && / TICK /.test(l)) return false; const f = $('logFilter').value.trim().toUpperCase(); return !f || l.toUpperCase().includes(f); }
+  function renderLog(full) {
+    if (page !== 'diag' || $('logPause').checked) return;
+    const box = $('log'); const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    if (full || logDirty) box.textContent = Log.lines.filter(logMatch).slice(-500).join('\n') + '\n';
+    logDirty = false; if (atEnd || full) box.scrollTop = box.scrollHeight;
+  }
+  Log.subs.push(() => { logDirty = true; });
+  setInterval(() => { if (logDirty) renderLog(false); }, 700);
+  $('logFilter').oninput = () => renderLog(true); $('logTick').onchange = () => renderLog(true); $('logPause').onchange = () => renderLog(true);
+  $('logClear').onclick = () => { Log.lines = []; renderLog(true); };
+  function download(name, text) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
+  const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+  $('logDownload').onclick = () => download('uppity-log-' + stamp() + '.txt', Log.lines.join('\n') + '\n');
+  $('cmdForm').onsubmit = (e) => { e.preventDefault(); const v = $('cmd').value.trim(); if (!v) return; if (v[0] !== ':' && v[0] !== '#') { toast('A command starts with :P or #P', true); return; } send(v); $('cmd').value = ''; };
+  // configuration text
+  $('cfgGet').onclick = async () => {
+    await Log.ready();
+    const got = Log.collect(/^CONFIG=begin/, /^CONFIG=end/, 6000);
+    const r = await send('#PCONFIG', { quiet: true });
+    if (!r.ok) { toast(ERR_TEXT.nolink, true); return; }
+    const lines = await got;
+    if (!lines) { toast('The settings text did not arrive; try again', true); return; }
+    $('cfgText').value = lines.filter((l) => /^(#P|CONFIG=|INFO=)/.test(l)).join('\n') + '\n';
+    $('cfgCopy').disabled = $('cfgSave').disabled = false;
+  };
+  $('cfgCopy').onclick = async () => {
+    const t = $('cfgText'); try { await navigator.clipboard.writeText(t.value); toast('Copied'); return; } catch (e) {}
+    t.focus(); t.select(); try { document.execCommand('copy'); toast('Copied'); } catch (e) { toast('Select the text and copy it by hand', true); }
+  };
+  $('cfgSave').onclick = () => download('uppity-config-' + stamp() + '.txt', $('cfgText').value);
+  confirmTap($('cfgSend'), 'Tap again: send and save them', async () => {
+    const lines = $('cfgRestore').value.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^#P[A-Z]/.test(l) && !/^#P(CONFIG|FACTORY|RESTART|WIFIRESET|ZERO|COMMISSION[A-Z]*$|OVERRIDE|JOG|NUDGE|SETHOME|SC$)/.test(l));
+    if (!lines.length) { setText('cfgSendSt', 'No #P setting lines found.'); return; }
+    let n = 0, bad = 0;
+    for (const l of lines) {
+      const key = (l.match(/^#P([A-Z]+)/) || [])[1];
+      const re = /^#PS\d+:/.test(l) ? /^(Sequence \[|INVALID)/ : new RegExp('^(#P' + key + '=|OUT_OF_RANGE=#P' + key + '|INVALID=#P' + key + '|SEQ )');
+      const r = await ask(l, re, 4000); ++n; if (!r || /^(OUT_OF_RANGE|INVALID)/.test(r)) ++bad;
+      setText('cfgSendSt', n + ' of ' + lines.length + ' sent' + (bad ? ', ' + bad + ' refused or unanswered' : ''));
+    }
+    loadConfig();
+  });
+
+  // ---------------------------------------------------------------- rescue
+  function renderRescuePowers() {
+    if (!Cfg || !Cfg.pw) return; const p = Cfg.pw;
+    setText('ljPw', 'slow: ' + p.slowUp + ' % up / ' + p.slowDown + ' % down · normal: ' + p.floorUp + ' / ' + p.floorDown + ' % · cap ' + p.cap + ' %');
+    setText('rjPw', 'slow ' + p.rotarySlow + ' % · normal ' + p.rotaryMin + ' %');
+  }
+  function jogPct(axis, dir) {
+    const p = Cfg && Cfg.pw; const slow = speed(axis === 'l' ? 'ljSpeed' : 'rjSpeed') === 'slow';
+    if (axis === 'l') return slow || !p ? 0 : (dir > 0 ? p.floorUp : p.floorDown);
+    return p ? (slow ? p.rotarySlow : p.rotaryMin) : 0;
+  }
+  // Hold-to-jog: start once, renew every 500 ms while held, release on every way a finger can leave.
+  const Jog = {
+    cur: null, timer: 0,
+    start(btn) {
+      this.stop();
+      const axis = btn.dataset.jog, dir = +btn.dataset.dir, pct = jogPct(axis, dir);
+      const body = 'axis=' + axis + '&dir=' + dir + '&pct=' + pct;
+      this.cur = btn; btn.classList.add('held');
+      post('/api/jog', body + '&start=1');
+      this.timer = setInterval(() => post('/api/jog', body, { quiet: true, timeout: 1500 }), 500);
+    },
+    stop() {
+      if (!this.cur) return;
+      clearInterval(this.timer); this.timer = 0; this.cur.classList.remove('held'); this.cur = null;
+      for (let i = 0; i < 3; ++i) setTimeout(() => post('/api/jog/stop', '', { quiet: true, timeout: 1500 }), i * 200);   // a lost release costs at most the 2 s lease
+    },
+  };
+  qa('[data-jog]').forEach((b) => {
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); try { b.setPointerCapture(e.pointerId); } catch (x) {} Jog.start(b); });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => b.addEventListener(ev, () => { if (Jog.cur === b) Jog.stop(); }));
+    b.addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); Jog.start(b); } });
+    b.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') Jog.stop(); });
+    b.addEventListener('contextmenu', (e) => e.preventDefault());
+  });
+  window.addEventListener('blur', () => Jog.stop());
+  document.addEventListener('visibilitychange', () => { if (document.hidden) Jog.stop(); });
+  window.addEventListener('hashchange', () => Jog.stop());
+  // the override: a 3-second hold, then one request
+  (function () {
+    const b = $('ovrHold'); let t = 0, t0 = 0;
+    const cancel = () => { if (t) { clearInterval(t); t = 0; b.textContent = 'Hold 3 s to turn on'; b.classList.remove('held'); } };
+    const begin = (e) => {
+      if (e && e.preventDefault) e.preventDefault(); if (t) return;
+      t0 = Date.now(); b.classList.add('held');
+      t = setInterval(() => { const left = 3 - Math.floor((Date.now() - t0) / 1000); if (left > 0) b.textContent = 'Keep holding… ' + left; else { cancel(); b.textContent = 'Turning on…'; send('#POVERRIDE'); setTimeout(() => b.textContent = 'Hold 3 s to turn on', 2500); } }, 100);
+    };
+    b.addEventListener('pointerdown', (e) => { try { b.setPointerCapture(e.pointerId); } catch (x) {} begin(e); });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => b.addEventListener(ev, cancel));
+    b.addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) begin(e); });
+    b.addEventListener('keyup', cancel);
+    b.addEventListener('contextmenu', (e) => e.preventDefault());
+  })();
+  $('ovrEnd').onclick = () => send('#POVERRIDE0');
+  $('rReset').onclick = resetEstop;
+  $('clearFault').onclick = () => send('#PCLEARFAULT');
+  confirmTap($('setHome'), 'Tap again: the head is lined up', async () => { const l = await ask('#PSETHOME', /^(SETHOME=|.*HOME SET)/, 4000); if (l && /refused/.test(l)) toast(l, true); });
+  function renderRescue(s) {
+    setHtml('rLamps', lamp('Top switch', s.limits.top) + lamp('Bottom switch', s.limits.bot) + lamp('Home switch', s.limits.home) + lamp('E-STOP', s.estop, true) + lamp('Override', s.override > 0, true));
+    setHtml('rGrid', gridHtml([['Height', s.lifter.ticks + ' ticks (' + s.lifter.pct + ' %) ' + s.lifter.conf], ['Head', s.rotary.off ? 'rotary disabled' : s.rotary.deg + '° · ' + s.rotary.conf],
+      ['Safe-spin', s.safeSpin ? s.safeSpin + ' ticks' : 'top only'], ['Job', s.job], ['Last', s.last.job + ' ' + s.last.result + (s.last.reason !== '-' ? ' ' + s.last.reason : '')], ['Alignment', s.alignment]]));
+    $('rReset').disabled = !s.estop;
+    $('ovrEnd').classList.toggle('hidden', !(s.override > 0)); setText('ovrLeft', s.override > 0 ? s.override + ' s left' : '');
+    setText('rLockedNote', s.state === 'LOCKED' ? 'The board is LOCKED: jog and moves are refused until it is commissioned (Setup → Commissioning; the one bypass is there).' : '');
+    if (s.estop && Jog.cur) Jog.stop();
+  }
+
+  route(); poll(); Log.poll(true);
 })();
 </script>
 </body>

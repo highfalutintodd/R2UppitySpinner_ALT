@@ -32,7 +32,7 @@ inline const char* reasonName(int r) {
         case Reason::AlreadyThere: return "ALREADY_THERE"; case Reason::HomeFailed: return "HOME_FAILED"; case Reason::EncoderDirection: return "ENCODER_DIRECTION";
         case Reason::LimitContradiction: return "LIMIT_CONTRADICTION"; case Reason::Busy: return "BUSY"; case Reason::RotaryDisabled: return "ROTARY_DISABLED";
         case Reason::EnableTimeout: return "ENABLE_TIMEOUT"; case Reason::Breakaway: return "BREAKAWAY"; case Reason::AlreadyHome: return "ALREADY_HOME";
-        case Reason::Skipped: return "SKIPPED"; case Reason::HoldGaveUp: return "HOLD_GAVE_UP"; default: return "-";
+        case Reason::Skipped: return "SKIPPED"; case Reason::HoldGaveUp: return "HOLD_GAVE_UP"; case Reason::WrongLimit: return "WRONG_LIMIT"; default: return "-";
     }
 }
 inline const char* stateName(int s) {
@@ -40,6 +40,7 @@ inline const char* stateName(int s) {
 }
 inline const char* lifterConfName(int c) { switch (static_cast<LifterConfidence>(c)) { case LifterConfidence::Known: return "KNOWN"; case LifterConfidence::Stale: return "STALE"; default: return "UNKNOWN"; } }
 inline const char* homeConfName(int c) { switch (static_cast<HomeConfidence>(c)) { case HomeConfidence::SwitchLive: return "SWITCH_LIVE"; case HomeConfidence::Latched: return "LATCHED"; case HomeConfidence::Stale: return "STALE"; default: return "UNKNOWN"; } }
+inline const char* homeProvName(int p) { switch (static_cast<HomeProvenance>(p)) { case HomeProvenance::EdgeCentre: return "EDGE"; case HomeProvenance::RestContact: return "SWITCH"; case HomeProvenance::Manual: return "MANUAL"; default: return "NONE"; } }
 
 // Writes "t=12.345 EVENT detail" without a newline. Returns chars written.
 inline int formatEvent(const Event& e, char* buf, size_t n) {
@@ -60,6 +61,10 @@ inline int formatEvent(const Event& e, char* buf, size_t n) {
             return std::snprintf(buf, n, "%sHOME PARKED on the leading edge (wiggle %d, park moves %ld, rest contact %s; last move %s %s)", head, wig, (long)e.c, e.a ? "yes" : "no", resultName(mr), reasonName(rs));
         }
         case Ev::HomeFrameCorrected: return std::snprintf(buf, n, "%sHOME FRAME CORRECTED by %ld ticks (switch wins)", head, (long)e.a);
+        case Ev::HomeManual: return e.c ? std::snprintf(buf, n, "%sHOME SET refused (%s)", head, reasonName(e.c))
+                                        : std::snprintf(buf, n, "%sHOME SET by the operator (the head was at %ld ticks, %s): this position is home now", head, (long)e.a, homeConfName(e.b));
+        case Ev::Alignment: return e.a ? std::snprintf(buf, n, "%sALIGNMENT suspect: the head may be turned below the safe-spin height; descents need a home first (or the override)", head)
+                                       : std::snprintf(buf, n, "%sALIGNMENT ok again (the head is home)", head);
         case Ev::ConfidenceLifter: return std::snprintf(buf, n, "%sLIFTER %s -> %s", head, lifterConfName(e.a), lifterConfName(e.b));
         case Ev::ConfidenceRotary: return std::snprintf(buf, n, "%sROTARY %s -> %s", head, homeConfName(e.a), homeConfName(e.b));
         case Ev::Estop: return std::snprintf(buf, n, "%sESTOP %s (source %ld)", head, e.b ? "LATCHED" : "released", (long)e.a);
@@ -71,9 +76,12 @@ inline int formatEvent(const Event& e, char* buf, size_t n) {
             if (e.a == 2) return std::snprintf(buf, n, "%sROTARY contact arc=%ld ticks closures=%ld", head, (long)e.b, (long)e.c);
             if (e.a == 3) return std::snprintf(buf, n, "%sCAL travel=%ld ticks spread=%ld.%ld%%", head, (long)e.b, (long)e.c / 10, (long)e.c % 10);
             if (e.a == 4) return std::snprintf(buf, n, "%sCAL min power up=%ld down=%ld (permille)", head, (long)e.b, (long)e.c);
+            if (e.a == 5) return std::snprintf(buf, n, "%sROTARY verdict=%s%s", head, e.b == 2 ? "confident (stored)" : e.b == 1 ? "probable (stored)" : "NOT_REPEATABLE (nothing stored)",
+                                               e.c ? "" : "; contact arc narrower than two creep steps");
             return std::snprintf(buf, n, "%sMEASURE %ld %ld %ld", head, (long)e.a, (long)e.b, (long)e.c);
         case Ev::Refused: return std::snprintf(buf, n, "%s%s REFUSED %s", head, jobName(e.a), reasonName(e.b));
-        case Ev::Override: return std::snprintf(buf, n, "%sOVERRIDE %s", head, e.a ? "on" : "off");
+        case Ev::Override: return e.a ? std::snprintf(buf, n, "%sOVERRIDE on for %lds: descents without a home and rotary jog below the safe-spin height are allowed", head, (long)(e.b + 999) / 1000)
+                                      : std::snprintf(buf, n, "%sOVERRIDE off", head);
         case Ev::LightKit: return std::snprintf(buf, n, "%sLIGHTKIT %ld", head, (long)e.a);
         case Ev::Calibration: return std::snprintf(buf, n, "%sCAL phase %ld at %ld", head, (long)e.a, (long)e.b);
         case Ev::Hold: return e.a ? std::snprintf(buf, n, "%sHOLD re-seek target=%ld from %ld", head, (long)e.b, (long)e.c) : std::snprintf(buf, n, "%sHOLD gave up target=%ld at %ld", head, (long)e.b, (long)e.c);

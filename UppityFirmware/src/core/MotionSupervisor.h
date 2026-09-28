@@ -28,6 +28,8 @@ struct MotionConfig {
     Throttle minPowerUp = 0;        // 0 = profile default
     Throttle minPowerDown = 0;
     Throttle approachPower = 0;     // 0 = profile seek-bottom power
+    Throttle jogPowerUp = 0;        // slow continuous power for jog and #PNUDGE (the calibrated minimum); 0 = profile default minimum
+    Throttle jogPowerDown = 0;
     Ticks    travelTicks = 0;       // 0 = profile default
     bool     travelCalibrated = false;
     bool     lifterInverted = false; // v3 fLifterInverted: mechanism runs backwards; negate drive AND count
@@ -46,7 +48,8 @@ struct MotionConfig {
 
 // Request encodings (MotionRequest a/b/c):
 //   LifterSeek        a = target ticks, b = speed permille (0 = max), c bit0 = full travel to a limit
-//   LifterCreep       a = direction (+1/-1), b = power permille, c bit0 = jog (lease-based)
+//   LifterCreep       a = direction (+1/-1), b = power permille (0 = default), c bit0 = jog (lease-based),
+//                     c bit1 = step: a = signed ticks to travel (#PNUDGE), at the slow power unless b says otherwise
 //   RotaryAbsolute    a = degrees 0..359, b = speed permille (0 = floor), c = max speed permille
 //   RotaryRelative    a = signed degrees, b = speed, c = max speed
 //   RotarySpin        a = signed raw throttle permille (motor polarity, ":PR" sense)
@@ -73,6 +76,7 @@ class MotionSupervisor {
     // failed ENCODER_DIRECTION because the lead screw was still climbing.
     static constexpr int kRestStillTicks = 30;
     static constexpr Ms  kRestMaxMs = 400;
+    static constexpr Ticks kMaxStepTicks = 100;   // longest #PNUDGE
 
     MotionSupervisor(Hal& hal, EstopLatch& estop, CommandQueue& queue, SnapshotPublisher& pub, EventLog& events);
 
@@ -81,6 +85,11 @@ class MotionSupervisor {
     void tick(Ms now);
     void reportTickStats(uint32_t cycleUs, bool late);
     void requestClearFault() { clearFaultReq_ = true; }
+    // Rescue "set rotary home here": the operator says the head is lined up with the opening.
+    // Applied at the next tick if nothing is running and the E-STOP is not latched, else refused
+    // (logged). Any context.
+    void requestSetRotaryHome() { setHomeReq_.store(true, std::memory_order_release); }
+    bool alignmentSuspect() const { return alignmentSuspect_; }
     // Persist sets this around an NVS commit (a flash erase stalls both cores): no new program
     // starts while it is set; queued requests simply wait. Any context.
     void setHoldIntake(bool hold) { holdIntake_.store(hold, std::memory_order_release); }
@@ -123,6 +132,7 @@ class MotionSupervisor {
     void refuseAll(Reason why, const TickInputs& in);
     void refuse(const Step& s, Reason why, uint32_t id, const TickInputs& in);
     PolicyContext policy(const TickInputs& in) const;
+    void markAlignmentSuspect(Ms now);
     Ticks travel() const;
     Ticks safeSpin() const;
     Ticks tpr() const;
@@ -182,6 +192,9 @@ class MotionSupervisor {
     Ms idleSince_ = 0;
     bool wasStopped_ = false;
     bool clearFaultReq_ = false;
+    std::atomic<bool> setHomeReq_{false};
+    bool alignmentSuspect_ = false;       // see SafetyPolicy.h: the override let the head turn or descend unaligned
+    bool overrideWas_ = false;            // for the OVERRIDE on/off log lines (set, expired, cancelled, cleared by E-STOP)
     std::atomic<bool> holdIntake_{false};
     uint32_t lastProgramId_ = 0;
     bool restRequired_ = false; Ticks stillL_ = 0, stillR_ = 0; uint16_t stillTicks_ = 0;

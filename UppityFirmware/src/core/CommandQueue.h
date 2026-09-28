@@ -52,6 +52,9 @@ class CommandQueue {
     void cancel() { cancel_.store(true, std::memory_order_release); }
     bool takeCancel() { return cancel_.exchange(false, std::memory_order_acq_rel); }
     void jogKeepalive(Ms nowMs) { jogUntil_.store(nowMs + kJogLeaseMs, std::memory_order_release); }
+    // The page's finger came off the jog button: end the lease now instead of letting it run out.
+    // (Stored as "now", not 0: 0 would read as a live lease again once millis() passes 2^31.)
+    void jogRelease(Ms nowMs) { jogUntil_.store(nowMs, std::memory_order_release); }
     bool jogLeaseLive(Ms nowMs) const { return static_cast<int32_t>(jogUntil_.load(std::memory_order_acquire) - nowMs) > 0; }
     void setOverride(Ms untilMs) { overrideUntil_.store(untilMs, std::memory_order_release); }
     Ms   overrideUntil() const { return overrideUntil_.load(std::memory_order_acquire); }

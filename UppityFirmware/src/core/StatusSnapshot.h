@@ -53,8 +53,13 @@ struct Snapshot {
     uint8_t estopSource = 0;
 
     Ms overrideRemainingMs = 0;  // rescue override lease
+    bool alignmentSuspect = false;   // the override let the head turn or descend unaligned; descents need a home first
+    bool commissioning = false;  // the commissioning flow has lifted the lock for its steps
     JobKind activeJob = JobKind::None;
     uint32_t activeJobId = 0;
+    JobKind activeProgram = JobKind::None;   // the request the active job belongs to (":PH" runs SEEK and HOME steps inside SAFE_LOWER)
+    uint8_t jobPhase = 0;        // the active job's phase (seek / home / calibration), for progress displays
+    int16_t jobDetail = 0;       // calibration: LifterCalibrate::progress(); characterisation: switch passes; creep: signed step or direction
     uint32_t lastProgramId = 0;  // id of the last program that ended (done, failed or refused); the sequencer waits on it
     JobKind lastJob = JobKind::None;
     JobResult lastResult = JobResult::None;

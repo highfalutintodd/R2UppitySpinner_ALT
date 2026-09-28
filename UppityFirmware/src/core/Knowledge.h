@@ -18,7 +18,7 @@ enum class HomeConfidence : uint8_t {
     Stale      = 3,  // a latch exists but a stall/fault/implausible encoder happened since
 };
 
-enum class HomeProvenance : uint8_t { None = 0, EdgeCentre = 1, RestContact = 2 };
+enum class HomeProvenance : uint8_t { None = 0, EdgeCentre = 1, RestContact = 2, Manual = 3 };   // Manual: "set rotary home here" (Rescue)
 
 constexpr int kHomeToleranceDeg = 10;   // v3.6.0's ROTARY_HOME_TOLERANCE_DEG, kept
 

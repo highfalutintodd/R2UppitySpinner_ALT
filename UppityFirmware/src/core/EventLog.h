@@ -34,6 +34,8 @@ enum class Ev : uint8_t {
     Hold,               // a = 1 re-seek / 0 gave up, b = target ticks, c = current
     Tick,               // a = cycleUsMax, b = lateTicks (periodic health)
     HomeSettle,         // a = 1 contact at rest / 0 not, b = wiggle moves, c = nudges
+    HomeManual,         // a = rotary ticks before, b = old HomeConfidence ("set rotary home here", Rescue)
+    Alignment,          // a = 1 suspect (the override let the head turn or descend unaligned) / 0 cleared by a home
 };
 
 // Reason codes shared by JobResult/Refused/SeekClamped/JobEnd.
@@ -44,6 +46,7 @@ enum class Reason : uint8_t {
     NoEdge, SwitchStuck, NotRepeatable, PolicyChange, Overshoot, AlreadyThere, HomeFailed,
     EncoderDirection, LimitContradiction, Busy, RotaryDisabled, EnableTimeout, Breakaway,
     AlreadyHome, Skipped, HoldGaveUp,
+    WrongLimit,         // a creep met the limit switch at the end it was moving away from: the mechanism runs the other way
 };
 
 struct Event {

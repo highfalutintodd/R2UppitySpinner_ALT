@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdarg>
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -18,7 +19,7 @@
 //     their default when an older blob is loaded; nothing is ever moved or retyped.
 namespace uppity {
 
-constexpr uint16_t kSettingsSchema = 3;
+constexpr uint16_t kSettingsSchema = 4;
 
 struct Settings {
     // ---- 4-byte ----
@@ -56,7 +57,8 @@ struct Settings {
     uint8_t  v3Imported = 0;         // the one-shot v3 NVS import has run
     uint8_t  cmdTx = 0;              // echo responses on the command UART TX (GPIO0, only if wired)
     uint8_t  randomLight = 0;        // schema 2: light kit while random mode runs; 0 leave alone, 1-7 that mode, 8 shuffle per action; off when it ends
-    uint8_t  reserved[35] = {};      // zero; new fields are carved from here
+    uint8_t  commissionStep = 0;     // schema 4: commissioning progress (CommissionFlow::Step); 0 not started, 8 complete
+    uint8_t  reserved[34] = {};      // zero; new fields are carved from here
     // ---- schema 3 (phase 3, networking): appended past the 80-byte prefix; 1-byte types only ----
     char     staSsid[33] = {};       // home network to join; empty = access point only
     char     staPass[65] = {};
@@ -93,6 +95,7 @@ inline void sanitize(Settings& s) {
     if (s.aggressiveness > 2) s.aggressiveness = 1;
     if (s.commissioned > 2) s.commissioned = 0;
     if (s.randomLight > 8) s.randomLight = 0;
+    if (s.commissionStep > 8) s.commissionStep = 0;
     s.staSsid[sizeof s.staSsid - 1] = '\0'; s.staPass[sizeof s.staPass - 1] = '\0'; s.apPass[sizeof s.apPass - 1] = '\0';
     if (std::strlen(s.apPass) < 8) std::snprintf(s.apPass, sizeof s.apPass, "Astromech");   // WPA2 refuses shorter
     s.wifiEnabled = s.wifiEnabled ? 1 : 0;
@@ -113,6 +116,7 @@ inline uint16_t migrateSettings(Settings& out, const uint8_t* blob, size_t n) {
     // (a reserve byte reads as 0, so a field whose default is 0 needs nothing):
     if (tmp.schema < 2) tmp.randomLight = 0;
     // schema 3 appended the WiFi fields past the old end: a shorter blob leaves them at their defaults
+    // schema 4 carved commissionStep from the reserve: an older blob reads 0 there, "not started"
     out = tmp;
     out.schema = kSettingsSchema;
     sanitize(out);
@@ -171,8 +175,45 @@ inline Ticks effectiveTravel(const Settings& s, const Calibration& c) {
     return profileFor(static_cast<LifterMotor>(s.motor)).defaultTravelTicks;
 }
 
+// The lifter and rotary powers the rescue jog, #PNUDGE and the web page's labels use, in
+// permille (rotary in percent). floor* = what a seek never goes below (#PMINUP/#PMINDOWN, else
+// the calibration, else the profile), as MotionSupervisor::floorSpeed applies it. slow* = the
+// calibrated minimum (the lowest continuous power the calibration saw move this lifter from
+// rest, plus 5 %), else the profile's default minimum: a jog at that power creeps. cap = the
+// profile ceiling (expert mode lifts the 19:1's).
+struct PowerSet {
+    Throttle floorUp = 0, floorDown = 0, slowUp = 0, slowDown = 0, cap = 0;
+    uint8_t  rotaryMinPct = 40, rotarySlowPct = 26;
+};
+inline PowerSet powerSet(const Settings& s, const Calibration& c) {
+    PowerSet p;
+    LifterMotor m = static_cast<LifterMotor>(s.motor);
+    bool cal = calibrationApplies(s, c);
+    Throttle profMin = pctToThrottle(profileFor(m).defaultMinPowerPct);
+    p.cap = effectiveMaxThrottle(m, s.expertMode != 0);
+    p.floorUp   = s.minPowerUpPct   ? pctToThrottle(s.minPowerUpPct)   : (cal && c.minUp   ? static_cast<Throttle>(c.minUp)   : profMin);
+    p.floorDown = s.minPowerDownPct ? pctToThrottle(s.minPowerDownPct) : (cal && c.minDown ? static_cast<Throttle>(c.minDown) : profMin);
+    p.slowUp    = cal && c.minUp   ? static_cast<Throttle>(c.minUp)   : profMin;
+    p.slowDown  = cal && c.minDown ? static_cast<Throttle>(c.minDown) : profMin;
+    Throttle* all[] = { &p.floorUp, &p.floorDown, &p.slowUp, &p.slowDown };
+    for (Throttle* t : all) *t = clampv<Throttle>(*t, 120, p.cap);
+    p.rotaryMinPct = s.rotaryMinPct;
+    p.rotarySlowPct = static_cast<uint8_t>(s.rotaryMinPct * 2 / 3 < 12 ? 12 : s.rotaryMinPct * 2 / 3);
+    return p;
+}
+
+// A different lifter is a different mechanism: everything measured on the old one goes, and
+// commissioning starts again from step 1 if it had started.
+inline void onMotorChanged(Settings& s) {
+    s.commissioned = 0; s.travelTicks = 0; s.safeSpinTicks = 0;
+    s.minPowerUpPct = s.minPowerDownPct = s.approachPowerPct = 0;
+    s.commissionStep = s.commissionStep ? 1 : 0;
+}
+
 inline MotionConfig toMotionConfig(const Settings& s, const Calibration& c) {
     MotionConfig m;
+    PowerSet pw = powerSet(s, c);
+    m.jogPowerUp = pw.slowUp; m.jogPowerDown = pw.slowDown;
     m.motor = static_cast<LifterMotor>(s.motor);
     m.expertMode = s.expertMode != 0;
     bool cal = calibrationApplies(s, c);
@@ -219,7 +260,10 @@ namespace setkey {
 inline bool inRange(int32_t v, int32_t lo, int32_t hi) { return v >= lo && v <= hi; }
 }
 
+// The order is the #PCONFIG order, and a dump is replayed top to bottom: MOTOR comes first
+// because changing the profile clears travel, safe-spin and the min powers (onMotorChanged).
 inline const SettingKey kSettingKeys[] = {
+    { "MOTOR",      [](const Settings& s) { return (int32_t)s.motor; },           [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, (int32_t)LifterMotor::Count - 1)) return false; s.motor = (uint8_t)v; return true; }, "0 Pololu 6.3:1, 1 Pololu 19:1, 2 IA-Parts" },
     { "INVERT",     [](const Settings& s) { return (int32_t)s.inverted; },        [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.inverted = (uint8_t)v; return true; }, "0/1 mechanism runs backwards" },
     { "TRAVEL",     [](const Settings& s) { return (int32_t)s.travelTicks; },     [](Settings& s, int32_t v) { if (v != 0 && !setkey::inRange(v, 100, 5000)) return false; s.travelTicks = (uint16_t)v; return true; }, "ticks of lifter travel; 0 = calibrated/profile" },
     { "SAFESPIN",   [](const Settings& s) { return (int32_t)s.safeSpinTicks; },   [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 5000)) return false; s.safeSpinTicks = (uint16_t)v; return true; }, "ticks above which the head may turn; 0 = top only" },
@@ -227,7 +271,6 @@ inline const SettingKey kSettingKeys[] = {
     { "HOMEOFFSET", [](const Settings& s) { return (int32_t)s.homeOffsetTicks; }, [](Settings& s, int32_t v) { if (!setkey::inRange(v, -600, 600)) return false; s.homeOffsetTicks = (int16_t)v; return true; }, "ticks from the switch centre to the visual home" },
     { "HOMEPARK",   [](const Settings& s) { return (int32_t)s.homePark; },        [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 2)) return false; s.homePark = (uint8_t)v; return true; }, "0 arc centre; 1 against the sweep (v3); 2 with the sweep" },
     { "WIGGLE",     [](const Settings& s) { return (int32_t)s.wiggleDeg; },       [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 20)) return false; s.wiggleDeg = (uint8_t)v; return true; }, "degrees, first swing of the settle wiggle; 0 = none" },
-    { "MOTOR",      [](const Settings& s) { return (int32_t)s.motor; },           [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, (int32_t)LifterMotor::Count - 1)) return false; s.motor = (uint8_t)v; return true; }, "0 Pololu 6.3:1, 1 Pololu 19:1, 2 IA-Parts" },
     { "MINUP",      [](const Settings& s) { return (int32_t)s.minPowerUpPct; },   [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 100)) return false; s.minPowerUpPct = (uint8_t)v; return true; }, "% lowest lifter power going up; 0 = calibrated/profile" },
     { "MINDOWN",    [](const Settings& s) { return (int32_t)s.minPowerDownPct; }, [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 100)) return false; s.minPowerDownPct = (uint8_t)v; return true; }, "% lowest lifter power going down" },
     { "APPROACH",   [](const Settings& s) { return (int32_t)s.approachPowerPct; },[](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 100)) return false; s.approachPowerPct = (uint8_t)v; return true; }, "% power on the final approach to a limit; 0 = profile" },

@@ -12,6 +12,10 @@
 //   #PRESUME #PSTATE #PSTATUS #PROTARYTEST[n] #PSC #PCLEARFAULT #PCONFIG #PCAL #PUNLOCK #PLOCK #PHELP
 //   #PS<n>:<elements> #PL #PD<n> #PSEQNAME<n>=<name> #PZERO #PFACTORY #PRESTART #PV3 #PV3IMPORT
 //   #PR (toggle rotary) #PN{C|O}{L|R} (limit polarity)
+// Phase 4 (rescue and commissioning):
+//   #POVERRIDE[1|0]  60 s safety override on / off        #PJOG{L|R}{+|-}<pct> / #PJOG0  hold-to-jog start / release
+//   #PNUDGE<+-ticks> short lifter step at the slow power   #PSETHOME  the head is lined up: this is home
+//   #PCOMMISSION[START|STOP|RUN|NEXT|RESET|BYPASS]         #PSAFESPINHERE  commissioning step 6: store the measured height
 namespace uppity {
 
 enum class Verb : uint8_t {
@@ -24,6 +28,13 @@ enum class Verb : uint8_t {
     Resume, State, Status, RotaryTest, Calibrate, ClearFault, Config, Cal, V3Dump, V3Import, Unlock, Lock, Help,
     Set,                 // #P<KEY>[=]<value> / #P<KEY>: key in Command::key, value in a when hasA
     StoreSeq, ListSeq, DelSeq, SeqName, Zero, Factory, Restart, RotaryToggle, LimitPolarity, WifiReset,
+    // phase 4
+    Override,            // a = 1 on / 0 off
+    Jog,                 // letter 'L'/'R' with b = +1/-1 and a = percent (0 = the slow default); letter 0 = release
+    Nudge,               // a = signed ticks
+    SetHome,
+    Commission,          // letter: 0 status, 'S' start, 'P' stop (pause), 'R' run, 'N' next, 'X' reset, 'B' bypass
+    SafeSpinHere,
 };
 
 struct Command {
@@ -128,6 +139,36 @@ inline bool parseLine(const char* line, Command& cmd) {
     if (startsWith(p, "ZERO")) { cmd.verb = Verb::Zero; return true; }
     if (startsWith(p, "WIFIRESET")) { cmd.verb = Verb::WifiReset; return true; }
     if (startsWith(p, "FACTORY")) { cmd.verb = Verb::Factory; return true; }
+    // ---- phase 4: rescue and commissioning (before the generic key: none of these is a setting) ----
+    if (startsWith(p, "OVERRIDE")) {
+        p += 8; cmd.verb = Verb::Override; cmd.a = 1;
+        if (*p == '\0') return true;
+        if (readInt(p, cmd.a) && *p == '\0' && (cmd.a == 0 || cmd.a == 1)) { cmd.hasA = true; return true; }
+        cmd.verb = Verb::Invalid; return true;
+    }
+    if (startsWith(p, "JOG")) {
+        p += 3; cmd.verb = Verb::Invalid;
+        if (p[0] == '0' && p[1] == '\0') { cmd.verb = Verb::Jog; return true; }                 // release
+        if ((p[0] == 'L' || p[0] == 'R') && (p[1] == '+' || p[1] == '-')) {
+            cmd.letter = p[0]; cmd.b = p[1] == '-' ? -1 : 1; p += 2;
+            if (*p == '\0') { cmd.verb = Verb::Jog; return true; }                              // no percent: the slow default
+            int32_t v; if (readInt(p, v) && *p == '\0' && v >= 0 && v <= 100) { cmd.a = v; cmd.hasA = true; cmd.verb = Verb::Jog; }
+        }
+        return true;
+    }
+    if (startsWith(p, "NUDGE")) {
+        p += 5;
+        if (readInt(p, cmd.a) && *p == '\0' && cmd.a != 0) { cmd.hasA = true; cmd.verb = Verb::Nudge; } else cmd.verb = Verb::Invalid;
+        return true;
+    }
+    if (std::strcmp(p, "SETHOME") == 0) { cmd.verb = Verb::SetHome; return true; }
+    if (std::strcmp(p, "SAFESPINHERE") == 0) { cmd.verb = Verb::SafeSpinHere; return true; }
+    if (startsWith(p, "COMMISSION") && !startsWith(p, "COMMISSIONED")) {
+        static const struct { const char* w; char l; } kWords[] = { { "", 0 }, { "START", 'S' }, { "STOP", 'P' }, { "RUN", 'R' }, { "NEXT", 'N' }, { "RESET", 'X' }, { "BYPASS", 'B' } };
+        cmd.verb = Verb::Invalid;
+        for (const auto& w : kWords) if (std::strcmp(p + 10, w.w) == 0) { cmd.verb = Verb::Commission; cmd.letter = w.l; break; }
+        return true;
+    }
     // ---- generic settings key: "#PKEY", "#PKEY<n>", "#PKEY=<n>", "#PKEY=<text>" ----
     {
         const char* k = p;

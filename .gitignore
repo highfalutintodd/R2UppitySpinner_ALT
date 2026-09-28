@@ -23,3 +23,6 @@ requirements.txt
 UppityFirmware/test/native/uppity_tests
 UppityFirmware/test/native/*.dSYM
 UppityFirmware/build/
+
+# dev-server byte code
+webui/__pycache__/
