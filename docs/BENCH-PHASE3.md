@@ -224,3 +224,13 @@ the next one. Reproduced in the simulator with a heavy rotor; 116 host tests.
 3. One E-STOP mid-move, to confirm it still lands.
 4. Optional, if the droid is otherwise ready: random mode for a few minutes with the page open,
    watching that the pill and readouts keep up.
+
+## Results 2026-09-27, fourth run (build 0551078b): Phase 3 verified on hardware
+
+Up interrupted by Down four times and Down interrupted by Up three times: `SEEK ABORTED
+CANCEL`, a rest pause of 80–140 ms, then the new move, no fault. Four E-STOPs mid-move, all
+latched at once on both paths. Random medium from the page with the light kit following, a web
+stop mid-descent, and a theme change while a motor was on that printed `PERSIST=deferred` and
+saved two seconds after the drivers switched off. Boot with the mast mid-travel resolved
+UNKNOWN and referenced at the top on the first Up. Still not run: two phones at once, the
+command UART, the trigger inputs. Phase 3 is done; Phase 4 starts from `docs/PHASE4-BRIEF.md`.

@@ -554,6 +554,11 @@ fed by every console line, `#PSSID/#PPASS/#PAPPASS/#PWIFI/#PAPCHANNEL/#PTHEME/#P
 Sequences/Setup/Diagnostics/Rescue pages, a device PIN, a UI for the update upload. Build
 1,135,007 bytes (57 %). Bench: `docs/BENCH-PHASE3.md`.
 
+**Status 2026-09-27 (evening): Phase 3 bench-verified** after four runs; the fixes (port-81
+E-STOP listener, four-channel retrying E-STOP button, 400 ms stall guard, poll timeouts, seek
+interruption with a post-interrupt rest gate, ELF-hash build id) are recorded in that doc.
+Phase 4 starts from `docs/PHASE4-BRIEF.md`.
+
 ---
 
 ## 6. Verification strategy
