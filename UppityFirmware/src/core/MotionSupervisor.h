@@ -133,6 +133,7 @@ class MotionSupervisor {
     void refuse(const Step& s, Reason why, uint32_t id, const TickInputs& in);
     PolicyContext policy(const TickInputs& in) const;
     void markAlignmentSuspect(Ms now);
+    void updateAlignment(const TickInputs& in);
     Ticks travel() const;
     Ticks safeSpin() const;
     Ticks tpr() const;
@@ -193,7 +194,8 @@ class MotionSupervisor {
     bool wasStopped_ = false;
     bool clearFaultReq_ = false;
     std::atomic<bool> setHomeReq_{false};
-    bool alignmentSuspect_ = false;       // see SafetyPolicy.h: the override let the head turn or descend unaligned
+    bool turnedSinceHome_ = false;        // the head was off home above the safe height (or turned below it) since its last home
+    bool alignmentSuspect_ = false;       // turnedSinceHome_ while below the safe height: what the page and the log show
     bool overrideWas_ = false;            // for the OVERRIDE on/off log lines (set, expired, cancelled, cleared by E-STOP)
     std::atomic<bool> holdIntake_{false};
     uint32_t lastProgramId_ = 0;

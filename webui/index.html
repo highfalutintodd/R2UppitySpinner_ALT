@@ -74,8 +74,11 @@ button:disabled { opacity:.45; cursor:default; }
 .banner.stop { background:var(--bad); color:#fff; } .banner.warn { background:var(--warn); color:#fff; } .banner.info { background:var(--raise2); border:1px solid var(--keyline-hd); }
 .banner button { background:rgba(255,255,255,.92); color:#211C17; border-color:transparent; }
 .banner.info button { background:var(--raise); color:var(--text); border-color:var(--keyline-hd); }
-.estop { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(var(--nav-h) + .55rem + env(safe-area-inset-bottom)); z-index:7; width:min(92vw, 30rem); min-height:3.4rem; font-size:1.15rem; letter-spacing:.06em; background:var(--bad); color:#fff; border:2px solid #fff; border-radius:.8rem; box-shadow:0 6px 18px rgba(0,0,0,.35); touch-action:manipulation; }
+/* centred with left/right/auto margins, never a transform: the general button:active nudge would replace a centring
+   transform and make the E-STOP jump half its width under the mouse (bench 2026-10-03, laptop) */
+.estop { position:fixed; left:0; right:0; margin:0 auto; bottom:calc(var(--nav-h) + .55rem + env(safe-area-inset-bottom)); z-index:7; width:min(92vw, 30rem); min-height:3.4rem; font-size:1.15rem; letter-spacing:.06em; background:var(--bad); color:#fff; border:2px solid #fff; border-radius:.8rem; box-shadow:0 6px 18px rgba(0,0,0,.35); touch-action:manipulation; }
 .estop:hover { background:#B0364A; }
+.estop:active { transform:none; }
 .estop.sending { animation:pulse .5s infinite alternate; }
 .estop.latched { background:#3a3a3a; border-color:var(--bad); }
 .estop.failed { background:var(--warn); }
@@ -130,7 +133,7 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
   nav { top:0; bottom:0; right:auto; width:var(--nav-w); flex-direction:column; justify-content:flex-start; padding-top:4.2rem; border-top:0; border-right:1px solid var(--keyline-hd); }
   nav a { flex:none; flex-direction:row; justify-content:flex-start; gap:.6rem; padding:0 1rem; font-size:.85rem; }
   header { padding-left:1rem; }
-  .estop { left:calc(var(--nav-w) + (100vw - var(--nav-w)) / 2); bottom:.8rem; }
+  .estop { left:var(--nav-w); bottom:.8rem; }
 }
 </style>
 </head>
@@ -504,6 +507,7 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
     }, 300);
   }
   $('estopBtn').addEventListener('pointerdown', estop);
+  $('estopBtn').addEventListener('mousedown', estop);      // a mouse press too, in case a browser skips pointer events
   $('estopBtn').addEventListener('click', estop);
   const resetEstop = () => post('/api/estop/reset');
 

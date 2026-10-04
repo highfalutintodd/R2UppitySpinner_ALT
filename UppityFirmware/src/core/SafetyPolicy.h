@@ -14,11 +14,13 @@
 //  4. E-STOP latched, commissioning lock, or a blocking fault refuses everything.
 //
 // Rule 2 has one exemption: a head at or below the safe-spin height is inside the dome opening
-// and therefore aligned, because rules 1 and 2 never let it get there turned. The rescue
-// override breaks that argument (it lets a turned head descend, and lets the rotary jog below
-// the safe height), so the supervisor raises `alignmentSuspect` when it does either, and the
-// exemption is off until the head is home again. The top limit switch is never "inside the
-// opening", whatever the safe-spin setting says.
+// and therefore aligned. That only holds if it came down past that height while home and has not
+// turned since. It fails at the threshold itself (bench 2026-10-03: a turned head that rule 2
+// clamped AT the safe-spin height was let down by the next jog press and hit the lifter frame),
+// and the rescue override breaks it outright. So the supervisor passes `alignmentSuspect` (its
+// turnedSinceHome_: the head was off home above the safe height, or turned below it, since its
+// last home) and the exemption is off while it is set. The top limit switch is never "inside
+// the opening", whatever the safe-spin setting says.
 namespace uppity {
 
 struct PolicyContext {
@@ -34,7 +36,7 @@ struct PolicyContext {
     bool  rotaryFault = false;
     bool  globalFault = false;
     bool  overrideLive = false;     // rescue override lease
-    bool  alignmentSuspect = false; // the override let the head turn or descend unaligned; cleared by a home
+    bool  alignmentSuspect = false; // the head may be turned: off home above the safe height (or turned below it) since its last home
     bool  topLimit = false, bottomLimit = false, homeSwitch = false;
 };
 

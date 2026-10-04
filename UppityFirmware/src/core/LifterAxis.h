@@ -208,13 +208,12 @@ class LifterCreep {
         awayWas_ = away; primed_ = true;
         if (p_.dir < 0 && pos <= p_.floorTicks) return beginBrake(StepOutcome::done(JobResult::Clamped, Reason::RotaryNotHome, pos), now);
         if (p_.stopAfter > 0 && (pos - start_) * p_.dir >= p_.stopAfter) return beginBrake(StepOutcome::done(JobResult::DoneTarget, Reason::TargetReached, pos), now);
-        if (p_.jog) {
-            if (!in.jogLeaseLive) return beginBrake(StepOutcome::done(JobResult::Done, Reason::LeaseExpired, pos), now);
-        } else {
-            if (pos != lastTicks_) { lastTicks_ = pos; lastMoveMs_ = now; }
-            else if (elapsed(now, lastMoveMs_) >= p_.stallMs) { pending_ = StepOutcome::failed(JobResult::Stalled, Reason::Stall, pos); finished_ = true; return pending_; }
-            if (elapsed(now, startMs_) >= p_.maxMs) return beginBrake(StepOutcome::failed(JobResult::Failed, Reason::Timeout, pos), now);
-        }
+        if (p_.jog && !in.jogLeaseLive) return beginBrake(StepOutcome::done(JobResult::Done, Reason::LeaseExpired, pos), now);
+        // A stall ends every creep, a held jog included (bench 2026-10-03: a jog that met the
+        // lifter frame kept pushing for as long as the button was held).
+        if (pos != lastTicks_) { lastTicks_ = pos; lastMoveMs_ = now; }
+        else if (elapsed(now, lastMoveMs_) >= p_.stallMs) { pending_ = StepOutcome::failed(JobResult::Stalled, Reason::Stall, pos); finished_ = true; return pending_; }
+        if (!p_.jog && elapsed(now, startMs_) >= p_.maxMs) return beginBrake(StepOutcome::failed(JobResult::Failed, Reason::Timeout, pos), now);
         out = driveCmd(static_cast<Throttle>(p_.power * p_.dir));
         return StepOutcome::running();
     }

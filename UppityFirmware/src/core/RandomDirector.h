@@ -129,7 +129,9 @@ class RandomDirector {
         (void)s;
         int n = 0;
         switch (rng_->range(0, 2)) {
-            case 0: o[n++] = lift(rng_->range(0, 100), pLift_); break;
+            // home first, as every level action that may descend does: the other two actions leave
+            // the head turned at the top, and a turned head is held at the safe-spin height
+            case 0: o[n++] = home(); o[n++] = lift(rng_->range(0, 100), pLift_); break;
             case 1: {
                 int v = rng_->range(-pRot_, pRot_);
                 o[n++] = lift(100, pLift_);

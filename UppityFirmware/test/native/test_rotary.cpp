@@ -206,8 +206,14 @@ TEST(jog_floors_at_12_percent_and_needs_override_below_safe_height) {
     g.req(JobKind::RotaryJog, 50); g.runMs(30);
     CHECK(g.sup.activeJob() == JobKind::RotaryJog);
     CHECK_EQ(g.hal.command(Axis::Rotary).duty, 120);                  // floored at 12 %
-    g.runMs(2500);
-    CHECK(g.sup.activeJob() == JobKind::None);                        // lease expired
+    g.runMs(1000);                                                    // 12 % does not turn this rotor: since 2026-10-03 the
+    CHECK(g.sup.activeJob() == JobKind::None);                        // jog stops itself instead of pushing for the whole lease
+    CHECK(g.snap().lastResult == JobResult::Stalled);
+    g.queue.jogKeepalive(g.hal.nowMs());                              // at a power that turns it, the lease ends it
+    g.req(JobKind::RotaryJog, 500); g.runMs(1500);
+    CHECK(g.sup.activeJob() == JobKind::RotaryJog);
+    g.runMs(1000);
+    CHECK(g.sup.activeJob() == JobKind::None);
     CHECK(g.snap().lastReason == (uint8_t)Reason::LeaseExpired);
 }
 

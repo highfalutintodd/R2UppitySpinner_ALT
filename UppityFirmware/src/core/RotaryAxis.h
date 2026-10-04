@@ -126,11 +126,10 @@ class RotarySpin {
         if (universalExit(in, in.rotaryDiag, o)) { pending_ = o; finished_ = true; return pending_; }
         if (braking_) { if (static_cast<int32_t>(now - brakeUntil_) >= 0) { finished_ = true; return pending_; } return StepOutcome::running(); }
         if (p_.jog && !in.jogLeaseLive) { pending_ = StepOutcome::done(JobResult::Done, Reason::LeaseExpired, pos); braking_ = true; brakeUntil_ = now + 50; return StepOutcome::running(); }
-        if (!p_.jog) {
-            Throttle cur = slew_.cur;
-            if (pos != lastTicks_) { lastTicks_ = pos; lastMoveMs_ = now; }
-            else if (absi(cur) >= p_.floor && elapsed(now, lastMoveMs_) >= p_.stallMs) { pending_ = StepOutcome::failed(JobResult::Stalled, Reason::Stall, pos); finished_ = true; return pending_; }
-        }
+        // a stall ends a spin and a held jog alike: neither keeps pushing the head into something
+        Throttle cur = slew_.cur;
+        if (pos != lastTicks_) { lastTicks_ = pos; lastMoveMs_ = now; }
+        else if (absi(cur) >= p_.floor && elapsed(now, lastMoveMs_) >= p_.stallMs) { pending_ = StepOutcome::failed(JobResult::Stalled, Reason::Stall, pos); finished_ = true; return pending_; }
         out = driveCmd(slew_.step(p_.throttle, now, *p_.rc, p_.floor));
         return StepOutcome::running();
     }

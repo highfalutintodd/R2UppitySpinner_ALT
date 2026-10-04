@@ -35,11 +35,13 @@ going for up to 2 seconds.
    arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
    ```
    ```
-   python3 ~/Library/Arduino15/packages/esp32/hardware/esp32/3.3.4/tools/espota.py -r -i 192.168.86.90 -p 3232 -a Astromech -f ~/Desktop/uppity-build/UppityFirmware.ino.bin
+   python3 ~/Library/Arduino15/packages/esp32/hardware/esp32/3.3.4/tools/espota.py -r -i 192.168.86.69 -p 3232 -a Astromech -f ~/Desktop/uppity-build/UppityFirmware.ino.bin
    ```
    The compile ends with `Sketch uses 1173871 bytes (59%)` (a few bytes either way is fine);
-   the upload with `Result: OK`. If the board's address changed, `#PSTATUS` prints the new one
-   after `home=`. If OTA fails, USB works as before (monitor closed, same folder):
+   the upload with `Result: OK`. The house network can give the board a new address: the
+   monitor's boot line `WIFI joined "WordNet": … (192.168.86.xx, …)` shows the current one (it
+   was 192.168.86.69 on 2026-10-03), and `#PSTATUS` prints it after `home=`. If OTA says
+   `Host … Not Found`, use that address, or flash over USB (monitor closed, same folder):
    ```
    arduino-cli upload --profile uppity -p /dev/cu.wchusbserial110 UppityFirmware
    ```
@@ -52,7 +54,8 @@ going for up to 2 seconds.
    settings gained one byte for the commissioning step). The `CONFIG ...` line must still show
    your numbers: `motor=1`, `inverted=1`, `travel=1150 (#PTRAVEL)`, `safespin=904`,
    `tpr=1185.5`, `commissioned=1`.
-5. On the phone (house WiFi), open `http://192.168.86.90`. The page now has four tabs along the
+5. On the phone (house WiFi), open `http://` followed by the address from the boot line (for
+   example `http://192.168.86.69`), or `http://uppity.local`. The page now has four tabs along the
    bottom (a column on the left on a laptop). Go to **Diagnostics → Configuration → Get the
    settings text**, then **Download** (or Copy and paste it into Notes). This is your backup: every
    setting as a line you can send back later. Do this before anything else.
@@ -110,8 +113,10 @@ lets through still happens above 1000 ticks, where you have watched the head tur
     switch is made).
 13. **Rescue → Lifter jog**, power **Slow**. Hold **▼ Down**. The mast creeps down and stops by
     itself at 1100 (`CREEP CLAMPED ROTARY_NOT_HOME`): the head is not home, so without the override
-    it may not go lower. That stop comes from the board, not from your finger, so it holds even if
-    the radio drops. Let go.
+    it may not go lower. Let go, and **do not hold Down again** to check that it stays: on
+    2026-10-03 the next press was let through and the turned head hit the lifter frame (fixed in
+    the next build; see Results at the end). Whether it stays is checked with a fixed-size step in
+    the re-test, where a failure could only move 20 ticks.
 14. **Safety override: press and hold** the button. It counts `Keep holding… 2`, `… 1`, then turns
     on: an amber banner `SAFETY OVERRIDE ON: 60 s left` counting down, and on the monitor
     `OVERRIDE=on (60 s; …)` and `OVERRIDE on for 60s: …`. **Note the time.** A short press (let go
@@ -135,8 +140,10 @@ lets through still happens above 1000 ticks, where you have watched the head tur
     top, hold **▼ Down** for half a second and let go. It stops within a moment of letting go
     (`CREEP DONE LEASE_EXPIRED` or `CREEP ABORTED CANCEL`). With **Normal** power it moves at your
     seek floor (50 %); try one short hold. Then **▲ Up** back to the top.
-21. **E-STOP during a jog** (head still home): hold **▼ Down** and tap **E-STOP** while holding. It
-    stops and latches as always; an override, if one were on, ends with it. **Reset E-STOP**.
+21. **E-STOP during a move** (head still home). On the phone: hold **▼ Down** with one finger and
+    tap **E-STOP** with another. On the laptop one mouse cannot hold a jog and click E-STOP at the
+    same time, so start a move from **Operate** (Up, or Down) and click **E-STOP** while it runs.
+    It stops and latches as always; an override, if one were on, ends with it. **Reset E-STOP**.
 22. **Set home here**: with the head at home (after step 19, the home switch lamp lit), tap **Set
     home here…**, then **Tap again: the head is lined up**. The monitor shows `HOME SET by the
     operator …`, and Diagnostics shows the rotary home as `MANUAL` until the switch reads closed
@@ -240,3 +247,81 @@ The log file (`~/Desktop/uppity-bench-phase4-log.txt`), and:
 
 Still not run from earlier phases, if you get to them: two phones on the page at once, the
 command UART (the Marcduino bus), the trigger inputs.
+
+## Results 2026-10-03, first run (build df9b0716, Todd's periscope, from the laptop)
+
+Flashed over USB (the board's house address had changed to 192.168.86.69). Worked: the settings
+migration and every number intact; the page tour; settings saved with `Saved` from the board's own
+reply; the two-tap guard on lowering the safe-spin height; both themes; the override lasting exactly
+60 s (on at 776.858, `OVERRIDE off` at 836.858); a `#PNUDGE-50` under the override and a rotary jog
+under the override at about 1100; both refused once the override ended
+(`ROT_JOG REFUSED BELOW_SAFE_HEIGHT`, `CREEP REFUSED ROTARY_NOT_HOME`); **Home the head** raising
+first and clearing the alignment; jogs stopping on release; **Set home here**; `#PSAFESPIN904` back.
+
+**Failed, and it did damage: the head hit the lifter frame.** In step 13 the first Down stopped at
+1100 as intended (`CREEP CLAMPED ROTARY_NOT_HOME` at 665.006), but the next presses were let through
+(jobs 8 and 9 at 667–669 s, and again 14 and 15 at 722–723 s): the head, turned 90°, went down
+past 1100 and into the frame. The cause was in the safety rules, not in the jog: a head at or below
+the safe-spin height was treated as "inside the dome opening, therefore lined up", and once the
+clamp had stopped the turned head exactly at the threshold, the next descent counted as starting
+"inside". The same hole had been there since Phase 1 for two `:PP` presets in a row with the head
+turned. The jog also had no stall exit, so it kept pushing while the button was held. Step 13 was
+mine and said the board would not let the mast go lower; that was not true of the build.
+
+E-STOP from the laptop: the button jumped half its width sideways when pressed (a general "pressed
+button" style replaced the E-STOP's centring), which made clicks miss. Step 21 also asked for a held
+jog and an E-STOP click at once, which one mouse cannot do.
+
+Fixed in the next build (host tests 144; your sequence is now a test that fails on the old build and
+passes on this one):
+1. The board remembers that the head may be turned from the moment it is off home above the
+   safe-spin height (or is turned below it under the override), and refuses every descent below
+   that height until a home clears it. A turned head stopped at the threshold stays there; jog,
+   nudge and `:PP` alike are refused with `ROTARY_NOT_HOME`, and the page shows "The head may be
+   turned below the safe-spin height" with a **Home the head** button. `:PH` from that state rises,
+   homes, then lowers. A head parked inside the dome at power-on can still go up a little and back
+   down without homing, as before.
+2. A held jog stops by itself if the mechanism stops moving: 700 ms on your 19:1 lifter, 800 ms on
+   the rotary (`CREEP STALLED STALL` / `ROT_JOG STALLED STALL`).
+3. Random mode with parameters (`:PM,…`) now homes before each random lift, as the other random
+   modes already did; it had been relying on the same hole.
+4. The E-STOP no longer moves when pressed, and also answers a plain mouse press.
+
+## Before anything moves again
+
+Look over what the hit may have done, as after 2026-09-19: the head on its mount and the coupler set
+screw, the periscope tube, the frame where the head struck, and how much play the rotary now has.
+Tell me what you find. If anything is loose or bent, fix that first; the firmware cannot make up for
+a head that has shifted on its shaft.
+
+## Re-test for the fix build (short; nothing here can reach the frame even if the fix failed)
+
+1. Flash over USB, in the Terminal app, monitor closed, one line at a time:
+   ```
+   cd "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3"
+   ```
+   ```
+   arduino-cli compile --profile uppity UppityFirmware
+   ```
+   ```
+   arduino-cli upload --profile uppity -p /dev/cu.wchusbserial110 UppityFirmware
+   ```
+   Then the monitor as in step 3. The boot line shows a new build id; `#PSTATE` ends its second
+   line with `alignment=ok`.
+2. `#PSAFESPIN1100` on the monitor. **Operate → Up**, then **90°** (the head turns at the top).
+3. **Rescue → Lifter jog → ▼ Down** (Slow), once: it stops at 1100 (`CREEP CLAMPED
+   ROTARY_NOT_HOME`). Let go. Do not press it again.
+4. On the monitor type `#PNUDGE-20`. Expected: nothing moves, `CREEP REFUSED ROTARY_NOT_HOME`,
+   and the page's amber banner "The head may be turned below the safe-spin height …". (If the fix
+   had not worked, this step could only move 20 ticks, to about 1080, which is clear.)
+5. Type `:PP94` (94 % = 1081 ticks). Expected: nothing moves, `SEEK REFUSED ROTARY_NOT_HOME`.
+   (Again at most 20 ticks if it were wrong.)
+6. Tap **Home the head** on the banner. The mast rises to the top, the head homes, the banner goes
+   and the monitor shows `ALIGNMENT ok again`. Then `#PSAFESPIN904`.
+7. E-STOP from the laptop: **Operate → Down** (head home, so the descent is fine), click **E-STOP**
+   while it moves. The button stays where it is and reads `E-STOP LATCHED` on the first click.
+   **Reset E-STOP**, **Operate → Up**, click E-STOP during the rise. Three times in all.
+
+Send back the log. After that, Parts D–F are as written above. Your board already runs unlocked,
+so there is no hurry for Part D; if you run it, stop at 920 ticks in step 29 unless you can see that
+the whole sweep of the head clears lower.

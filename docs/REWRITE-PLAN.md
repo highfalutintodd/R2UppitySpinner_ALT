@@ -587,6 +587,21 @@ switch it is leaving closes again (`WRONG_LIMIT`, a reversed mechanism); the E-S
 override and the jog lease. 139 host tests (the full seven-step commissioning runs on the
 simulator), ESP32 build 1,173,871 bytes (59 %).
 
+**Status 2026-10-03: Phase 4 bench run 1 — the head hit the lifter frame.** With the safe-spin
+height raised to 1100 and the head turned 90° at the top, a Rescue jog Down stopped at 1100 as
+designed, and the next press was let through. Root cause in `SafetyPolicy`: the rule-2 exemption
+("at or below the safe-spin height = inside the opening = lined up") treated a turned head that the
+clamp had parked exactly at the threshold as inside the opening. The hole dated from Phase 1 (two
+`:PP` presets in a row with the head turned would do the same); the jog made it easy to reach, and
+jogs had no stall exit, so it kept pushing. The exemption is now conditional: the supervisor keeps
+`turnedSinceHome_` (set whenever the head is off home above the safe height, or turns below it under
+the override; cleared only by a home), and every descent below the safe height is refused while it
+is set; SafeLower raises, homes, then lowers from that state; the boot case (a head parked inside the
+dome at power-on) is unchanged. Jogs (lifter and rotary) now stop on a stall; parameterised random
+mode homes before its random lifts; the page's E-STOP no longer moves under a mouse press. The bench
+procedure's step 13 relied on the refusal next to an unverified clearance; CLAUDE.md hard rule 12 now
+forbids that. 144 host tests; 1,174,219 bytes.
+
 ---
 
 ## 6. Verification strategy

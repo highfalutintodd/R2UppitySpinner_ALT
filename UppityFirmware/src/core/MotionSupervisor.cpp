@@ -88,15 +88,33 @@ PolicyContext MotionSupervisor::policy(const TickInputs& in) const {
     c.rotaryFault = faults_.rotaryBlocked();
     c.globalFault = faults_.globalBlocked();
     c.overrideLive = queue_.overrideLive(in.nowMs);
-    c.alignmentSuspect = alignmentSuspect_;
+    c.alignmentSuspect = turnedSinceHome_;
     c.topLimit = in.topLimit; c.bottomLimit = in.bottomLimit; c.homeSwitch = in.homeSwitch;
     return c;
 }
 
+// The policy's "at or below the safe-spin height = inside the opening = lined up" is only true
+// when the head came down past that height while home and has not turned since. So whenever the
+// head is off home above the safe height, or turns below it (only the override allows that), it
+// is marked possibly turned, and only a home at rest clears it. Bench 2026-10-03: a turned head
+// clamped AT the safe height by one jog press was let down by the next press, because "at the
+// threshold" counted as inside the opening, and it hit the lifter frame.
 void MotionSupervisor::markAlignmentSuspect(Ms now) {
-    if (alignmentSuspect_ || cfg_.rotaryDisabled) return;
-    alignmentSuspect_ = true;
-    emit(Ev::Alignment, 1, 0, 0, now);
+    (void)now;
+    if (!cfg_.rotaryDisabled) turnedSinceHome_ = true;
+}
+
+void MotionSupervisor::updateAlignment(const TickInputs& in) {
+    if (cfg_.rotaryDisabled) turnedSinceHome_ = false;
+    else {
+        PolicyContext c = policy(in);
+        bool home = rotaryIsHome(c);
+        if (!home && (lifterAboveSafe(c) || isRotaryJob(job_))) turnedSinceHome_ = true;
+        else if (home && !isRotaryJob(job_)) turnedSinceHome_ = false;     // a turning head passing through home does not count
+    }
+    // what the page and the log show: the flag only bites below the safe height
+    bool suspect = turnedSinceHome_ && !lifterAboveSafeNow(in);
+    if (suspect != alignmentSuspect_) { alignmentSuspect_ = suspect; emit(Ev::Alignment, suspect ? 1 : 0, in.lifterTicks, 0, in.nowMs); }
 }
 
 void MotionSupervisor::updateKnowledge(const TickInputs& in, bool rotaryBusy) {
@@ -186,8 +204,10 @@ int MotionSupervisor::expandRequest(const MotionRequest& r, const TickInputs& in
             if (r.kind == JobKind::RotaryRelative && tpr() <= 0) add(JobKind::RotaryCharacterise, 2, 0, 0);
             add(r.kind, r.a, r.b, r.c);
             break;
-        case JobKind::SafeLower:
-            add(JobKind::LifterSeek, travel(), 0, 1 | kSkipKnown);                       // reference if unknown
+        case JobKind::SafeLower: {
+            // a head that may be turned below the safe height cannot be homed down there: raise first
+            bool raise = turnedSinceHome_ && !cfg_.rotaryDisabled && !lifterAboveSafeNow(in);
+            add(JobKind::LifterSeek, travel(), 0, 1 | (raise ? 0 : kSkipKnown));         // reference if unknown
             if (!cfg_.rotaryDisabled) {
                 // Characterisation measures ticks/rev but parks the head wherever its last pass
                 // ended (bench 2026-09-19: ~50 ticks past the switch, so the descent clamped at
@@ -197,6 +217,7 @@ int MotionSupervisor::expandRequest(const MotionRequest& r, const TickInputs& in
             }
             add(JobKind::LifterSeek, 0, r.b, 1);                                      // full travel: end on the bottom switch, not on the count
             break;
+        }
         case JobKind::LifterCalibrate:
             if (!cfg_.rotaryDisabled && !rotaryHomeKnown()) {
                 add(JobKind::LifterSeek, travel(), 0, 1);
@@ -309,6 +330,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             if (jog && !lifterAboveSafe(c)) markAlignmentSuspect(in.nowMs);    // turning inside the opening: only the override allowed it
             RotarySpinParams p;
             p.rc = &cfg_.rotary; p.jog = jog;
+            if (jog) p.stallMs = 800;             // a slow jog takes longer to break loose than a spin; still stops if the head is held
             p.floor = jog ? pctToThrottle(cfg_.rotary.jogFloorPct) : rotaryFloor();
             Throttle floor = p.floor;
             Throttle mag = clampv<Throttle>(static_cast<Throttle>(absi(s.a)), floor, kThrottleMax);
@@ -323,7 +345,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             // (Bench 2026-09-19: after characterisation the frame was Latched but the head sat
             // ~70 ticks past the switch; skipping here left :PH clamped at safe height.)
             if ((s.c & 2) && (rotaryIsHome(c) || cfg_.rotaryDisabled)) return 0;
-            if ((s.c & 4) && lifter_.confidence != LifterConfidence::Unknown && in.lifterTicks <= safeSpin() && !in.topLimit) return 0;
+            if ((s.c & 4) && !turnedSinceHome_ && lifter_.confidence != LifterConfidence::Unknown && in.lifterTicks <= safeSpin() && !in.topLimit) return 0;   // inside the opening, lined up: unless it may be turned
             Decision d = checkRotary(c, false);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
             RotaryHomeParams p;
@@ -335,7 +357,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
         }
         case JobKind::RotaryCharacterise: {
             if ((s.c & 2) && (rotaryHomeKnown() || cfg_.rotaryDisabled)) return 0;
-            if ((s.c & 4) && lifter_.confidence != LifterConfidence::Unknown && in.lifterTicks <= safeSpin() && !in.topLimit) return 0;
+            if ((s.c & 4) && !turnedSinceHome_ && lifter_.confidence != LifterConfidence::Unknown && in.lifterTicks <= safeSpin() && !in.topLimit) return 0;   // inside the opening, lined up: unless it may be turned
             Decision d = checkRotary(c, false);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
             RotaryCharacterise::Params p;
@@ -602,11 +624,8 @@ void MotionSupervisor::tick(Ms now) {
 
     updateKnowledge(in, rotaryBusy);
 
-    // ---- alignment: a home (or the switch at rest) makes "below the safe height = aligned" true again ----
-    if (alignmentSuspect_ && job_ == JobKind::None && (cfg_.rotaryDisabled || rotaryIsHome(policy(in)))) {
-        alignmentSuspect_ = false;
-        emit(Ev::Alignment, 0, 0, 0, now);
-    }
+    // ---- alignment: may the head be turned? (see markAlignmentSuspect) ----
+    updateAlignment(in);
 
     // ---- driver fault recovery: EN low 50 ms, then EN high while DIAG is re-read ----
     if (faults_.takeEnCycleRequest() && enCycle_ == 0) {

@@ -2,6 +2,8 @@
 // that came with them (top limit is never "inside the opening"; alignment suspect after the
 // override has let the head turn or descend unaligned).
 #include "rig.h"
+#include "../../src/core/RandomDirector.h"
+#include "../../src/core/Sequencer.h"
 using namespace uppity;
 using namespace uppity::rig;
 using namespace uppity::sim;
@@ -233,4 +235,114 @@ TEST(measurement_lowering_with_the_head_turned_needs_the_override_every_time) {
     CHECK_EQ(g.snap().lifterTicks, here);
     g.req(JobKind::LifterCreep, 30, 0, 2); g.runUntilIdle(3000);                   // up is always allowed
     CHECK(g.snap().lastResult == JobResult::DoneTarget);
+}
+
+// ---------------------------------------------------------------- bench 2026-10-03: the crash
+// Todd's sequence (docs/BENCH-PHASE4.md step 13): safe-spin raised, head turned 90 degrees at the
+// top, Rescue jog Down. The first press stopped at the safe-spin height (correct); the second
+// press was let through because a mast AT the threshold counted as "inside the opening", and the
+// turned head went down into the lifter frame.
+
+static void holdJog(Rig& g, int dir, int ms) {
+    g.queue.jogKeepalive(g.hal.nowMs());
+    g.creep(dir, 0, true);
+    for (int i = 0; i < ms; ++i) { if (i % 400 == 0) g.queue.jogKeepalive(g.hal.nowMs()); g.runMs(1); }
+    g.queue.jogRelease(g.hal.nowMs()); g.runUntilIdle(2000);
+}
+
+TEST(crash_20261003_a_turned_head_clamped_at_the_safe_height_stays_there) {
+    Rig g(gregConfig(false)); turnedAtTheTop(g);
+    CHECK(g.snap().rotaryDeg > 60 && g.snap().rotaryDeg < 120);
+    holdJog(g, -1, 1500);                                                           // first press: stops at the threshold
+    CHECK(g.snap().lastResult == JobResult::Clamped);
+    Ticks clamped = g.snap().lifterTicks;
+    CHECK(clamped <= 225); CHECK(clamped > 200);
+    holdJog(g, -1, 1500);                                                           // second press: must not move
+    CHECK(g.snap().lastResult == JobResult::Refused); CHECK_EQ(lastRefusalReason(g), (int32_t)Reason::RotaryNotHome);
+    CHECK(g.snap().lifterTicks >= clamped - 2);
+    CHECK(g.snap().alignmentSuspect);
+    g.req(JobKind::LifterCreep, -20, 0, 2); g.runUntilIdle(3000);                  // nor a nudge
+    CHECK(g.snap().lastResult == JobResult::Refused);
+    g.seek(0, 650); g.runUntilIdle(3000);                                           // nor a seek
+    CHECK(g.snap().lastResult == JobResult::Refused);
+    CHECK(g.snap().lifterTicks >= clamped - 2);
+    g.seek(400, 650); g.runUntilIdle(20000);                                        // up is always allowed
+    CHECK(g.snap().lastResult == JobResult::DoneTarget);
+}
+
+TEST(crash_20261003_the_same_hole_through_two_seeks) {
+    // the Phase 1 form of it: :PP0 twice with the head turned
+    Rig g(gregConfig(false)); turnedAtTheTop(g);
+    g.seek(0, 650, true); g.runUntilIdle(20000);
+    CHECK(g.last(Ev::SeekClamped) != nullptr);
+    Ticks clamped = g.snap().lifterTicks;
+    CHECK(clamped <= 240);
+    g.seek(0, 650, true); g.runUntilIdle(20000);
+    CHECK(g.snap().lastResult == JobResult::Refused);
+    CHECK(g.snap().lifterTicks >= clamped - 2);
+    CHECK(!g.hal.lifter.bottomLimit());
+}
+
+TEST(crash_20261003_ph_from_the_clamped_state_raises_homes_then_lowers) {
+    Rig g(gregConfig(false)); turnedAtTheTop(g);
+    g.seek(0, 650, true); g.runUntilIdle(20000);                                   // clamped at the threshold, head turned
+    CHECK(g.snap().alignmentSuspect);
+    size_t from = g.log.size();
+    g.req(JobKind::SafeLower, 0, 700, 0); g.runUntilIdle(120000);
+    CHECK(g.snap().lastResult == JobResult::DoneLimit); CHECK(g.hal.lifter.bottomLimit());
+    CHECK(!g.snap().alignmentSuspect);
+    // the order: up to the top, home, then down; the head never came down while turned
+    int order[3] = {-1, -1, -1}; int k = 0;
+    for (size_t i = from; i < g.log.size() && k < 3; ++i) {
+        const Event& e = g.log[i];
+        if (e.code != Ev::JobStart) continue;
+        if (k == 0 && e.a == (int32_t)JobKind::LifterSeek && e.b == 450) order[k++] = 0;
+        else if (k == 1 && e.a == (int32_t)JobKind::RotaryHome) order[k++] = 1;
+        else if (k == 2 && e.a == (int32_t)JobKind::LifterSeek && e.b == 0) order[k++] = 2;
+    }
+    CHECK_EQ(k, 3);
+}
+
+TEST(crash_20261003_a_held_jog_that_meets_something_stops_by_itself) {
+    Rig g(gregConfig()); g.hal.lifter.setPosition(0); g.boot();
+    g.seek(300, 650); g.runUntilIdle(20000);
+    g.queue.jogKeepalive(g.hal.nowMs());
+    g.creep(-1, 0, true);
+    for (int i = 0; i < 200; ++i) { g.queue.jogKeepalive(g.hal.nowMs()); g.runMs(1); }
+    CHECK(g.sup.activeJob() == JobKind::LifterCreep);
+    g.hal.lifter.setJammed(true);                                                   // the head meets the frame
+    int held = 0;
+    for (; held < 6000 && g.sup.activeJob() == JobKind::LifterCreep; ++held) { g.queue.jogKeepalive(g.hal.nowMs()); g.runMs(1); }   // button still held
+    CHECK(g.sup.activeJob() == JobKind::None);
+    CHECK(g.snap().lastResult == JobResult::Stalled);
+    CHECK(held <= 2100);                                                            // the profile's stall time (Greg: 2000 ms; Todd's 19:1: 700 ms)
+    // the rotary jog likewise
+    Rig r(gregConfig(false)); r.hal.lifter.setPosition(450); r.boot();
+    r.queue.jogKeepalive(r.hal.nowMs());
+    r.req(JobKind::RotaryJog, 500);
+    for (int i = 0; i < 300; ++i) { r.queue.jogKeepalive(r.hal.nowMs()); r.runMs(1); }
+    CHECK(r.sup.activeJob() == JobKind::RotaryJog);
+    r.hal.rotary.setJammed(true);
+    held = 0;
+    for (; held < 6000 && r.sup.activeJob() == JobKind::RotaryJog; ++held) { r.queue.jogKeepalive(r.hal.nowMs()); r.runMs(1); }
+    CHECK(r.snap().lastResult == JobResult::Stalled);
+    CHECK(held <= 900);
+}
+
+TEST(crash_20261003_random_param_mode_homes_before_each_random_lift) {
+    XorShiftRandom rng(5); NullSink out; RandomDirector d; d.begin(rng, out);
+    Command c; parseLine(":PM,60,60,1,1", c); RandomDirector::Limits lim;
+    d.startParams(c, lim, 0);
+    Snapshot s; Command chain[Sequencer::kMaxElements];
+    int checked = 0; Ms now = 0;
+    for (int k = 0; k < 400; ++k) {
+        now += 100000;
+        int n = d.next(now, true, s, lim, chain, Sequencer::kMaxElements);
+        for (int i = 0; i < n; ++i) {
+            if (chain[i].verb != Verb::LiftTo || chain[i].a >= 100) continue;     // a lift that may descend
+            CHECK(i > 0 && chain[i - 1].verb == Verb::RotAbs && chain[i - 1].a == 0 && chain[i - 1].letter == 'S');
+            ++checked;
+        }
+    }
+    CHECK(checked >= 10);
 }
