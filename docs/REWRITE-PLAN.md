@@ -649,6 +649,16 @@ the calibrated travel made the count jump at every switch; P1 now uses the closi
 creeps report (the first up-run only if the first creep really closed the bottom switch), and the
 calibration ends with 0 at the bottom switch's closing point. 157 host tests; 1,176,139 bytes.
 
+**Status 2026-10-04 (evening): Phase 4 bench-passed.** Re-test 3 (build `b14aa631`, installed
+through the page's own firmware upload): `#PROTARYTEST` stored 1185.7 ticks/rev; `CALBRAKE` 32 ms
+down, 20 ms up (the table's braking time grows with speed: 27→38 ms down, 5→28 ms up); nudges came
+to rest at −21/−51/−13/+16 for −20/−50/−12/+20; a turned head jogged toward 1100 came to rest at
++4 and the next descent was refused until a home. The operator's rotary test now homes afterwards
+(it stopped ~11° past home, outside the 10° window). Open: the dome-on commissioning run (Todd's
+real safe-spin height; the first hardware check of the switch-closing travel), Part E step 32 and
+Part F (optional). Phase 5 needs Todd's heartbeat-tag choice (`&PERI` or `&UPPITY`). 158 host
+tests; 1,176,195 bytes.
+
 ---
 
 ## 6. Verification strategy

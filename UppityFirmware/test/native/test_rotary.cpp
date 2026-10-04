@@ -259,6 +259,23 @@ TEST(characterise_from_home_does_not_count_the_switch_it_starts_on) {
     }
 }
 
+TEST(operator_rotary_test_parks_the_head_at_home_afterwards) {
+    // Re-test 3 (2026-10-04): #PROTARYTEST stopped just past the switch, about 11 degrees off home,
+    // so the head counted as turned. The operator's test (c bit 8) now homes when it is done.
+    Rig* g = upRig();
+    g->setRotaryAngleFromCentre(0); g->boot();
+    g->req(JobKind::RotaryCharacterise, 3, 0, 8); g->runUntilIdle(120000); g->runMs(5);
+    CHECK(g->snap().lastResult == JobResult::Done);
+    CHECK(std::fabs(g->sup.lastCharacterisation().meanTpr - 1184.6f) < 1.5f);
+    const Event* s = g->last(Ev::JobStart); CHECK(s && s->a == (int32_t)JobKind::RotaryHome);
+    CHECK(absl(g->homeErrorTicks()) <= 8);
+    CHECK(!g->sup.alignmentSuspect());
+    g->seek(0, 650, true); g->runUntilIdle(20000);                        // and the mast may go down without a clamp
+    CHECK(g->snap().lastResult == JobResult::DoneLimit);
+    CHECK_EQ(g->count(Ev::SeekClamped), 0);
+    delete g;
+}
+
 TEST(characterise_reports_no_switch_and_writes_nothing) {
     Rig* g = upRig();
     g->hal.rotary.setSwitchDisconnected(true); g->boot();

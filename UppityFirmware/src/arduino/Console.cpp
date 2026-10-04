@@ -301,9 +301,9 @@ bool Console::refuseWhileMoving(const char* what) {
     return false;
 }
 
-void Console::pushOperatorJob(JobKind k, int32_t a) {
+void Console::pushOperatorJob(JobKind k, int32_t a, int32_t c) {
     stopRandom("operator job"); d_.seq->clear("operator job");
-    MotionRequest r; r.kind = k; r.a = a; r.source = ReqSource::SerialUsb;
+    MotionRequest r; r.kind = k; r.a = a; r.c = c; r.source = ReqSource::SerialUsb;
     uint32_t id = d_.q->push(r);
     if (id == 0) line("BUSY=queue_full"); else printf("QUEUED=%s id=%lu", jobName(static_cast<int>(k)), static_cast<unsigned long>(id));
 }
@@ -322,7 +322,7 @@ void Console::onConfig(const Command& c, const char* raw, ReqSource src) {
         case Verb::V3Import: importV3Now(true); break;
         case Verb::Help: printHelp(); break;
         case Verb::ClearFault: d_.sup->requestClearFault(); line("FAULT=clear_requested"); break;
-        case Verb::RotaryTest: pushOperatorJob(JobKind::RotaryCharacterise, c.hasA ? clampv<int32_t>(c.a, 1, 10) : 3); break;
+        case Verb::RotaryTest: pushOperatorJob(JobKind::RotaryCharacterise, c.hasA ? clampv<int32_t>(c.a, 1, 10) : 3, 8); break;   // 8: home afterwards
         case Verb::Calibrate: pushOperatorJob(JobKind::LifterCalibrate, 0); break;
         case Verb::Unlock: s_.commissioned = 1; applySettings(false); d_.persist->requestSaveSettings(); line("COMMISSIONED=1 (saved: the board boots unlocked from now on; #PLOCK to undo)"); break;
         case Verb::Lock: s_.commissioned = 0; applySettings(false); d_.persist->requestSaveSettings(); line("COMMISSIONED=0 (saved)"); break;

@@ -55,7 +55,8 @@ struct MotionConfig {
 //   RotarySpin        a = signed raw throttle permille (motor polarity, ":PR" sense)
 //   RotaryJog         a = signed raw throttle permille (rescue: 12 % floor, lease-based)
 //   RotaryHome        c bit1 = skip if already home, bit2 = skip if the lifter is at/below safe height
-//   RotaryCharacterise a = revolutions (1..10), c as RotaryHome
+//   RotaryCharacterise a = revolutions (1..10), c as RotaryHome; c bit4 (8) = home afterwards (the
+//                     operator's #PROTARYTEST; commissioning queues its own home)
 //   LifterCalibrate   - (raises and homes the rotary first when needed)
 //   SafeLower         b = speed permille  (":PH": raise if unknown -> home if needed -> lights off -> lower)
 //   LifterSeek        c bit1 = skip if the lifter position is already known (composites only)

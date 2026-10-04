@@ -188,7 +188,7 @@ bool MotionSupervisor::lifterAboveSafeNow(const TickInputs& in) const {
 int MotionSupervisor::expandRequest(const MotionRequest& r, const TickInputs& in, Step* steps) {
     int n = 0;
     auto add = [&](JobKind k, int32_t a, int32_t b, int32_t c) { if (n < kMaxSteps) { steps[n].kind = k; steps[n].a = a; steps[n].b = b; steps[n].c = c; ++n; } };
-    const int32_t kSkipKnown = 2, kSkipHome = 2, kSkipBelowSafe = 4;
+    const int32_t kSkipKnown = 2, kSkipHome = 2, kSkipBelowSafe = 4, kHomeAfter = 8;
     bool raiseFirst = !cfg_.rotaryDisabled && !lifterAboveSafeNow(in);
     switch (r.kind) {
         case JobKind::RotaryAbsolute:
@@ -205,6 +205,13 @@ int MotionSupervisor::expandRequest(const MotionRequest& r, const TickInputs& in
             if (r.kind == JobKind::RotaryHome && (r.c & kSkipHome) && (rotaryIsHome(policy(in)) || cfg_.rotaryDisabled)) { add(r.kind, r.a, r.b, r.c); break; }
             if (raiseFirst) add(JobKind::LifterSeek, travel(), 0, 1);
             if (r.kind == JobKind::RotaryRelative && tpr() <= 0) add(JobKind::RotaryCharacterise, 2, 0, 0);
+            if (r.kind == JobKind::RotaryCharacterise && (r.c & kHomeAfter)) {
+                // the test stops just past the switch, about 11 degrees off home on Todd's rotary
+                // (re-test 3, 2026-10-04): park the head where it belongs
+                add(r.kind, r.a, r.b, r.c & ~kHomeAfter);
+                add(JobKind::RotaryHome, 0, 0, 0);
+                break;
+            }
             add(r.kind, r.a, r.b, r.c);
             break;
         case JobKind::SafeLower: {
@@ -499,7 +506,7 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
     }
     if (k == JobKind::RotaryCharacterise && o.result == StepResult::Done) {
         lastChar_ = rchar_.result();
-        emit(Ev::Measure, 1, static_cast<int32_t>(lastChar_.meanTpr * 10.f), static_cast<int32_t>(lastChar_.spreadPct * 10.f), in.nowMs);
+        emit(Ev::Measure, 1, static_cast<int32_t>(lastChar_.meanTpr * 10.f + 0.5f), static_cast<int32_t>(lastChar_.spreadPct * 10.f + 0.5f), in.nowMs);   // rounded, as "ROTARY stored" prints it
         emit(Ev::Measure, 2, lastChar_.arcMean, lastChar_.closures, in.nowMs);
         emit(Ev::Measure, 5, lastChar_.confident ? 2 : lastChar_.probable ? 1 : 0, lastChar_.creepFits ? 1 : 0, in.nowMs);
         if (lastChar_.confident || lastChar_.probable) {

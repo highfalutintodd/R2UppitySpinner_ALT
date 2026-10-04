@@ -68,7 +68,7 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     void onRescue(const Command& c, ReqSource src);
     void onCommission(const Command& c);
     void importV3Now(bool forced);
-    void pushOperatorJob(JobKind k, int32_t a);
+    void pushOperatorJob(JobKind k, int32_t a, int32_t c = 0);
     void stopRandom(const char* why);
     bool refuseWhileMoving(const char* what);
     RandomDirector::Limits limits() const;

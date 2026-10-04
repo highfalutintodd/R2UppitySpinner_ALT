@@ -575,19 +575,65 @@ have watched the head turn freely.
 Send back the log (`~/Desktop/uppity-bench-phase4-retest3-log.txt`). Part E step 32 (an upload
 refused while a motor runs) and Part F (factory reset) are optional.
 
+## Results 2026-10-04, re-test 3 (build b14aa631)
+
+Everything did what it should:
+- **Firmware upload from the page (Part E step 31):** installed, and the board restarted on the new
+  build. During the upload the log printed a `TICK` line every second showing the control loop
+  pausing up to 10 ms at a time: writing flash briefly stops the processor reading its own program.
+  The motors are held for the whole upload (`OTA 0% (motors held)`), so it does no harm.
+- `#PCAL`: `CALBRAKE down=32ms up=20ms`. The table shows the braking time growing with speed (going
+  down 27 ms at 15 % to 38 ms at 85 %, going up 5 to 28 ms), which matches the E-STOP's 37–40 ms
+  down and 27 up at full speed. 32 and 20 are the middle of the table.
+- `#PROTARYTEST`: `ROTARY stored: 1185.7`, from four clean turns (1187, 1184, 1186 between edges).
+  The Part D value of 1183.0 is replaced.
+- Nudges: −21 for −20, −51 for −50, −13 for −12, +16 for +20 (before this build each ran on about
+  12 more). Going up it stops a few ticks short: at low speed the mast stops quicker going up than
+  the middle of the table says. A raise step slightly smaller than asked is harmless.
+- The clamp: the turned head came to rest at 1104, 4 above 1100. The next nudge was refused,
+  **Home the head** cleared it, and 904 went back.
+- `ALIGNMENT suspect` straight after `#PSAFESPIN1100` was correct, though unexpected. The rotary
+  test had stopped the head just past home, about 11° off (the home window is 10°), and the mast
+  at 1087 was now below the new height, so the board treated the head as possibly turned.
+
+Changed in the next build (host tests 158; 1,176,195 bytes, 59 %):
+1. `#PROTARYTEST`, and the Diagnostics page's rotary test that sends it, homes the head when it is
+   done, as commissioning already did.
+2. The two rotary lines round the same way (they said 1185.7 and 1185.6 for the same figure).
+
 ## Later, with the dome on: commissioning again for the real safe-spin height
 
-On the build from re-test 3 (or later). Everything is measured again, including the rotary and the
-calibration with this build's fixes; the board stays unlocked throughout.
+This installs the newest build, then measures everything again: the rotary, the calibration (the
+first on the droid with travel counted between the switch closings) and, with the dome on, the
+safe-spin height. The board stays unlocked throughout.
 
-1. **Setup → Commissioning → Start over**, tap again to confirm, then **Start**. Steps 1–7 as in
+1. In the Terminal app, bring the work into your checkout (one line):
+   ```
+   git -C "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3" merge --ff-only claude/uppity-spinner-phase-4-1e5680
+   ```
+2. Build it, one line at a time:
+   ```
+   cd "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3"
+   ```
+   ```
+   arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
+   ```
+   It ends with `Sketch uses 1176195 bytes (59%)` (a few bytes either way is fine).
+3. The monitor, in its own Terminal window:
+   ```
+   arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-phase4-domeon-log.txt
+   ```
+4. **Setup → Firmware → Choose File**, `UppityFirmware.ino.bin` in the `uppity-build` folder on
+   your Desktop, **Upload**. The board restarts with a new build id (not `b14aa631`).
+5. **Setup → Commissioning → Start over**, tap again to confirm, then **Start**. Steps 1–7 as in
    Part D (steps 24–30 above).
-2. Step 4 should store about 1185.5 ticks/rev. Step 5 should report travel about 1140 (between the
+6. Step 4 should store about 1185.5 ticks/rev. Step 5 should report travel about 1140 (between the
    switches) instead of 1192; tell me the number. Once we have seen it, `#PTRAVEL0` can replace
    your `#PTRAVEL1150`, so the height reads the same whichever switch it last passed.
-3. Step 6 with the dome on: **Lower 3 %** and **Lower 1 %** now move what they say (the log shows
-   `NUDGE came to rest … (asked -35)`). Down to 920 you have seen clear; below it use **Lower 1 %**
-   only, and watch the head against the dome opening and every part of the frame it would pass over
-   if it turned. Stop while it is still clearly clear. If you are not sure about the whole sweep,
-   stop at 920.
-4. Tell me the stored number and where you stopped.
+7. Step 6 with the dome on: **Lower 3 %** and **Lower 1 %** now move what they say (the log shows
+   `NUDGE came to rest … (asked -35)`). You saw the head clear at 920 on 2026-09-20; if the dome
+   was on that day, **Lower 3 %** is fine down to 920. If it was off, or you are not sure, use
+   **Lower 1 %** all the way from the top. After every step, watch the head against the dome
+   opening and every part of the frame it would pass over if it turned. Stop while it is still
+   clearly clear.
+8. Send me the log and the stored number.
