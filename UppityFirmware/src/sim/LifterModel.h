@@ -12,7 +12,11 @@
 //  * brake (TB9051FTG "short brake": PWM1=PWM2=L or H, both low-side FETs on — confirmed in
 //    datasheet Table 7.1-1) kills the rotor's momentum with `tauBrakeMs`; coast (drivers
 //    disabled, outputs High-Z) decays slowly with `tauCoastMs`
-//  * the screw is self-locking: once stopped it stays put with no power
+//  * the screw is self-locking: once stopped it stays put with no power. While it MOVES it may
+//    not be: `backdriveGravity` > 0 models a screw that back-drives under the mast's weight, so
+//    a falling mast keeps going with the outputs floating (bench 2026-10-03: ~560 ticks to the
+//    bottom switch after an E-STOP that switched the drivers off) while the short brake still
+//    stops it in a few tens of ticks
 //  * limit switches at 0 and `travelTicks`, hard stops `overTravelTicks` beyond them; the
 //    velocity at the instant a switch makes is recorded as the "impact velocity"
 //  * the encoder rides the motor shaft. Normally shaft forward = mast up. `mastReversed`
@@ -30,6 +34,11 @@ struct LifterParams {
     double tauDriveMs = 25.0;
     double tauBrakeMs = 1.5;
     double tauCoastMs = 40.0;
+    // Back-drive, in ticks/ms² along the mast; both 0 = self-locking (the default). While the
+    // shaft turns undriven, gravity pulls the mast down and running friction opposes the motion.
+    // Neither can start it from rest or reverse it: static friction holds it once it stops.
+    double backdriveGravity = 0.0;
+    double backdriveFriction = 0.0;
     Ticks  travelTicks = 1350;
     Ticks  overTravelTicks = 3;
     double phantomPerMsDriving = 0.0;  // probability per ms of a spurious ±1 count
@@ -83,10 +92,17 @@ class LifterModel {
                 if (eff < 0) eff = 0;
                 double vT = dir * p_.kv * eff;
                 vel_ += (vT - vel_) * (1.0 / p_.tauDriveMs);
-            } else if (!driversEnabled || cmd.mode == Bridge::Coast) {
-                vel_ *= std::exp(-1.0 / p_.tauCoastMs);
-            } else { // Brake (both outputs low) — also what a Drive with duty 0 does
-                vel_ *= std::exp(-1.0 / p_.tauBrakeMs);
+            } else {
+                // Coast (drivers disabled: outputs High-Z) decays slowly; Brake (both outputs low,
+                // also what a Drive with duty 0 does) kills the momentum.
+                bool coasting = !driversEnabled || cmd.mode == Bridge::Coast;
+                vel_ *= std::exp(-1.0 / (coasting ? p_.tauCoastMs : p_.tauBrakeMs));
+                if (p_.backdriveGravity > 0 || p_.backdriveFriction > 0) {
+                    double before = vel_;
+                    vel_ -= mastSign() * p_.backdriveGravity;                  // mast down, in the shaft frame
+                    vel_ += before > 0 ? -p_.backdriveFriction : before < 0 ? p_.backdriveFriction : 0.0;
+                    if (before * vel_ <= 0) vel_ = 0;                          // stopped: static friction holds it
+                }
             }
             if (!driving && std::fabs(vel_) < 0.002) { vel_ = 0; moving_ = false; }
         }

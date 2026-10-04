@@ -35,7 +35,8 @@ enum class Ev : uint8_t {
     Tick,               // a = cycleUsMax, b = lateTicks (periodic health)
     HomeSettle,         // a = 1 contact at rest / 0 not, b = wiggle moves, c = nudges
     HomeManual,         // a = rotary ticks before, b = old HomeConfidence ("set rotary home here", Rescue)
-    Alignment,          // a = 1 suspect (the override let the head turn or descend unaligned) / 0 cleared by a home
+    Alignment,          // a = 1 suspect (the head may be turned below the safe height) / 0 clear, b = lifter ticks, c (clear) = 0 homed / 1 above the safe height, not homed yet
+    EstopSettled,       // a = lifter ticks moved after the latch, b = rotary ticks, c = ms of braking before the drivers switched off (bit 16: not seen still)
 };
 
 // Reason codes shared by JobResult/Refused/SeekClamped/JobEnd.

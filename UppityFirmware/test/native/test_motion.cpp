@@ -234,6 +234,130 @@ TEST(estop_flushes_queued_requests) {
     CHECK(g.snap().lifterTicks < 450);
 }
 
+// Bench 2026-10-03 (re-test of the Phase 4 fix build): an E-STOP during a descent let the mast
+// carry on to the bottom switch, about 560 ticks and half a second after the latch. The first
+// E-STOP tick switched the drivers off, and with EN low the TB9051FTG outputs float: the short
+// brake only works with the drivers ON. Todd's screw back-drives under the mast's weight while
+// it moves (it holds at rest), so a floating descent barely slows. These tests run that mechanism.
+static sim::LifterParams backdrivingLifter() {
+    sim::LifterParams p;
+    p.breakawayDuty = 0.45; p.travelTicks = 1150; p.kv = 1.4;                  // ~1.4 ticks/ms flat out, as on the bench
+    p.tauCoastMs = 1e9; p.backdriveGravity = 0.004; p.backdriveFriction = 0.0049; // floating: slows ~0.001 ticks/ms per ms
+    p.tauBrakeMs = 15;                                                         // short brake: a few tens of ticks from full speed
+    return p;
+}
+static MotionConfig backdrivingConfig() { MotionConfig c = gregConfig(); c.travelTicks = 1150; c.safeSpinTicks = 575; return c; }
+static void runUntilBelow(Rig& g, double pos) { for (int i = 0; i < 5000 && g.hal.lifter.position() > pos; ++i) g.runMs(1); }
+static void runUntilAbove(Rig& g, double pos) { for (int i = 0; i < 5000 && g.hal.lifter.position() < pos; ++i) g.runMs(1); }
+
+TEST(sim_backdriving_lifter_falls_on_with_the_outputs_floating_and_holds_at_rest) {
+    sim::LifterModel m(backdrivingLifter());
+    m.setPosition(600);
+    BridgeCommand drive; drive.mode = Bridge::Drive; drive.duty = -1000;
+    for (int i = 0; i < 300; ++i) m.step(drive, true);
+    CHECK(m.velocity() < -1.3);
+    BridgeCommand brake; brake.mode = Bridge::Brake;
+    sim::LifterModel f = m; for (int i = 0; i < 2000; ++i) f.step(brake, false);   // drivers off: floats to the bottom
+    CHECK(f.position() < 5);
+    sim::LifterModel b = m; double at = b.position();
+    for (int i = 0; i < 2000; ++i) b.step(brake, true);                              // drivers on: the short brake stops it
+    CHECK(at - b.position() < 40); CHECK(!b.moving());
+    double rest = b.position(); for (int i = 0; i < 5000; ++i) b.step(brake, false); // and at rest it holds with no power
+    CHECK_NEAR(b.position(), rest, 1e-9);
+}
+
+TEST(estop_during_a_descent_brakes_with_the_drivers_on_until_the_mast_is_still) {
+    Rig g(backdrivingConfig()); g.hal.lifter.setParams(backdrivingLifter());
+    g.hal.lifter.setPosition(1150); g.boot();
+    g.seek(0, 0, true);
+    runUntilBelow(g, 600);
+    CHECK(g.hal.lifter.velocity() < -0.8);                                    // full seek speed, downwards
+    double at = g.hal.lifter.position(); Ms t = g.hal.nowMs();
+    g.estop.trip(EstopLatch::Source::Web, t);
+    g.runMs(1500);
+    CHECK(!g.anyDriveAfter(t));
+    CHECK(!g.hal.lifter.moving());
+    CHECK(at - g.hal.lifter.position() < 60);                                 // bench, before the fix: ~560, to the bottom switch
+    CHECK(g.hal.lifter.position() > 500);
+    CHECK(!g.hal.enableRequested());                                          // and then the drivers are off
+    const Event* e = g.last(Ev::EstopSettled); CHECK(e != nullptr);           // the log says how far it went
+    if (e) {
+        CHECK(e->a < 0 && e->a > -60); CHECK_EQ(e->b, 0);
+        CHECK((e->c & 0x10000) == 0);                                          // seen still, not timed out
+        CHECK((e->c & 0xffff) >= MotionSupervisor::kEstopStillTicks && (e->c & 0xffff) < 400);
+    }
+}
+
+TEST(estop_brake_keeps_the_drivers_on_while_the_mast_moves_then_switches_them_off) {
+    Rig g(backdrivingConfig()); g.hal.lifter.setParams(backdrivingLifter());
+    g.hal.lifter.setPosition(1150); g.boot();
+    g.seek(0, 0, true); runUntilBelow(g, 700);
+    Ms t = g.hal.nowMs(); g.estop.trip(EstopLatch::Source::Web, t);
+    CHECK(g.hal.command(Axis::Lifter).mode == Bridge::Brake);                 // panic hook: braking at once
+    g.runMs(5);
+    CHECK(g.hal.enableRequested()); CHECK(g.hal.enableAcked());              // still on: a floating bridge cannot brake
+    CHECK(g.snap().state == MotionState::Stopped);
+    int guard = 0, floating = 0;
+    while (g.hal.lifter.moving() && guard++ < 1000) { if (!g.hal.enableAcked()) ++floating; g.runMs(1); }
+    CHECK_EQ(floating, 0);                                                    // not one millisecond with the outputs floating
+    CHECK(!g.hal.lifter.moving());
+    g.runMs(MotionSupervisor::kEstopStillTicks + 20);
+    CHECK(!g.hal.enableRequested());
+    CHECK(!g.anyDriveAfter(t));
+    double rest = g.hal.lifter.position(); g.runMs(3000);                     // drivers off at rest: it holds
+    CHECK_NEAR(g.hal.lifter.position(), rest, 1e-9);
+    CHECK_EQ(g.count(Ev::EstopSettled), 1);
+}
+
+TEST(estop_during_a_rise_also_brakes_to_a_stop_first) {
+    Rig g(backdrivingConfig()); g.hal.lifter.setParams(backdrivingLifter());
+    g.hal.lifter.setPosition(0); g.boot();
+    g.seek(1150, 0, true); runUntilAbove(g, 600);
+    CHECK(g.hal.lifter.velocity() > 0.8);
+    double at = g.hal.lifter.position(); Ms t = g.hal.nowMs();
+    g.estop.trip(EstopLatch::Source::Web, t); g.runMs(1500);
+    CHECK(!g.hal.lifter.moving()); CHECK(g.hal.lifter.position() - at < 40); CHECK(g.hal.lifter.position() >= at);
+    CHECK(!g.hal.enableRequested()); CHECK(!g.anyDriveAfter(t));
+    const Event* e = g.last(Ev::EstopSettled); CHECK(e && e->a >= 0 && e->a < 40 && (e->c & 0x10000) == 0);
+}
+
+TEST(estop_at_rest_with_the_drivers_off_never_switches_them_on) {
+    Rig g(gregConfig()); g.hal.lifter.setPosition(0); g.boot(); g.runMs(50);
+    CHECK(!g.hal.enableRequested());
+    uint32_t w = g.hal.enableWrites();
+    g.estop.trip(EstopLatch::Source::Web, g.hal.nowMs()); g.runMs(500);
+    CHECK_EQ(g.hal.enableWrites(), w); CHECK(!g.hal.enableAcked());
+    CHECK(g.last(Ev::EstopSettled) == nullptr);
+}
+
+TEST(estop_brake_ends_at_its_time_limit_when_the_counts_never_settle) {
+    Rig g(gregConfig()); g.hal.lifter.setPosition(0); g.boot();
+    g.seek(450, 0, true); g.runMs(300);
+    sim::LifterParams p = g.hal.lifter.params(); p.phantomPerMsIdle = 0.5; g.hal.lifter.setParams(p);   // a chattering encoder
+    Ms t = g.hal.nowMs(); g.estop.trip(EstopLatch::Source::Test, t);
+    g.runMs(MotionSupervisor::kEstopBrakeMaxMs - 100);
+    CHECK(g.hal.enableRequested());                                           // still braking...
+    g.runMs(200);
+    CHECK(!g.hal.enableRequested());                                          // ...but not for ever
+    const Event* e = g.last(Ev::EstopSettled); CHECK(e && (e->c & 0x10000) != 0);
+    CHECK(!g.anyDriveAfter(t));
+}
+
+TEST(estop_reset_during_the_brake_hands_over_to_the_ordinary_idle_rule) {
+    Rig g(backdrivingConfig()); g.hal.lifter.setParams(backdrivingLifter());
+    g.hal.lifter.setPosition(1150); g.boot();
+    g.seek(0, 0, true); runUntilBelow(g, 700);
+    double at = g.hal.lifter.position(); Ms t = g.hal.nowMs();
+    g.estop.trip(EstopLatch::Source::Web, t); g.runMs(5);
+    g.estop.release(g.hal.nowMs()); g.runMs(200);
+    CHECK(!g.hal.lifter.moving()); CHECK(at - g.hal.lifter.position() < 60);  // still braked: the drivers stayed on
+    CHECK(g.hal.enableRequested());
+    CHECK(!g.anyDriveAfter(t));                                               // nothing resumes on its own
+    g.runMs(2000);
+    CHECK(!g.hal.enableRequested());                                          // the usual 2 s after a stop
+    CHECK(g.snap().state == MotionState::Idle);
+}
+
 // ---------------------------------------------------------------- creep / jog
 
 TEST(creep_is_continuous_and_stops_on_limit) {

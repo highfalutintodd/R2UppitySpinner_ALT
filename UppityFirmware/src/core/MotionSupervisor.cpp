@@ -114,7 +114,7 @@ void MotionSupervisor::updateAlignment(const TickInputs& in) {
     }
     // what the page and the log show: the flag only bites below the safe height
     bool suspect = turnedSinceHome_ && !lifterAboveSafeNow(in);
-    if (suspect != alignmentSuspect_) { alignmentSuspect_ = suspect; emit(Ev::Alignment, suspect ? 1 : 0, in.lifterTicks, 0, in.nowMs); }
+    if (suspect != alignmentSuspect_) { alignmentSuspect_ = suspect; emit(Ev::Alignment, suspect ? 1 : 0, in.lifterTicks, !suspect && turnedSinceHome_ ? 1 : 0, in.nowMs); }
 }
 
 void MotionSupervisor::updateKnowledge(const TickInputs& in, bool rotaryBusy) {
@@ -611,16 +611,26 @@ void MotionSupervisor::tick(Ms now) {
             queue_.jogRelease(now);
             emit(Ev::Estop, static_cast<int32_t>(estop_.source()), 1, 0, now);
             if (state_ != MotionState::Stopped) { emit(Ev::StateChange, static_cast<int32_t>(state_), static_cast<int32_t>(MotionState::Stopped), 0, now); state_ = MotionState::Stopped; }
+            estopBraking_ = enableRequested_ && enabled;          // drivers on: keep them on to brake (see kEstopStillTicks)
+            estopAt_ = now; estopL_ = in.lifterTicks; estopR_ = in.rotaryTicks;
         }
         refuseAll(Reason::Estop, in);
-        hal_.requestEnable(false); enableRequested_ = false;
+        if (estopBraking_) {
+            bool still = stillTicks_ >= kEstopStillTicks;
+            if (still || !enabled || elapsed(now, estopAt_) >= kEstopBrakeMaxMs) {
+                estopBraking_ = false;
+                int32_t ms = static_cast<int32_t>(elapsed(now, estopAt_));
+                emit(Ev::EstopSettled, in.lifterTicks - estopL_, in.rotaryTicks - estopR_, (ms > 0xffff ? 0xffff : ms) | (still ? 0 : 0x10000), now);
+            }
+        }
+        if (!estopBraking_) { hal_.requestEnable(false); enableRequested_ = false; }
         updateKnowledge(in, false);
         hal_.writeBridge(Axis::Lifter, lifterOut); hal_.writeBridge(Axis::Rotary, rotaryOut);
         lastOut_[0] = lifterOut; lastOut_[1] = rotaryOut;
         publish(in, lifterOut, rotaryOut);
         return;
     }
-    if (wasStopped_) { wasStopped_ = false; emit(Ev::Estop, static_cast<int32_t>(estop_.source()), 0, 0, now); state_ = cfg_.commissioned ? MotionState::Idle : MotionState::Locked; emit(Ev::StateChange, static_cast<int32_t>(MotionState::Stopped), static_cast<int32_t>(state_), 0, now); idleSince_ = now; }
+    if (wasStopped_) { wasStopped_ = false; estopBraking_ = false; emit(Ev::Estop, static_cast<int32_t>(estop_.source()), 0, 0, now); state_ = cfg_.commissioned ? MotionState::Idle : MotionState::Locked; emit(Ev::StateChange, static_cast<int32_t>(MotionState::Stopped), static_cast<int32_t>(state_), 0, now); idleSince_ = now; }
 
     updateKnowledge(in, rotaryBusy);
 

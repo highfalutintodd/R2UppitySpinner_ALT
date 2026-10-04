@@ -64,10 +64,14 @@ inline int formatEvent(const Event& e, char* buf, size_t n) {
         case Ev::HomeManual: return e.c ? std::snprintf(buf, n, "%sHOME SET refused (%s)", head, reasonName(e.c))
                                         : std::snprintf(buf, n, "%sHOME SET by the operator (the head was at %ld ticks, %s): this position is home now", head, (long)e.a, homeConfName(e.b));
         case Ev::Alignment: return e.a ? std::snprintf(buf, n, "%sALIGNMENT suspect: the head may be turned below the safe-spin height; descents need a home first (or the override)", head)
-                                       : std::snprintf(buf, n, "%sALIGNMENT ok again (the head is home)", head);
+                             : e.c ? std::snprintf(buf, n, "%sALIGNMENT above the safe-spin height again at %ld: the head may turn here, and must home before it goes lower", head, (long)e.b)
+                                   : std::snprintf(buf, n, "%sALIGNMENT ok again (the head is home)", head);
         case Ev::ConfidenceLifter: return std::snprintf(buf, n, "%sLIFTER %s -> %s", head, lifterConfName(e.a), lifterConfName(e.b));
         case Ev::ConfidenceRotary: return std::snprintf(buf, n, "%sROTARY %s -> %s", head, homeConfName(e.a), homeConfName(e.b));
         case Ev::Estop: return std::snprintf(buf, n, "%sESTOP %s (source %ld)", head, e.b ? "LATCHED" : "released", (long)e.a);
+        case Ev::EstopSettled:
+            if (e.c & 0x10000) return std::snprintf(buf, n, "%sESTOP drivers off after %ld ms of braking, before the counts settled (lifter %+ld ticks, rotary %+ld since the latch)", head, (long)(e.c & 0xffff), (long)e.a, (long)e.b);
+            return std::snprintf(buf, n, "%sESTOP braked to a stop: lifter %+ld ticks, rotary %+ld since the latch; drivers off after %ld ms", head, (long)e.a, (long)e.b, (long)(e.c & 0xffff));
         case Ev::Fault: return std::snprintf(buf, n, "%sFAULT mask=0x%lx %s%s", head, (unsigned long)e.a, e.b ? "set" : "cleared", e.c == 1 ? " (EN cycle)" : e.c == 2 ? " (persists after EN cycle)" : "");
         case Ev::Enable: return std::snprintf(buf, n, "%sDRIVERS %s", head, e.a ? "enable" : "disable");
         case Ev::Phase: return std::snprintf(buf, n, "%s%s phase %ld at %ld", head, jobName(e.a), (long)e.b, (long)e.c);

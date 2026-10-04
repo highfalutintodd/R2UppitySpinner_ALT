@@ -77,7 +77,9 @@ going for up to 2 seconds.
      safe-spin height set, a turned head at exactly the travel count could have been let down).
   2. Once the override has let the head come down unaligned, or turned it below the safe-spin
      height, descents are refused until the head is home again. The log says
-     `ALIGNMENT suspect: …` when that starts and `ALIGNMENT ok again` when a home clears it.
+     `ALIGNMENT suspect: …` when that starts, `ALIGNMENT above the safe-spin height again …` if
+     the mast rises past that height before the head has homed, and `ALIGNMENT ok again` when a
+     home clears it below that height.
   3. A creep (commissioning, calibration, jog) stops at once if the switch it is moving away from
      closes again: that only happens when the mechanism runs backwards. The log says
      `WRONG_LIMIT` and a `HINT=` line suggests `#PINVERT`.
@@ -135,7 +137,8 @@ lets through still happens above 1000 ticks, where you have watched the head tur
     Type `#PNUDGE-50` again: nothing moves, `CREEP REFUSED ROTARY_NOT_HOME` (the head may be turned
     below the safe-spin height). The banner offers **Home the head**.
 19. Tap **Home the head** (or **Operate → Home**). The mast rises to the top first, then homes;
-    the monitor shows `ALIGNMENT ok again`.
+    the monitor shows `ALIGNMENT above the safe-spin height again …` as it passes 1100, then
+    `HOME DONE`.
 20. **Jog and release**, now that the head is home (so running on a moment is harmless): at the
     top, hold **▼ Down** for half a second and let go. It stops within a moment of letting go
     (`CREEP DONE LEASE_EXPIRED` or `CREEP ABORTED CANCEL`). With **Normal** power it moves at your
@@ -309,19 +312,123 @@ a head that has shifted on its shaft.
    Then the monitor as in step 3. The boot line shows a new build id; `#PSTATE` ends its second
    line with `alignment=ok`.
 2. `#PSAFESPIN1100` on the monitor. **Operate → Up**, then **90°** (the head turns at the top).
-3. **Rescue → Lifter jog → ▼ Down** (Slow), once: it stops at 1100 (`CREEP CLAMPED
-   ROTARY_NOT_HOME`). Let go. Do not press it again.
+3. **Rescue → Lifter jog → ▼ Down** (Slow): press and keep holding until it stops by itself at
+   1100 (`CREEP CLAMPED ROTARY_NOT_HOME`), then let go. Do not press it again. (A click is too
+   short: the jog ends when you let go, above 1100; then the first nudge in step 4 goes down to
+   1100 and stops there, and only the second one is refused.)
 4. On the monitor type `#PNUDGE-20`. Expected: nothing moves, `CREEP REFUSED ROTARY_NOT_HOME`,
    and the page's amber banner "The head may be turned below the safe-spin height …". (If the fix
    had not worked, this step could only move 20 ticks, to about 1080, which is clear.)
 5. Type `:PP94` (94 % = 1081 ticks). Expected: nothing moves, `SEEK REFUSED ROTARY_NOT_HOME`.
    (Again at most 20 ticks if it were wrong.)
 6. Tap **Home the head** on the banner. The mast rises to the top, the head homes, the banner goes
-   and the monitor shows `ALIGNMENT ok again`. Then `#PSAFESPIN904`.
+   and the monitor shows `ALIGNMENT above the safe-spin height again …` on the way up, then
+   `HOME DONE`. Then `#PSAFESPIN904`.
 7. E-STOP from the laptop: **Operate → Down** (head home, so the descent is fine), click **E-STOP**
    while it moves. The button stays where it is and reads `E-STOP LATCHED` on the first click.
    **Reset E-STOP**, **Operate → Up**, click E-STOP during the rise. Three times in all.
 
-Send back the log. After that, Parts D–F are as written above. Your board already runs unlocked,
-so there is no hurry for Part D; if you run it, stop at 920 ticks in step 29 unless you can see that
-the whole sweep of the head clears lower.
+Send back the log.
+
+## Results 2026-10-03, re-test (build 71955ce1)
+
+The fix held. With the head turned 90° at the top and `#PSAFESPIN1100`:
+- Step 3: the jog was a click rather than a hold, so it ended after 0.18 s (`CREEP DONE
+  LEASE_EXPIRED`), at about 1115 ticks, before reaching 1100. My step 3 said "once" where it
+  should have said "hold until it stops"; corrected above.
+- Step 4, the "very, very slight" movement: the first `#PNUDGE-20` started above 1100, so it was
+  allowed down to 1100. The log shows it crossing 1100 (`ALIGNMENT suspect` at 150.088) and
+  braking on that same millisecond; `CREEP CLAMPED ROTARY_NOT_HOME` follows 60 ms later, the
+  creep's fixed brake period. The mast came to rest at 1088: the creep starts braking on the
+  first tick at or below 1100, and at 15 % the mast's momentum and weight carry it another 12
+  ticks while the brake bites. The second and third `#PNUDGE-20` and `:PP94` were refused with
+  nothing moving. That is the policy fix working on your hardware.
+- Step 6: **Home the head** rose from 1088 to the top, homed and parked; `#PSAFESPIN904` back.
+  The monitor said `ALIGNMENT ok again (the head is home)` while the mast was still rising past
+  1100, before the home. The words were wrong (the flag clears when the mast is back above the
+  safe-spin height); fixed below.
+- Step 7: the E-STOP latched on the first click every time from the laptop and the button stayed
+  put. **But during both descents the mast did not stop:** `LIMIT BOTTOM made at 13` came 121 ms
+  after the latch in the first and 505 ms after it in the second, from about 600 ticks. During the
+  rise it stopped.
+
+Why the E-STOP let the mast run on. Pressing it brakes the motors at once (both driver inputs
+low, the TB9051FTG's "short brake"), but within a few milliseconds the board also switched the
+drivers off through the I2C expander, and a switched-off driver leaves the motor disconnected:
+it coasts. The brake only works while the drivers are on. Your lifter holds its position at rest
+with the drivers off, but once it is moving down the mast's weight keeps the screw turning, so a
+falling mast free-wheels to the bottom. An ordinary stop never showed this, because after every
+move the drivers stay on, braking, for 2 s (`DRIVERS disable` two seconds after each move in the
+log); only the E-STOP switched them off straight away. The simulator modelled your screw as
+self-locking, so no host test could see it.
+
+Fixed in this build (host tests 151; 1,174,727 bytes, 59 %):
+1. After an E-STOP the drivers stay on, braking, until both motors have been still for 0.1 s,
+   then switch off; 2 s at most, the same as after any ordinary stop. A new log line says how
+   it went: `ESTOP braked to a stop: lifter -NN ticks, rotary +0 since the latch; drivers off
+   after NNN ms`. If the drivers were already off when it was pressed (the mast at rest more than
+   2 s after a move), nothing changes and there is no new line.
+2. The simulator now has your lifter's behaviour: it holds at rest, and falls on when the
+   drivers are off while it moves. The bench sequence is a host test, and it fails on the
+   previous build (the mast coasts on) and passes on this one.
+3. The alignment line now says `ALIGNMENT above the safe-spin height again at NNNN: the head may
+   turn here, and must home before it goes lower` when the mast rises past the safe-spin height,
+   and keeps `ALIGNMENT ok again (the head is home)` for a home that clears it.
+
+Not changed yet, on purpose: a creep (jog or nudge) that stops at the safe-spin height for a
+turned head comes to rest a little below it, 12 ticks at the Slow power. With your 904 that
+means about 892. That is within the margin commissioning adds (34 ticks on your lifter) and well
+above where the head has hit the frame (about 650). A faster jog would go further. The fix is to
+start braking early by the braking distance at the creep's speed, the way the seeks already use
+your calibration. Re-test 2 measures that distance at full speed; I will set the early start from
+your numbers rather than guess it.
+
+## Re-test 2 for the E-STOP build (the head stays home: nothing here can reach the frame)
+
+Every move below is an ordinary up or down with the head home. If the fix did not work, the worst
+that happens is what happened today: the mast runs on to the bottom switch. Nothing here turns
+the head.
+
+1. In the Terminal app, bring the work into your checkout (one line):
+   ```
+   git -C "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3" merge --ff-only claude/uppity-spinner-phase-4-1e5680
+   ```
+   Success looks like `Fast-forward` and a list of files.
+2. Flash over USB, monitor closed, one line at a time:
+   ```
+   cd "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3"
+   ```
+   ```
+   arduino-cli compile --profile uppity UppityFirmware
+   ```
+   ```
+   arduino-cli upload --profile uppity -p /dev/cu.wchusbserial110 UppityFirmware
+   ```
+   The compile ends with `Sketch uses 1174727 bytes (59%)` (a few bytes either way is fine); the
+   upload with `Hard resetting via RTS pin...`.
+3. The monitor, in its own Terminal window (a new log file, so today's stays as it is):
+   ```
+   arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-phase4-retest2-log.txt
+   ```
+   The boot line shows a new build id (not `71955ce1`), and the `BOOT` line reads
+   `lifter=KNOWN rotary=SWITCH_LIVE` (the mast on a switch, the head home). If it says anything
+   else, tap **Operate → Home** first and wait for it to finish.
+4. **Operate → Up**, wait for 100 %.
+5. **Operate → Down**, and click **E-STOP** while the mast is still going down (earlier is better;
+   the whole descent takes under a second). Expected: it stops almost at once, and the monitor
+   shows `ESTOP LATCHED (source 3)` and, a fraction of a second later, the new line `ESTOP braked
+   to a stop: lifter -NN ticks, rotary +0 since the latch; drivers off after NNN ms`, with no
+   `LIMIT BOTTOM made` after it (unless it was already at the bottom). If it runs on to the bottom
+   again, stop here and send me the log.
+6. **Reset E-STOP**. **Operate → Up**, and click **E-STOP** while it rises. Expected: it stops,
+   and the line reads `lifter +NN ticks`.
+7. **Reset E-STOP**, then steps 4 and 5 twice more, clicking E-STOP at different points of the
+   descent.
+8. **Reset E-STOP** and **Operate → Home**.
+
+Send back the log (`~/Desktop/uppity-bench-phase4-retest2-log.txt`). The numbers in the `ESTOP
+braked to a stop` lines are your lifter's real
+braking distances at full speed; they are what I will use to make the safe-spin stop brake early.
+After that, Parts D–F are as written above. Your board already runs unlocked, so there is no hurry
+for Part D; if you run it, stop at 920 ticks in step 29 unless you can see that the whole sweep of
+the head clears lower.

@@ -77,6 +77,15 @@ class MotionSupervisor {
     static constexpr int kRestStillTicks = 30;
     static constexpr Ms  kRestMaxMs = 400;
     static constexpr Ticks kMaxStepTicks = 100;   // longest #PNUDGE
+    // E-STOP brakes; it does not let go. The short brake (both PWM low) only works while the
+    // drivers are ENABLED: with EN low the TB9051FTG outputs float and the motor coasts. A lead
+    // screw that back-drives under the mast's weight then keeps falling (bench 2026-10-03: ~560
+    // ticks to the bottom switch after the latch, because the drivers went off on the first
+    // E-STOP tick). So the drivers stay on, braking, until both counts have been still for
+    // kEstopStillTicks, then switch off as after any stop; kEstopBrakeMaxMs is the backstop for
+    // counts that never settle (the same 2 s an ordinary stop brakes for).
+    static constexpr int kEstopStillTicks = 100;
+    static constexpr Ms  kEstopBrakeMaxMs = 2000;
 
     MotionSupervisor(Hal& hal, EstopLatch& estop, CommandQueue& queue, SnapshotPublisher& pub, EventLog& events);
 
@@ -192,6 +201,9 @@ class MotionSupervisor {
     Ms armingSince_ = 0;
     Ms idleSince_ = 0;
     bool wasStopped_ = false;
+    bool estopBraking_ = false;           // E-STOP latched with the drivers on: braking until both axes are still
+    Ms estopAt_ = 0;
+    Ticks estopL_ = 0, estopR_ = 0;       // counts at the latch, for the "how far did it go" log line
     bool clearFaultReq_ = false;
     std::atomic<bool> setHomeReq_{false};
     bool turnedSinceHome_ = false;        // the head was off home above the safe height (or turned below it) since its last home

@@ -75,6 +75,7 @@ TEST(override_descent_with_a_turned_head_needs_a_home_before_the_next_descent) {
     g.runMs(5);
     CHECK(!g.sup.alignmentSuspect());
     a = g.last(Ev::Alignment); CHECK(a && a->a == 0);
+    CHECK(a && a->c == 1);                     // cleared by rising above the safe height, not by the home (bench 2026-10-03 log said "the head is home")
     g.seek(0, 650, true); g.runUntilIdle(20000);
     CHECK(g.snap().lastResult == JobResult::DoneLimit);
 }

@@ -394,7 +394,11 @@ the expander powered up with ENB high, which disables the drivers: fail-safe.
   Refusals return coded reasons, and a clamped seek reports `CLAMPED(reason)` loudly.
 - **E-STOP**: latch from any source; cancels job, queue, chain, sequence, random mode and the
   commissioning script; release by `#PRESUME`, web reset, or mesh `&ESTOP,RESET`, landing in
-  IDLE with nothing queued. Web `/api/stop` is a separate non-latching soft stop.
+  IDLE with nothing queued. Web `/api/stop` is a separate non-latching soft stop. The latch
+  brakes (both PWM low) and keeps the drivers ENABLED until both counts have been still for
+  100 ms (2 s at most), then disables them: the short brake needs EN high, and a lead screw
+  that back-drives under the mast's weight free-wheels with the outputs floating (bench
+  2026-10-03). `ESTOP braked to a stop: …` logs how far each axis went after the latch.
 - **Faults** (Appendix F.6): DIAG with EN-cycle recovery, repeated DIAG latching, stall,
   slow progress, encoder direction, phantom ticks, limit contradiction, limit mismatch, stuck
   home switch, expander fault, tick overrun, WDT, persist-while-armed (deferred, never lost).
@@ -601,6 +605,22 @@ dome at power-on) is unchanged. Jogs (lifter and rotary) now stop on a stall; pa
 mode homes before its random lifts; the page's E-STOP no longer moves under a mouse press. The bench
 procedure's step 13 relied on the refusal next to an unverified clearance; CLAUDE.md hard rule 12 now
 forbids that. 144 host tests; 1,174,219 bytes.
+
+**Status 2026-10-03 (evening): re-test of that fix passed; E-STOP coast found and fixed.** On the
+droid, a turned head at the 1100 threshold was refused by `#PNUDGE` and `:PP94` with nothing moving
+(the first nudge, started above 1100, clamped there and came to rest 12 ticks below it: braking
+distance at 15 %). The same log showed an E-STOP during a descent letting the mast run on to the
+bottom switch (121 ms and 505 ms after the latch, the second from about 600 ticks): the E-STOP
+branch disabled the drivers on its first tick, and with EN low the TB9051FTG floats the outputs, so
+the short brake stopped working and the back-driving screw coasted. Ordinary stops keep EN on for
+`idleDisableMs` and never showed it; the simulator modelled the screw as self-locking. Fixed: the
+latch keeps the drivers on, braking, until both counts are still for 100 ms (2 s at most) and logs
+`ESTOP braked to a stop: lifter ±N, rotary ±N since the latch; drivers off after N ms`; the
+simulator gained a back-drive model (holds at rest, falls on when floating), and the bench sequence
+is a host test that fails on the old build. The alignment log line no longer claims "the head is
+home" when the mast merely rose above the safe height. Open: the creep's clamp at the safe height
+lands a braking distance below it (12 ticks at 15 % on Todd's lifter); brake early by the measured
+distance once re-test 2 has logged it at full speed. 151 host tests; 1,174,727 bytes.
 
 ---
 
@@ -1029,7 +1049,8 @@ from the supervisor task so the overflow ISR lands on core 1; never link `ESP32E
 
 ### F.8 Simulator
 `LifterModel {breakawayDuty, breakawayDwellMs, kv, runningFriction, coastDecel, brakeDecel,
-travelTicks, limit hysteresis/bounce, starvationWindowMs, phantomRate (driving/idle), DIAG
+backdriveGravity/backdriveFriction (a moving mast that falls on with the outputs floating; 0 =
+self-locking), travelTicks, limit hysteresis/bounce, starvationWindowMs, phantomRate (driving/idle), DIAG
 injection incl. thermal trip, encoderFrozen, inverted, boot state}`. `RotaryModel {ticksPerRev
 (float), stick-slip: pulses < minPulseMs produce nothing else a burst in [5, 20] ticks, cam
 switch: centre, halfWidthMoving 8, halfWidthRest 2 below restVelocity, chatterProbability ≈ 7
