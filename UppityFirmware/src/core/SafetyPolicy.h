@@ -21,6 +21,11 @@
 // turnedSinceHome_: the head was off home above the safe height, or turned below it, since its
 // last home) and the exemption is off while it is set. The top limit switch is never "inside
 // the opening", whatever the safe-spin setting says.
+//
+// And a creep that the rule-2 floor has already stopped (`clampHeld`: it came to rest at the
+// safe-spin height with the head turned) may not try again: it brakes early so as to stop AT the
+// height, and a second press from there, starting from rest, could not brake early enough. Every
+// descent is refused until a home (or a rise of kClampRearmTicks, or a new safe-spin setting).
 namespace uppity {
 
 struct PolicyContext {
@@ -37,6 +42,7 @@ struct PolicyContext {
     bool  globalFault = false;
     bool  overrideLive = false;     // rescue override lease
     bool  alignmentSuspect = false; // the head may be turned: off home above the safe height (or turned below it) since its last home
+    bool  clampHeld = false;        // a creep was stopped at the safe-spin height with the head turned, and it has not homed or risen since
     bool  topLimit = false, bottomLimit = false, homeSwitch = false;
 };
 
@@ -88,6 +94,7 @@ inline Decision checkLifterSeek(const PolicyContext& c, Ticks current, Ticks tar
     if (target < current) {
         if (c.lifter.confidence == LifterConfidence::Unknown) { d.verdict = Verdict::Refuse; d.reason = Reason::LifterUnknown; return d; }
         if (rotaryIsHome(c) || c.overrideLive) return d;
+        if (c.clampHeld) { d.verdict = Verdict::Refuse; d.reason = Reason::RotaryNotHome; return d; }
         // A head already at or below the safe-spin height is inside the dome opening and
         // therefore aligned (the rotary is refused down there); it may keep descending, unless
         // the override has since let it turn or come down unaligned.
@@ -110,6 +117,7 @@ inline Decision checkLifterCreep(const PolicyContext& c, int dir) {
     if (dir < 0) {
         if (c.lifter.confidence == LifterConfidence::Unknown) { d.verdict = Verdict::Refuse; d.reason = Reason::LifterUnknown; return d; }
         if (rotaryIsHome(c) || c.overrideLive) return d;
+        if (c.clampHeld) { d.verdict = Verdict::Refuse; d.reason = Reason::RotaryNotHome; return d; }
         bool crossing = c.lifter.ticks > c.safeSpinTicks || c.topLimit;
         if (!crossing && c.alignmentSuspect) { d.verdict = Verdict::Refuse; d.reason = Reason::RotaryNotHome; return d; }
         if (crossing) d.value = c.safeSpinTicks;                  // stop at the threshold

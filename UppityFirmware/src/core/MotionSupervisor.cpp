@@ -89,6 +89,7 @@ PolicyContext MotionSupervisor::policy(const TickInputs& in) const {
     c.globalFault = faults_.globalBlocked();
     c.overrideLive = queue_.overrideLive(in.nowMs);
     c.alignmentSuspect = turnedSinceHome_;
+    c.clampHeld = clampHold_ && turnedSinceHome_;
     c.topLimit = in.topLimit; c.bottomLimit = in.bottomLimit; c.homeSwitch = in.homeSwitch;
     return c;
 }
@@ -112,8 +113,10 @@ void MotionSupervisor::updateAlignment(const TickInputs& in) {
         if (!home && (lifterAboveSafe(c) || isRotaryJob(job_))) turnedSinceHome_ = true;
         else if (home && !isRotaryJob(job_)) turnedSinceHome_ = false;     // a turning head passing through home does not count
     }
-    // what the page and the log show: the flag only bites below the safe height
-    bool suspect = turnedSinceHome_ && !lifterAboveSafeNow(in);
+    if (clampHold_ && (!turnedSinceHome_ || safeSpin() != clampFloor_ || lifter_.confidence == LifterConfidence::Unknown ||
+                       in.lifterTicks > clampAt_ + kClampRearmTicks)) clampHold_ = false;
+    // what the page and the log show: the flag only bites below the safe height, or at it once a creep has stopped there
+    bool suspect = turnedSinceHome_ && (!lifterAboveSafeNow(in) || clampHold_);
     if (suspect != alignmentSuspect_) { alignmentSuspect_ = suspect; emit(Ev::Alignment, suspect ? 1 : 0, in.lifterTicks, !suspect && turnedSinceHome_ ? 1 : 0, in.nowMs); }
 }
 
@@ -287,6 +290,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             p.stallMs = prof_->stallTimeoutMs;       // the profile's figure (700 ms on a 19:1), as the calibration's creeps use
             if (step) p.stopAfter = clampv<Ticks>(absl(s.a), 1, kMaxStepTicks);
             p.floorTicks = d.value;
+            p.brakeLeadMs = dir < 0 ? brakeLeadMs(cfg_.overshootDown, cfg_.velDown) : brakeLeadMs(cfg_.overshootUp, cfg_.velUp);
             if (dir < 0 && c.overrideLive && !rotaryIsHome(c) && (!step || in.lifterTicks - p.stopAfter <= safeSpin())) markAlignmentSuspect(in.nowMs);
             creep_.start(p, in.lifterTicks, in.nowMs);
             job_ = JobKind::LifterCreep;
@@ -445,6 +449,12 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
         if (o.jobResult == JobResult::DoneTarget && seek_.target() > travel() / 100) holdTarget_ = seek_.target(), holdFails_ = 0, holdCheckAt_ = in.nowMs;
         else holdTarget_ = -1;
     } else if (k == JobKind::LifterCreep || k == JobKind::LifterCalibrate) holdTarget_ = -1;
+    // a nudge, or a creep the safe-spin floor stopped: say where it comes to rest (see the tick)
+    if (k == JobKind::LifterCreep && (o.jobResult == JobResult::Clamped || creep_.stopAfter() > 0)) {
+        restReport_ = o.jobResult == JobResult::Clamped ? 7 : 6;
+        restFrom_ = creep_.startTicks(); restFloor_ = creep_.floorTicks(); restAsked_ = creep_.dir() * creep_.stopAfter(); restSince_ = in.nowMs;
+        if (o.jobResult == JobResult::Clamped) { clampHold_ = true; clampAt_ = in.lifterTicks; clampFloor_ = safeSpin(); }
+    }
     if (k == JobKind::LifterCalibrate) {
         suppressLimitRef_ = false;
         if (o.result == StepResult::Done) {
@@ -597,6 +607,11 @@ void MotionSupervisor::tick(Ms now) {
     lifter_.ticks = raw.lifterTicks; rotary_.ticks = raw.rotaryTicks;
     if (in.lifterTicks == stillL_ && in.rotaryTicks == stillR_) { if (stillTicks_ < 65535) ++stillTicks_; }
     else { stillTicks_ = 0; stillL_ = in.lifterTicks; stillR_ = in.rotaryTicks; }
+    if (restReport_ && (stillTicks_ >= kEstopStillTicks || elapsed(now, restSince_) >= 1000 || job_ != JobKind::None)) {
+        if (restReport_ == 7) { emit(Ev::Measure, 7, in.lifterTicks, restFloor_, now); clampAt_ = in.lifterTicks; }
+        else emit(Ev::Measure, 6, in.lifterTicks - restFrom_, restAsked_, now);
+        restReport_ = 0;
+    }
 
     BridgeCommand lifterOut = brakeCmd(), rotaryOut = brakeCmd();
     bool rotaryBusy = isRotaryJob(job_) || (lastOut_[1].mode == Bridge::Drive && lastOut_[1].duty != 0);

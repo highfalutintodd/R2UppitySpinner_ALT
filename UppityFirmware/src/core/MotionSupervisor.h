@@ -86,6 +86,9 @@ class MotionSupervisor {
     // counts that never settle (the same 2 s an ordinary stop brakes for).
     static constexpr int kEstopStillTicks = 100;
     static constexpr Ms  kEstopBrakeMaxMs = 2000;
+    // After a creep has stopped a turned head at the safe-spin height, a rise of this much (or a
+    // home, or a new safe-spin setting) re-arms descents: from there it can brake early again.
+    static constexpr Ticks kClampRearmTicks = 20;
 
     MotionSupervisor(Hal& hal, EstopLatch& estop, CommandQueue& queue, SnapshotPublisher& pub, EventLog& events);
 
@@ -207,7 +210,13 @@ class MotionSupervisor {
     bool clearFaultReq_ = false;
     std::atomic<bool> setHomeReq_{false};
     bool turnedSinceHome_ = false;        // the head was off home above the safe height (or turned below it) since its last home
-    bool alignmentSuspect_ = false;       // turnedSinceHome_ while below the safe height: what the page and the log show
+    bool alignmentSuspect_ = false;       // turnedSinceHome_ while below the safe height (or clamp-held): what the page and the log show
+    bool clampHold_ = false;              // a creep came to rest at the safe-spin height with the head turned (SafetyPolicy clampHeld)
+    Ticks clampAt_ = 0, clampFloor_ = 0;
+    uint8_t restReport_ = 0;              // 6 nudge / 7 clamped creep: log where it came to rest once the counts are still
+    Ticks restFrom_ = 0, restFloor_ = 0;
+    int32_t restAsked_ = 0;
+    Ms restSince_ = 0;
     bool overrideWas_ = false;            // for the OVERRIDE on/off log lines (set, expired, cancelled, cleared by E-STOP)
     std::atomic<bool> holdIntake_{false};
     uint32_t lastProgramId_ = 0;

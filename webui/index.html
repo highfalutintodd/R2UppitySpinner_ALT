@@ -518,7 +518,7 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
     const f = s.faults & ~4096;
     if (f && !s.estop) out.push(['warn', 'Fault: ' + faultText(f) + '.', 'Clear fault', () => send('#PCLEARFAULT')]);
     if (s.override > 0) out.push(['warn', 'SAFETY OVERRIDE ON: ' + s.override + ' s left. Descents without a home and rotary jog below the safe-spin height are allowed.', 'End now', () => send('#POVERRIDE0')]);
-    if (s.alignment === 'suspect' && !s.override) out.push(['warn', 'The head may be turned below the safe-spin height: descents are refused until it is home.', 'Home the head', () => send(':PA0')]);
+    if (s.alignment === 'suspect' && !s.override) out.push(['warn', 'The head may be turned at or below the safe-spin height: descents are refused until it is home.', 'Home the head', () => send(':PA0')]);
     if (s.commission && s.commission.active) out.push(['info', 'Commissioning step ' + s.commission.step + ' of 7 (' + s.commission.name + ') is active: its steps may move the motors.', 'Open', () => { location.hash = '#setup/commission'; }]);
     else if (s.state === 'LOCKED') out.push(['info', 'LOCKED: the motors are refused until the board is commissioned.', 'Commissioning', () => { location.hash = '#setup/commission'; }]);
     if (uploading) out.push(['info', 'Firmware update in progress. Do not power off.', null, null]);

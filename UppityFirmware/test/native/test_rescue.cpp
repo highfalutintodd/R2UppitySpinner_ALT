@@ -347,3 +347,101 @@ TEST(crash_20261003_random_param_mode_homes_before_each_random_lift) {
     }
     CHECK(checked >= 10);
 }
+
+// ---------------------------------------------------------------- bench 2026-10-03/04: creeps brake early
+// A 15 % nudge "stopping at" the safe-spin height 1100 came to rest at 1088, and a 50-tick nudge
+// went about 65: the brake needs about speed x 40 ms to stop the mast (E-STOP from full speed: 53-60
+// ticks). Creeps now start braking that much early, the time coming from the calibration's own
+// stopping distances, as the seeks already do. The simulated lifter here stops in about speed x 15 ms.
+
+static Ticks nudgeBy(Rig& g, int n) {
+    Ticks a = g.snap().lifterTicks;
+    g.req(JobKind::LifterCreep, n, 0, 2); g.runUntilIdle(5000); g.runMs(400);
+    return g.snap().lifterTicks - a;
+}
+static void backdrivingAt(Rig& g, Ticks h) {
+    g.hal.lifter.setParams(backdrivingLifter()); g.hal.lifter.setPosition(1150); g.boot();
+    g.seek(h, 0); g.runUntilIdle(20000); g.runMs(500);
+}
+static void backdrivingTurnedAtTheTop(Rig& g) {
+    g.hal.lifter.setParams(backdrivingLifter());
+    g.hal.lifter.setPosition(1150); g.setRotaryAngleFromCentre(200); g.boot();
+    g.req(JobKind::RotaryHome); g.runUntilIdle(60000);
+    g.req(JobKind::RotaryAbsolute, 90, 0, 0); g.runUntilIdle(30000);
+}
+static void holdJogFor(Rig& g, int dir, int ms) {
+    g.queue.jogKeepalive(g.hal.nowMs()); g.creep(dir, 0, true);
+    for (int i = 0; i < ms; ++i) { if (i % 400 == 0) g.queue.jogKeepalive(g.hal.nowMs()); g.runMs(1); }
+    g.queue.jogRelease(g.hal.nowMs()); g.runUntilIdle(2000); g.runMs(500);
+}
+
+TEST(brake_lead_is_the_median_calibrated_braking_time) {
+    uint16_t over[kSlots] = {}, vel[kSlots] = {};
+    CHECK_EQ(brakeLeadMs(over, vel), 0);                                            // no calibration: brake on the mark
+    vel[3] = 300; over[3] = 12;                                                     // Todd's 15 % creep: 12 ticks at 0.3 ticks/ms
+    CHECK_EQ(brakeLeadMs(over, vel), 40);
+    vel[15] = 1500; over[15] = 57; vel[16] = 1500; over[16] = 60;                   // full speed: 38 and 40 ms
+    vel[17] = 1500; over[17] = 600;                                                 // one wild slot does not move the median
+    CHECK_EQ(brakeLeadMs(over, vel), 40);
+    vel[4] = 400; over[4] = 0;                                                      // a slot that measured no run-on is ignored
+    CHECK_EQ(brakeLeadMs(over, vel), 40);
+    for (int i = 0; i < kSlots; ++i) { vel[i] = 100; over[i] = 60; }               // nonsense is capped
+    CHECK_EQ(brakeLeadMs(over, vel), 150);
+}
+
+TEST(nudge_with_the_calibrated_brake_lead_comes_to_rest_on_its_step) {
+    MotionConfig c = backdrivingConfig(); setBrakeTable(c, 16);
+    Rig g(c); backdrivingAt(g, 800);
+    Ticks m = nudgeBy(g, -12); CHECK(m <= -9 && m >= -15);
+    m = nudgeBy(g, -20); CHECK(m <= -17 && m >= -23);
+    m = nudgeBy(g, -50); CHECK(m <= -45 && m >= -53);
+    m = nudgeBy(g, 20); CHECK(m >= 14 && m <= 23);
+    const Event* e = g.last(Ev::Measure); CHECK(e && e->a == 6 && e->c == 20);     // "NUDGE came to rest +N ticks ... (asked +20)"
+    if (e) CHECK_EQ(e->b, m);
+    MotionConfig d = backdrivingConfig();                                           // no calibration: as before, it runs on
+    Rig h(d); backdrivingAt(h, 800);
+    m = nudgeBy(h, -20); CHECK(m < -25);
+}
+
+TEST(jog_to_the_safe_height_with_a_turned_head_comes_to_rest_at_or_above_it) {
+    for (int power : {0, 900}) {                                                    // Slow (the profile minimum here) and fast
+        MotionConfig c = backdrivingConfig(); c.rotaryDisabled = false; setBrakeTable(c, 16);
+        if (power) c.jogPowerDown = power;
+        Rig g(c); backdrivingTurnedAtTheTop(g);
+        CHECK(g.snap().rotaryDeg > 60 && g.snap().rotaryDeg < 120);
+        holdJogFor(g, -1, 3000);
+        CHECK(g.snap().lastResult == JobResult::Clamped);
+        Ticks rest = g.snap().lifterTicks;
+        CHECK(rest >= 575); CHECK(rest <= 575 + 15);                                // before: 7-17 ticks BELOW 575
+        const Event* e = g.last(Ev::Measure); CHECK(e && e->a == 7 && e->b == rest && e->c == 575);
+        CHECK(g.snap().alignmentSuspect);                                           // the page offers "Home the head"
+        holdJogFor(g, -1, 1500);                                                    // a second press: stopped there it stays
+        CHECK(g.snap().lastResult == JobResult::Refused); CHECK_EQ(lastRefusalReason(g), (int32_t)Reason::RotaryNotHome);
+        CHECK_EQ(g.snap().lifterTicks, rest);
+        g.req(JobKind::LifterCreep, -20, 0, 2); g.runUntilIdle(3000);              // nor a nudge, nor a seek
+        CHECK(g.snap().lastResult == JobResult::Refused);
+        g.seek(0, 650); g.runUntilIdle(3000);
+        CHECK(g.snap().lastResult == JobResult::Refused);
+        CHECK_EQ(g.snap().lifterTicks, rest);
+    }
+}
+
+TEST(clamp_hold_rearms_after_a_rise_and_ends_with_a_home_or_a_new_safe_spin_height) {
+    MotionConfig c = backdrivingConfig(); c.rotaryDisabled = false; setBrakeTable(c, 16);
+    Rig g(c); backdrivingTurnedAtTheTop(g);
+    holdJogFor(g, -1, 3000);
+    Ticks rest = g.snap().lifterTicks; CHECK(rest >= 575);
+    CHECK(nudgeBy(g, 40) > MotionSupervisor::kClampRearmTicks);                     // up is always allowed, and re-arms
+    CHECK(!g.snap().alignmentSuspect);
+    const Event* a = g.last(Ev::Alignment); CHECK(a && a->a == 0 && a->c == 1);     // "above the safe-spin height again"
+    holdJogFor(g, -1, 3000);                                                        // so a jog down clamps again, at the height
+    CHECK(g.snap().lastResult == JobResult::Clamped); CHECK(g.snap().lifterTicks >= 575);
+    MotionConfig lower = c; lower.safeSpinTicks = 400; g.sup.setConfig(lower); g.runMs(5);   // a new safe-spin height: a new floor
+    CHECK(!g.snap().alignmentSuspect);
+    holdJogFor(g, -1, 3000);
+    CHECK(g.snap().lastResult == JobResult::Clamped); CHECK(g.snap().lifterTicks >= 400); CHECK(g.snap().lifterTicks <= 415);
+    g.req(JobKind::RotaryHome); g.runUntilIdle(60000); g.runMs(5);                  // a home ends it for good
+    CHECK(!g.snap().alignmentSuspect);
+    g.seek(0, 0, true); g.runUntilIdle(20000);
+    CHECK(g.snap().lastResult == JobResult::DoneLimit);
+}

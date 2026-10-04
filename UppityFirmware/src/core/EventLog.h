@@ -26,7 +26,7 @@ enum class Ev : uint8_t {
     Enable,             // a = 1 on / 0 off
     Persist,            // a = 1 done / 0 deferred
     Phase,              // a = JobKind, b = phase id, c = detail (seek/home/calibrate sub-steps)
-    Measure,            // a = what, b = value, c = value2 (characterisation, calibration)
+    Measure,            // a = what, b = value, c = value2 (characterisation, calibration; 6 nudge rest: moved, asked; 7 clamp rest: ticks, floor)
     Refused,            // a = JobKind, b = reason
     Override,           // a = 1 on / 0 off, b = ms
     LightKit,           // a = requested light kit mode (loop() applies it over I2C)

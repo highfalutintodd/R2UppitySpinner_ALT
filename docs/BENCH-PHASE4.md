@@ -182,7 +182,10 @@ at the same step, even after a power cycle. An E-STOP pauses it too.
     - **b. Override on (60 s)**. Press it again whenever the countdown gets low.
     - **c.** Use **Lower 3 %** (35 ticks) down to about 80 % (the Height line reads about 920):
       you have already seen the head turn freely there. Below 920 use only **Lower 1 %** (12
-      ticks), and after every step look at the lowest part of the head against the dome edge **and
+      ticks; from the early-braking build of re-test 3 on, each step lands within a few ticks of
+      its size and the log says `NUDGE came to rest … (asked -12)`; before, it ran on about 12
+      ticks further), and
+      after every step look at the lowest part of the head against the dome edge **and
       every part of the lifter frame it would pass over if it turned**, not only what is under it
       at 90°. Stop while it is still clearly clear, a finger's width at least. If you are not sure
       about the whole sweep, stop at 920: that height is proven.
@@ -432,3 +435,94 @@ braking distances at full speed; they are what I will use to make the safe-spin 
 After that, Parts D–F are as written above. Your board already runs unlocked, so there is no hurry
 for Part D; if you run it, stop at 920 ticks in step 29 unless you can see that the whole sweep of
 the head clears lower.
+
+## Results 2026-10-04, re-test 2 (build db08a868)
+
+The E-STOP fix works on the droid. Four presses during full-speed descents (about 1.5 ticks/ms)
+and two during rises (about 1.2 ticks/ms), the head home throughout:
+
+| Press | Direction | Lifter after the latch | Drivers off after | Came to rest at |
+|---|---|---|---|---|
+| 65.226 | down | −54 ticks | 227 ms | 206 |
+| 71.134 | down | −59 ticks | 278 ms | 378 |
+| 93.915 | up | +32 ticks | 186 ms | 602 |
+| 99.500 | down | −53 ticks | 220 ms | 256 |
+| 113.804 | up | +31 ticks | 155 ms | 587 |
+| 119.216 | down | −60 ticks | 282 ms | 435 |
+
+No `LIMIT BOTTOM made` after any of them; before this build both descents ran on to the bottom
+switch. Braking distance is about the speed times 40 ms going down and 27 ms going up, the same
+proportion as the 15 % creep that stopped 12 ticks past 1100 on 2026-10-03. (The board booted twice
+when the monitor opened: the USB adapter resets it as the port opens, and the first boot's lines
+were already in its buffer. The WiFi took two retries to join; the backoff did its job.)
+
+Changed in the next build (host tests 155; 1,175,979 bytes, 59 %):
+1. **Jogs and nudges start braking early**, by the distance the mast will run on: their speed over
+   the last 16 ms times a braking time taken from your own calibration's stopping distances (the
+   seeks already brake early from the same table). A nudge now lands within a few ticks of its
+   size, and the log says where: `NUDGE came to rest -20 ticks from where it started (asked -20)`.
+   With no calibration nothing changes.
+2. **A jog or nudge stopping a turned head at the safe-spin height comes to rest at it or a few
+   ticks above it**, instead of about 12 below: the early start has a quarter extra there, so any
+   error lands on the safe side. The log says `CLAMP came to rest at 1103, +3 from the safe-spin
+   height 1100`.
+3. **Stopped there, it stays there.** Every further descent is refused (`ROTARY_NOT_HOME`, the page
+   offers **Home the head**) until the head homes, the mast rises at least 20 ticks, or the
+   safe-spin height is changed. Without this, a second press starting from rest just above the
+   height could not brake early enough and would end a tick or two below it.
+4. `#PCAL` ends with a new line, `CALBRAKE down=NNms up=NNms`: the braking times jogs and nudges use.
+
+## Re-test 3: early braking, installed from the page (nothing here can reach the frame)
+
+This also does Part E step 31: the new build goes in through the page's own firmware upload. The
+head is home for steps 5–6. In step 7 a turned head is lowered only by one bounded nudge from the
+top; if the new code failed completely it would stop at about 1040, well above the 920 where you
+have watched the head turn freely.
+
+1. In the Terminal app, bring the work into your checkout (one line):
+   ```
+   git -C "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3" merge --ff-only claude/uppity-spinner-phase-4-1e5680
+   ```
+   Success looks like `Fast-forward` and a list of files.
+2. Build the file the page will send, one line at a time:
+   ```
+   cd "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3"
+   ```
+   ```
+   arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
+   ```
+   It ends with `Sketch uses 1175979 bytes (59%)` (a few bytes either way is fine).
+3. The monitor, in its own Terminal window (a new log file):
+   ```
+   arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-phase4-retest3-log.txt
+   ```
+4. On the laptop's browser, open the page (`http://192.168.86.69`, or the address in the monitor's
+   `WIFI joined` line). With the periscope idle: **Setup → Firmware → Choose File**, pick
+   `UppityFirmware.ino.bin` in the `uppity-build` folder on your Desktop, **Upload**. A banner says
+   an update is running, the percentage climbs, then `Written. The board is restarting…`, and the
+   page reloads itself. The monitor shows `OTA 100% done, restarting` and a fresh boot with a new
+   build id (not `db08a868`). If the page upload fails, note what it said and flash over USB
+   instead (monitor closed, same folder as step 2):
+   ```
+   arduino-cli upload --profile uppity -p /dev/cu.wchusbserial110 UppityFirmware
+   ```
+5. Type `#PCAL` on the monitor. Expected: `CAL=in use …`, the `CALUP`/`CALDOWN` table, and the new
+   `CALBRAKE down=NNms up=NNms (jogs and nudges start braking this far ahead)`. From the E-STOP
+   numbers I expect about 40 down and 27 up; tell me what it says.
+6. **Operate → Up**, then on the monitor, one at a time, waiting for each to finish:
+   `#PNUDGE-20`, `#PNUDGE-50`, `#PNUDGE+20`, `#PNUDGE-12`. After each, about a second later:
+   `NUDGE came to rest -NN ticks from where it started (asked -20)` and so on. Expected: each within
+   about 4 ticks of what was asked (before this build: about 12 more).
+7. `#PSAFESPIN1100`, **Operate → Up**, then **90°** (the head turns at the top). Then `#PNUDGE-100`.
+   Expected: `CREEP CLAMPED ROTARY_NOT_HOME`, then `CLAMP came to rest at 11NN, +N from the
+   safe-spin height 1100`, with N zero or a small positive number (I expect under 10; before this
+   build it was −12), and the page's banner "The head may be
+   turned at or below the safe-spin height". Then `#PNUDGE-20`: nothing moves, `CREEP REFUSED
+   ROTARY_NOT_HOME`.
+8. Tap **Home the head**: the mast rises, the head homes, the banner goes. Then `#PSAFESPIN904`.
+
+Send back the log (`~/Desktop/uppity-bench-phase4-retest3-log.txt`) and the `CALBRAKE` line. If
+the nudges and the clamp look like that, carry on with **Part D** (commissioning) as written above;
+your board already runs unlocked, so there is no hurry. In step 29 stop at 920 ticks unless you can
+see that the whole sweep of the head clears lower. Part E step 32 (an upload refused while a motor
+runs) and Part F (factory reset) are optional.

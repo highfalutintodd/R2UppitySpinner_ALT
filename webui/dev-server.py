@@ -283,7 +283,7 @@ class Sim:
             dirn = 1 if m.group(2) == "+" else -1
             if kind == "JOG_L" and dirn < 0 and not self.lifterKnown: self.refuse("CREEP", "LIFTER_UNKNOWN"); return
             if kind == "ROT_JOG" and not self.aboveSafe() and not self.overrideLive(): self.refuse("ROT_JOG", "BELOW_SAFE_HEIGHT"); return
-            if kind == "ROT_JOG" and not self.aboveSafe(): self.suspect = True; say("ALIGNMENT suspect: the head may be turned below the safe-spin height; descents need a home first (or the override)")
+            if kind == "ROT_JOG" and not self.aboveSafe(): self.suspect = True; say("ALIGNMENT suspect: the head may be turned at or below the safe-spin height; descents need a home first (or the override)")
             self.begin(kind, "CREEP" if kind == "JOG_L" else "ROT_JOG"); self.jog = dirn; say("JOG=%s at %s%%" % (kind, m.group(3) or "slow")); return
         if line == "#PJOG0": self.jogUntil = 0; return
         m = re.match(r"#PNUDGE([+-]?\d+)$", line)

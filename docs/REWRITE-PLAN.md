@@ -389,7 +389,9 @@ the expander powered up with ENB high, which disables the drivers: fail-safe.
   zero at the centre of the contact arc; pass 3 best-effort settle that can never change the
   outcome. Failure leaves the frame untouched.
 - **Interlocks** (one function): rotary refused below safe height; descent across safe height
-  needs `LATCHED` or `SWITCH_LIVE` (or override); lifter unknown ⇒ no descent, no override;
+  needs `LATCHED` or `SWITCH_LIVE` (or override), and once a creep has stopped a turned head at
+  that height (`clampHeld`) every further descent is refused until a home, a 20-tick rise or a
+  new safe-spin setting; lifter unknown ⇒ no descent, no override;
   E-STOP or commissioning lock ⇒ both zero; DIAG ⇒ that axis zero; lease expired ⇒ zero.
   Refusals return coded reasons, and a clamped seek reports `CLAMPED(reason)` loudly.
 - **E-STOP**: latch from any source; cancels job, queue, chain, sequence, random mode and the
@@ -621,6 +623,19 @@ is a host test that fails on the old build. The alignment log line no longer cla
 home" when the mast merely rose above the safe height. Open: the creep's clamp at the safe height
 lands a braking distance below it (12 ticks at 15 % on Todd's lifter); brake early by the measured
 distance once re-test 2 has logged it at full speed. 151 host tests; 1,174,727 bytes.
+
+**Status 2026-10-04: E-STOP fix verified on the droid; creeps brake early.** Re-test 2 (build
+`db08a868`): four E-STOPs during full-speed descents stopped within 53–60 ticks and two during rises
+within 31–32, drivers off 155–282 ms after the latch, nothing ran on to a switch. Todd's lifter
+brakes in about speed × 40 ms going down and × 27 ms going up, the same proportion as the 15 %
+creep's 12 ticks. `LifterCreep` now starts braking `ahead` ticks early for a step (`#PNUDGE`) and
+for the policy floor: its speed over the last 16 ms times `brakeLeadMs`, the median of the
+calibration's `over / vel` per slot (the stopping distances the seeks already use; capped at
+150 ms; 0 without a calibration, which keeps the old behaviour); the floor adds a quarter and a
+tick. A creep the floor stopped sets `clampHeld` (refuse descents until a home, a
+`kClampRearmTicks` rise or a new safe-spin height), because a second press from rest just above the
+height cannot brake early enough. The log reports `NUDGE came to rest …` / `CLAMP came to rest …`
+once the counts are still, and `#PCAL` prints `CALBRAKE`. 155 host tests; 1,175,979 bytes.
 
 ---
 

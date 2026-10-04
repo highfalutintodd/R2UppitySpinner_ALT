@@ -238,15 +238,8 @@ TEST(estop_flushes_queued_requests) {
 // carry on to the bottom switch, about 560 ticks and half a second after the latch. The first
 // E-STOP tick switched the drivers off, and with EN low the TB9051FTG outputs float: the short
 // brake only works with the drivers ON. Todd's screw back-drives under the mast's weight while
-// it moves (it holds at rest), so a floating descent barely slows. These tests run that mechanism.
-static sim::LifterParams backdrivingLifter() {
-    sim::LifterParams p;
-    p.breakawayDuty = 0.45; p.travelTicks = 1150; p.kv = 1.4;                  // ~1.4 ticks/ms flat out, as on the bench
-    p.tauCoastMs = 1e9; p.backdriveGravity = 0.004; p.backdriveFriction = 0.0049; // floating: slows ~0.001 ticks/ms per ms
-    p.tauBrakeMs = 15;                                                         // short brake: a few tens of ticks from full speed
-    return p;
-}
-static MotionConfig backdrivingConfig() { MotionConfig c = gregConfig(); c.travelTicks = 1150; c.safeSpinTicks = 575; return c; }
+// it moves (it holds at rest), so a floating descent barely slows. These tests run that mechanism
+// (rig.h backdrivingLifter / backdrivingConfig).
 static void runUntilBelow(Rig& g, double pos) { for (int i = 0; i < 5000 && g.hal.lifter.position() > pos; ++i) g.runMs(1); }
 static void runUntilAbove(Rig& g, double pos) { for (int i = 0; i < 5000 && g.hal.lifter.position() < pos; ++i) g.runMs(1); }
 

@@ -447,6 +447,9 @@ void Console::printCal() {
     String up = "CALUP  ", down = "CALDOWN";
     for (int i = 0; i < kSlots; ++i) { if (cal_.slotValidUp[i]) { up += ' '; up += i * 5; up += "%:"; up += cal_.velUp[i]; up += '/'; up += cal_.overUp[i]; } if (cal_.slotValidDown[i]) { down += ' '; down += i * 5; down += "%:"; down += cal_.velDown[i]; down += '/'; down += cal_.overDown[i]; } }
     line(up.c_str()); line(down.c_str());
+    // what the jogs and nudges make of it (LifterCreep): start braking this much travel-time early
+    printf("CALBRAKE down=%dms up=%dms (jogs and nudges start braking this far ahead%s)", brakeLeadMs(cal_.overDown, cal_.velDown), brakeLeadMs(cal_.overUp, cal_.velUp),
+           calibrationApplies(s_, cal_) ? "" : "; not in use: the calibration is for another profile");
 }
 
 void Console::printSequences() {

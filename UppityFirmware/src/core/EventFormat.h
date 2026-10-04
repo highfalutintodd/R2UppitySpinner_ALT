@@ -63,8 +63,8 @@ inline int formatEvent(const Event& e, char* buf, size_t n) {
         case Ev::HomeFrameCorrected: return std::snprintf(buf, n, "%sHOME FRAME CORRECTED by %ld ticks (switch wins)", head, (long)e.a);
         case Ev::HomeManual: return e.c ? std::snprintf(buf, n, "%sHOME SET refused (%s)", head, reasonName(e.c))
                                         : std::snprintf(buf, n, "%sHOME SET by the operator (the head was at %ld ticks, %s): this position is home now", head, (long)e.a, homeConfName(e.b));
-        case Ev::Alignment: return e.a ? std::snprintf(buf, n, "%sALIGNMENT suspect: the head may be turned below the safe-spin height; descents need a home first (or the override)", head)
-                             : e.c ? std::snprintf(buf, n, "%sALIGNMENT above the safe-spin height again at %ld: the head may turn here, and must home before it goes lower", head, (long)e.b)
+        case Ev::Alignment: return e.a ? std::snprintf(buf, n, "%sALIGNMENT suspect: the head may be turned at or below the safe-spin height; descents need a home first (or the override)", head)
+                             : e.c ? std::snprintf(buf, n, "%sALIGNMENT above the safe-spin height again at %ld: the head may turn here, and must home before going below that height", head, (long)e.b)
                                    : std::snprintf(buf, n, "%sALIGNMENT ok again (the head is home)", head);
         case Ev::ConfidenceLifter: return std::snprintf(buf, n, "%sLIFTER %s -> %s", head, lifterConfName(e.a), lifterConfName(e.b));
         case Ev::ConfidenceRotary: return std::snprintf(buf, n, "%sROTARY %s -> %s", head, homeConfName(e.a), homeConfName(e.b));
@@ -82,6 +82,8 @@ inline int formatEvent(const Event& e, char* buf, size_t n) {
             if (e.a == 4) return std::snprintf(buf, n, "%sCAL min power up=%ld down=%ld (permille)", head, (long)e.b, (long)e.c);
             if (e.a == 5) return std::snprintf(buf, n, "%sROTARY verdict=%s%s", head, e.b == 2 ? "confident (stored)" : e.b == 1 ? "probable (stored)" : "NOT_REPEATABLE (nothing stored)",
                                                e.c ? "" : "; contact arc narrower than two creep steps");
+            if (e.a == 6) return std::snprintf(buf, n, "%sNUDGE came to rest %+ld ticks from where it started (asked %+ld)", head, (long)e.b, (long)e.c);
+            if (e.a == 7) return std::snprintf(buf, n, "%sCLAMP came to rest at %ld, %+ld from the safe-spin height %ld", head, (long)e.b, (long)(e.b - e.c), (long)e.c);
             return std::snprintf(buf, n, "%sMEASURE %ld %ld %ld", head, (long)e.a, (long)e.b, (long)e.c);
         case Ev::Refused: return std::snprintf(buf, n, "%s%s REFUSED %s", head, jobName(e.a), reasonName(e.b));
         case Ev::Override: return e.a ? std::snprintf(buf, n, "%sOVERRIDE on for %lds: descents without a home and rotary jog below the safe-spin height are allowed", head, (long)(e.b + 999) / 1000)

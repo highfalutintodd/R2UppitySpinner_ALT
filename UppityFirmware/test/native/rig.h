@@ -73,6 +73,22 @@ inline MotionConfig gregConfig(bool rotaryDisabled = true) {
     c.rotary.driveSign = +1;                  // the simulator's rotary counts up under positive drive
     return c;
 }
+// Todd's lifter as the bench measured it (2026-10-03/04): ~1.4 ticks/ms flat out, travel 1150; with
+// the drivers off a falling mast barely slows (gravity against running friction), at rest it holds,
+// and the short brake stops it within tens of ticks (here about speed x 15 ms).
+inline sim::LifterParams backdrivingLifter() {
+    sim::LifterParams p;
+    p.breakawayDuty = 0.45; p.travelTicks = 1150; p.kv = 1.4;
+    p.tauCoastMs = 1e9; p.backdriveGravity = 0.004; p.backdriveFriction = 0.0049; // floating: slows ~0.001 ticks/ms per ms
+    p.tauBrakeMs = 15;
+    return p;
+}
+inline MotionConfig backdrivingConfig() { MotionConfig c = gregConfig(); c.travelTicks = 1150; c.safeSpinTicks = 575; return c; }
+// A calibration table whose stopping distances say "brake `ms` ahead" (what #PSC would store).
+inline void setBrakeTable(MotionConfig& c, int ms) {
+    for (int i = 3; i <= 17; ++i) { c.velUp[i] = c.velDown[i] = 1000; c.overshootUp[i] = c.overshootDown[i] = static_cast<uint16_t>(ms); }
+}
+
 // The small-rotary community build: ~250 ticks per revolution, tighter cam geometry.
 inline sim::RotaryParams smallRotary() {
     sim::RotaryParams p; p.ticksPerRev = 250.0; p.camCentreTicks = 60; p.halfWidthRest = 1.0; p.halfWidthMoving = 2.5; p.kv = 0.35; p.chatterP = 0.25;

@@ -160,7 +160,11 @@ TEST(event_formatter_writes_readable_lines) {
     e.c = 2000 | 0x10000; formatEvent(e, buf, sizeof buf);
     CHECK(std::string(buf).find("drivers off after 2000 ms of braking, before the counts settled") != std::string::npos);
     e.code = Ev::Alignment; e.a = 0; e.b = 1118; e.c = 1; formatEvent(e, buf, sizeof buf);
-    CHECK(std::string(buf) == "t=12.345 ALIGNMENT above the safe-spin height again at 1118: the head may turn here, and must home before it goes lower");
+    CHECK(std::string(buf) == "t=12.345 ALIGNMENT above the safe-spin height again at 1118: the head may turn here, and must home before going below that height");
     e.c = 0; formatEvent(e, buf, sizeof buf);
     CHECK(std::string(buf) == "t=12.345 ALIGNMENT ok again (the head is home)");
+    e.code = Ev::Measure; e.a = 6; e.b = -19; e.c = -20; formatEvent(e, buf, sizeof buf);
+    CHECK(std::string(buf) == "t=12.345 NUDGE came to rest -19 ticks from where it started (asked -20)");
+    e.a = 7; e.b = 1103; e.c = 1100; formatEvent(e, buf, sizeof buf);
+    CHECK(std::string(buf) == "t=12.345 CLAMP came to rest at 1103, +3 from the safe-spin height 1100");
 }
