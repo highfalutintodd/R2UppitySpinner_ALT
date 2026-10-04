@@ -88,6 +88,20 @@ TEST(calibration_blob_from_result_and_migration) {
     CHECK_EQ(migrateCalibration(d, blob, 3), 0); CHECK_EQ(d.valid, 0);
 }
 
+TEST(calibration_keeps_the_bottom_rest_and_older_blobs_load_without_it) {
+    CalibrateResult r; r.travel = 1137; r.travelOk = true; r.minUp = 250; r.minDown = 150; r.bottomRest = 33;
+    Calibration c; takeCalibration(c, r, 1, 1);
+    CHECK_EQ(c.bottomRest, 33);
+    Settings s; s.motor = 1;
+    CHECK_EQ(toMotionConfig(s, c).bootBottomTicks, -33);                    // power-up on the bottom switch starts at -33
+    s.motor = 0; CHECK_EQ(toMotionConfig(s, c).bootBottomTicks, 0);         // a calibration for another profile does not apply
+    Calibration old = c; old.schema = 1; old.bottomRest = 0;               // a schema-1 blob: that field was reserve (zeros)
+    uint8_t blob[sizeof(Calibration)]; std::memcpy(blob, &old, sizeof old);
+    Calibration d; CHECK_EQ(migrateCalibration(d, blob, sizeof blob), 1);   // migrated (and re-saved at the first idle moment)
+    CHECK_EQ(d.schema, kCalibrationSchema); CHECK_EQ(d.bottomRest, 0); CHECK_EQ(d.travel, 1137); CHECK_EQ(d.valid, 1);
+    s.motor = 1; CHECK_EQ(toMotionConfig(s, d).bootBottomTicks, 0);         // not measured: as before
+}
+
 TEST(v3_import_takes_todds_numbers_conservatively) {
     // Todd's v3 NVS as read with #PV3 on 2026-09-20
     V3Prefs v; v.present = true; v.lftminpwr = 50; v.lftseekbotpwr = 30; v.rotminpwr = 40; v.lftdist = 1350; v.minheight = 904; v.rotenccount = 1191; v.driftpct = 5; v.motortype = 1; v.wizstate = 7;

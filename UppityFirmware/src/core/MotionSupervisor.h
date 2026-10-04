@@ -32,6 +32,8 @@ struct MotionConfig {
     Throttle jogPowerDown = 0;
     Ticks    travelTicks = 0;       // 0 = profile default
     bool     travelCalibrated = false;
+    Ticks    bootBottomTicks = 0;   // the count at power-up on the bottom switch: minus how far below the
+                                    // switch's closing point the mast rests (calibration); 0 = not measured
     bool     lifterInverted = false; // v3 fLifterInverted: mechanism runs backwards; negate drive AND count
     Ticks    safeSpinTicks = 0;     // 0 = only the top limit counts as clear (see safeSpin())
     RotaryCharacterisation rotary;

@@ -637,3 +637,75 @@ safe-spin height. The board stays unlocked throughout.
    opening and every part of the frame it would pass over if it turned. Stop while it is still
    clearly clear.
 8. Send me the log and the stored number.
+
+## Results 2026-10-04, dome-on commissioning (build 77cbfb02)
+
+Installed from the page again, then all seven steps with the dome on: `COMMISSIONED=2`.
+- **Step 4 (rotary):** 1185.0 ticks/rev, spread 0.3 %; edges 1184, 1184 and 1187 apart, and the
+  switch it started on was ignored. A home from three turns away later found the switch within 4
+  ticks of where three turns of 1185 put it.
+- **Step 5 (calibration): the travel fix works.** Travel 1137, spread 0.1 %, measured between the
+  switch closings (1192 before). After it the count is 0 at the bottom switch's closing point (the
+  mast rested at −33), and the top switch then closed at 1135: the two switches agree within 2
+  ticks. Lowest powers 25 % up and 15 % down, as before.
+- **Step 6, the real safe-spin height: 878** (you stopped at 844, plus the 34-tick margin). Each
+  **Lower 3 %** came to rest 30–34 ticks down and each **Raise 1 %** 9 up, so the early start now
+  errs a few ticks short both ways. That is the safe side, and the log shows the real distance.
+  The turned head went down to about 800 before you raised it to 844.
+- **Step 7** and everything after it (home, lower, up, the 90/180/270 presets, a spin stopped with
+  **Soft stop**, home, lower) ran normally.
+
+Two things this run showed:
+1. **Power-up on the bottom switch counted from the wrong point.** The count started at 0 where the
+   mast rests, about 33 ticks below the switch's closing point, so the height read about 33 high
+   until the mast passed a switch. The lift test right after power-up shows it: the top switch
+   closed at 1172 instead of about 1137. In that window the head could have turned about 33 ticks
+   lower than 878 means, roughly 845 on the true count. That is still above the 829 where you saw
+   it clear, but with about 16 ticks of margin instead of 34. The next build fixes it: the
+   calibration records the deepest the mast settles below the closing point, and power-up on that
+   switch starts the count there. After an ordinary Down the mast rests a little higher (about 22
+   below), so after power-up the count may read up to about 11 low, never high. Low is the safe
+   direction. The calibration you have predates this, so it needs one
+   recalibration to measure it (re-test 4).
+2. **`#PTRAVEL0` is now right for you.** The calibrated 1137 agrees with both switches. With 1150
+   the count jumps about 15 at every pass of the top switch. One consequence: 878 was measured
+   while the top switch had just set the count to 1150, so it read about 15 high. With 1137 in use,
+   878 sits about 15 above what commissioning intended. That is the safe side, so leave it.
+
+Changed in the next build (host tests 161; 1,176,647 bytes, 59 %): the calibration measures how far
+below the bottom switch's closing point the mast settles (stored with the calibration; `#PCAL` shows
+it as `CALREST`, the boot line as `rest=`), and power-up on the bottom switch starts the count at
+minus that. A calibration stored before this keeps the old behaviour until the next one.
+
+## Re-test 4: the power-up height (the head stays home: ordinary moves only)
+
+1. In the Terminal app, bring the work into your checkout (one line):
+   ```
+   git -C "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3" merge --ff-only claude/uppity-spinner-phase-4-1e5680
+   ```
+2. Build it, one line at a time:
+   ```
+   cd "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3"
+   ```
+   ```
+   arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
+   ```
+   It ends with `Sketch uses 1176647 bytes (59%)` (a few bytes either way is fine).
+3. The monitor, in its own Terminal window:
+   ```
+   arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-phase4-retest4-log.txt
+   ```
+4. **Setup → Firmware → Choose File**, `UppityFirmware.ino.bin` in the `uppity-build` folder on
+   your Desktop, **Upload**. The boot line now says `CALIBRATION=loaded travel=1137 … rest=0`
+   (not measured yet).
+5. Type `#PTRAVEL0`. Answer: `#PTRAVEL=0 (saved)`; the calibrated 1137 is in use from now on.
+6. Type `#PSC`: the lifter calibration, about six minutes, as in commissioning step 5 (the head
+   homes first if it needs to; E-STOP stops it). It ends with `CAL stored: travel=113x … rest=NN`.
+   I expect `rest` about 33; tell me the number.
+7. **Operate → Down** and let it reach the bottom. Then type `#PRESTART`: the board restarts and
+   nothing moves. The boot line says `rest=NN`.
+8. **Operate → Up**. Expected: `LIMIT TOP made at` somewhere from about 1120 to 1140 (this morning
+   it said 1172, 35 high). Up to about 11 below 1137 is expected: the board now starts from the
+   deepest resting spot, so it errs low, which is the safe direction.
+
+Send back the log (`~/Desktop/uppity-bench-phase4-retest4-log.txt`).

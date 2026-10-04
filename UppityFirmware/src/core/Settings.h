@@ -125,7 +125,7 @@ inline uint16_t migrateSettings(Settings& out, const uint8_t* blob, size_t n) {
 
 // ---------------------------------------------------------------- calibration blob
 
-constexpr uint16_t kCalibrationSchema = 1;
+constexpr uint16_t kCalibrationSchema = 2;   // 2: bottomRest (carved from the reserve; 0 = not measured)
 
 // The lifter calibration table, stored apart from Settings so re-running #PSC never touches
 // anything else and a profile change can invalidate it alone.
@@ -133,14 +133,15 @@ struct Calibration {
     uint32_t measuredAtMs = 0;                 // uptime at the measurement (no clock on the board)
     uint16_t schema = kCalibrationSchema;
     uint16_t size = 0;
-    uint16_t travel = 0;                       // ticks, rest position after the creep's brake
+    uint16_t travel = 0;                       // ticks between the switch closings (before 2026-10-04: rest to rest)
     uint16_t minUp = 0, minDown = 0;           // permille
     uint16_t velUp[kSlots] = {}, velDown[kSlots] = {};        // ticks per second per 5 % slot
     uint16_t overUp[kSlots] = {}, overDown[kSlots] = {};      // coast ticks after the brake
     uint8_t  slotValidUp[kSlots] = {}, slotValidDown[kSlots] = {};
     uint8_t  valid = 0;
     uint8_t  motor = 0xFF;                     // profile it was measured under; another profile ignores it
-    uint8_t  reserved[30] = {};
+    uint16_t bottomRest = 0;                   // ticks the mast settles below the bottom switch's closing point (0 = not measured)
+    uint8_t  reserved[28] = {};
 };
 static_assert(sizeof(Calibration) == 256, "Calibration layout changed");
 
@@ -162,6 +163,7 @@ inline void takeCalibration(Calibration& c, const CalibrateResult& r, uint8_t mo
     c.minUp = static_cast<uint16_t>(r.minUp); c.minDown = static_cast<uint16_t>(r.minDown);
     for (int i = 0; i < kSlots; ++i) { c.velUp[i] = r.velUp[i]; c.velDown[i] = r.velDown[i]; c.overUp[i] = r.overUp[i]; c.overDown[i] = r.overDown[i]; c.slotValidUp[i] = r.slotValidUp[i]; c.slotValidDown[i] = r.slotValidDown[i]; }
     c.valid = r.travelOk ? 1 : 0; c.motor = motor;
+    c.bottomRest = static_cast<uint16_t>(clampv<Ticks>(r.bottomRest, 0, 1000));
 }
 
 // ---------------------------------------------------------------- Settings -> MotionConfig
@@ -222,6 +224,7 @@ inline MotionConfig toMotionConfig(const Settings& s, const Calibration& c) {
     m.approachPower = s.approachPowerPct ? pctToThrottle(s.approachPowerPct) : 0;
     m.travelTicks = s.travelTicks ? s.travelTicks : (cal ? c.travel : 0);
     m.travelCalibrated = s.travelTicks != 0 || cal;
+    m.bootBottomTicks = cal ? -static_cast<Ticks>(c.bottomRest) : 0;
     m.lifterInverted = s.inverted != 0;
     m.safeSpinTicks = s.safeSpinTicks;
     m.rotary.ticksPerRev = s.ticksPerRev; m.rotary.confident = s.tprConfident != 0;

@@ -185,7 +185,7 @@ event-ready before stage 5, which is why v3.6.0 stays flashable throughout.
 - Hardware testing at the end of each stage, following the written procedure, with the dome
   off for the first motion tests.
 - A yes or no before anything public (pushes, pull requests, Discord posts).
-- A decision on the heartbeat name, `&PERI` unless you prefer `&UPPITY`.
+- A decision on the heartbeat name: **`&PERI`** (Todd, 2026-10-04).
 
 ---
 
@@ -659,6 +659,19 @@ real safe-spin height; the first hardware check of the switch-closing travel), P
 Part F (optional). Phase 5 needs Todd's heartbeat-tag choice (`&PERI` or `&UPPITY`). 158 host
 tests; 1,176,195 bytes.
 
+**Status 2026-10-04 (night): dome-on commissioning done; heartbeat tag `&PERI`.** On build
+`77cbfb02`, all seven steps with the dome on: rotary 1185.0 ticks/rev, travel 1137 between the switch
+closings (the fix confirmed: after the calibration the top switch closed at 1135 in a frame with 0
+at the bottom closing), safe-spin **878** (stopped at 844 + 34). It also showed the last reference
+that used a resting spot: `bootResolve` set 0 where the mast rests on the bottom switch, ~33 below
+the closing point, so after power-up the height read ~33 high until a switch edge (the lift test saw
+the top close at 1172). `LifterCalibrate` now records the deepest rest below the bottom closing
+(`bottomRest`, calibration schema 2, carved from the reserve) and power-up on the bottom switch
+starts the count at minus that (`MotionConfig.bootBottomTicks`): it may read a little low after a
+shallower rest, never high. Todd sends `#PTRAVEL0` (1137 agrees with both switches). 161 host
+tests; 1,176,647 bytes. Next: re-test 4 (recalibrate once to measure the rest, restart at the
+bottom, check the top closing), then Phase 5.
+
 ---
 
 ## 6. Verification strategy
@@ -736,8 +749,8 @@ on the owner's hardware" is the only allowed wording; untested paths are named a
   `:P` commands to the periscope device ID instead of `;W3;S4`.
 - **DCL upstream**: target the current schema (`category`, not `group`); bump `libraryVersion`
   minor; `npm run validate` + `npm test`; PR only with approval.
-- **Naming**: heartbeat tag `&PERI` is a one-constant choice; change before Phase 5 if
-  `&UPPITY` is preferred.
+- **Naming**: heartbeat tag **`&PERI`**, decided by Todd on 2026-10-04 (`&UPPITY` was the
+  alternative).
 - **iOS softAP**: replicate the WPA2-PSK / PMF-off fix from ReelTwo PR #21 in `Net.cpp`.
 
 ---

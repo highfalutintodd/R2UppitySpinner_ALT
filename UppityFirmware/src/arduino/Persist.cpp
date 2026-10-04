@@ -60,7 +60,7 @@ bool Persist::begin(Settings& s, Calibration& c, TextSink& log) {
             p.getBytes("cal", buf, n);
             uint16_t cfrom = migrateCalibration(c, buf, n);
             if (cfrom == 0) log_->line("CALIBRATION=unreadable, ignored");
-            else { log_->printf("CALIBRATION=%s travel=%u minUp=%u minDown=%u (profile %u)", c.valid ? "loaded" : "loaded (invalid)", c.travel, c.minUp, c.minDown, c.motor); calMigrated = cfrom != kCalibrationSchema || n != sizeof(Calibration); }
+            else { log_->printf("CALIBRATION=%s travel=%u minUp=%u minDown=%u rest=%u (profile %u)", c.valid ? "loaded" : "loaded (invalid)", c.travel, c.minUp, c.minDown, c.bottomRest, c.motor); calMigrated = cfrom != kCalibrationSchema || n != sizeof(Calibration); }
         } else { c = Calibration{}; }
         p.end();
     } else {

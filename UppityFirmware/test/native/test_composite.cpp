@@ -111,6 +111,39 @@ TEST(calibration_counts_travel_between_the_switch_closings) {
     CHECK_EQ(tops, 1); CHECK_EQ(bottoms, 1);
 }
 
+TEST(calibration_measures_how_far_below_the_bottom_switch_the_mast_rests) {
+    Rig g(gregConfig(true)); g.hal.lifter.setPosition(0);
+    LifterParams p = g.hal.lifter.params(); p.tauBrakeMs = 40; p.overTravelTicks = 40; g.hal.lifter.setParams(p);
+    MotionConfig c = gregConfig(true); c.travelTicks = 0; c.travelCalibrated = false; g.sup.setConfig(c);
+    g.boot();
+    g.req(JobKind::LifterCalibrate); g.runUntilIdle(900000); g.runMs(500);
+    CHECK(g.snap().lastResult == JobResult::Done);
+    const CalibrateResult& r = g.sup.lastCalibration();
+    Ticks restBelow = -static_cast<Ticks>(std::floor(g.hal.lifter.position()));   // where it rests now, below the switch at 0
+    CHECK(r.bottomRest >= 5);                                                    // this lifter runs on ~10 past the switch
+    CHECK(r.bottomRest >= restBelow - 1 && r.bottomRest <= restBelow + 6);       // the deepest of its arrivals
+    CHECK_EQ(g.sup.config().bootBottomTicks, -r.bottomRest);
+}
+
+TEST(power_up_on_the_bottom_switch_counts_from_its_closing_point) {
+    // Dome-on commissioning 2026-10-04: powered up resting ~33 below the bottom switch's closing
+    // point, the count started at 0 there and the top switch then closed at 1172 for 1137 of travel.
+    for (int measured : {0, 1}) {
+        MotionConfig c = gregConfig(true);
+        if (measured) c.bootBottomTicks = -12;
+        Rig g(c);
+        LifterParams p = g.hal.lifter.params(); p.overTravelTicks = 40; g.hal.lifter.setParams(p);
+        g.hal.lifter.setPosition(-12);                                            // resting 12 below the closing point
+        g.boot();
+        CHECK(g.sup.lifter().confidence == LifterConfidence::Known);
+        CHECK_EQ(g.snap().lifterTicks, measured ? -12 : 0);
+        g.seek(450, 0, true); g.runUntilIdle(20000);
+        const Event* e = g.last(Ev::LimitTop); CHECK(e != nullptr);
+        if (e && measured) CHECK(absl(e->b - 450) <= 3);                          // no jump at the top switch
+        if (e && !measured) CHECK(e->b - 450 >= 9);                               // the old way: ~12 high until a switch
+    }
+}
+
 TEST(calibration_rejects_non_repeatable_travel) {
     Rig g(gregConfig(true)); g.hal.lifter.setPosition(0);
     LifterParams p; p.breakawayDuty = 0.45; p.travelTicks = 450; p.kv = 0.5; p.phantomPerMsDriving = 0.35; g.hal.lifter.setParams(p);

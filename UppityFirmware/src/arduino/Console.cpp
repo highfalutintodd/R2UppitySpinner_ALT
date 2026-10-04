@@ -162,7 +162,7 @@ void Console::update(Ms now) {
     if (d_.sup->takeCalibrationUpdated()) {
         takeCalibration(cal_, d_.sup->lastCalibration(), s_.motor, now);
         d_.persist->requestSaveCalibration();
-        printf("CAL stored: travel=%u minUp=%u%% minDown=%u%% (profile %u)", cal_.travel, cal_.minUp / 10, cal_.minDown / 10, cal_.motor);
+        printf("CAL stored: travel=%u minUp=%u%% minDown=%u%% rest=%u (profile %u)", cal_.travel, cal_.minUp / 10, cal_.minDown / 10, cal_.bottomRest, cal_.motor);
         if (s_.travelTicks) printf("CAL note: #PTRAVEL=%u still overrides the calibrated %u; send #PTRAVEL0 to use the calibrated figure", s_.travelTicks, cal_.travel);
         if (s_.minPowerUpPct || s_.minPowerDownPct) line("CAL note: #PMINUP/#PMINDOWN still override the calibrated minimum powers; set them to 0 to use the calibration");
         applySettings(false);
@@ -447,6 +447,8 @@ void Console::printCal() {
     String up = "CALUP  ", down = "CALDOWN";
     for (int i = 0; i < kSlots; ++i) { if (cal_.slotValidUp[i]) { up += ' '; up += i * 5; up += "%:"; up += cal_.velUp[i]; up += '/'; up += cal_.overUp[i]; } if (cal_.slotValidDown[i]) { down += ' '; down += i * 5; down += "%:"; down += cal_.velDown[i]; down += '/'; down += cal_.overDown[i]; } }
     line(up.c_str()); line(down.c_str());
+    if (cal_.bottomRest) printf("CALREST bottom=%u ticks below the bottom switch's closing point (power-up on that switch starts the count at -%u)", cal_.bottomRest, cal_.bottomRest);
+    else line("CALREST not measured (calibrated before 2026-10-04): power-up on the bottom switch starts the count at 0; #PSC measures it");
     // what the jogs and nudges make of it (LifterCreep): start braking this much travel-time early
     printf("CALBRAKE down=%dms up=%dms (jogs and nudges start braking this far ahead%s)", brakeLeadMs(cal_.overDown, cal_.velDown), brakeLeadMs(cal_.overUp, cal_.velUp),
            calibrationApplies(s_, cal_) ? "" : "; not in use: the calibration is for another profile");

@@ -297,6 +297,8 @@ struct CalibrateResult {
     int slotsMeasured = 0;
     Ticks bottomMake = 0;           // raw count where the bottom switch last closed on the way down
     bool  bottomMakeValid = false;  // (the supervisor re-references there: that point is 0)
+    Ticks bottomRest = 0;           // deepest the mast settled below that closing point (>= 0): at
+                                    // power-up on the bottom switch the count starts at minus this
 };
 
 class LifterCalibrate {
@@ -319,6 +321,7 @@ class LifterCalibrate {
         Ticks pos = in.lifterTicks; Ms now = in.nowMs; StepOutcome o; out = brakeCmd();
         if (phase_ == Phase::Finished) return pending_;
         if (universalExit(in, in.lifterDiag, o)) { finish(o); return pending_; }
+        noteBottomRest(in);
         if (static_cast<int32_t>(now - cooldownUntil_) < 0) return StepOutcome::running();   // rest between attempts
         if (pendingCreep_ != 0) { beginCreep(pendingCreep_, pos, now); pendingCreep_ = 0; }   // creeps start after the rest, not before
         switch (phase_) {
@@ -362,11 +365,20 @@ class LifterCalibrate {
         // The creep reports where the switch closed (detail); a creep that started on its switch
         // closed nothing, and its "make" is just where the mast was resting.
         lastMake_ = o.detail; lastMakeReal_ = absl(o.detail - creep_.startTicks()) >= 5;
-        if (creep_.dir() < 0 && lastMakeReal_) { res_.bottomMake = o.detail; res_.bottomMakeValid = true; }
+        if (creep_.dir() < 0 && lastMakeReal_) { res_.bottomMake = o.detail; res_.bottomMakeValid = true; noteBottomRest(in); }
         fail.result = StepResult::Running;
         return true;
     }
     void enter(Phase ph, Ms now) { phase_ = ph; sub_ = 0; attempt_ = 0; idx_ = 0; phaseChanged_ = true; (void)now; }
+    // How far below the bottom switch's closing point the mast settles: the deepest point seen with
+    // the switch made, measured from the last closing the mast drove into. Power-up on that switch
+    // starts the count there (2026-10-04: it started at 0 at the resting spot, ~33 ticks below the
+    // closing point, so the height read ~33 high until the mast passed a switch).
+    void noteBottomRest(const TickInputs& in) {
+        if (!res_.bottomMakeValid || !in.bottomLimit) return;
+        Ticks d = res_.bottomMake - in.lifterTicks;
+        if (d > res_.bottomRest) res_.bottomRest = d;
+    }
     void finish(StepOutcome o) { pending_ = o; phase_ = Phase::Finished; phaseChanged_ = true; }
     void rest(Ms now) { cooldownUntil_ = now + p_.cooldownMs; }
 

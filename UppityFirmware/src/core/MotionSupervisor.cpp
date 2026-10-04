@@ -20,7 +20,7 @@ void MotionSupervisor::applyPendingConfig() {
         // The count sense just flipped: whatever was read before is meaningless. Re-reference
         // from a made switch, or admit the position is unknown.
         RawInputs raw; hal_.readInputs(raw);
-        if (raw.bottomLimit && !raw.topLimit)      { hal_.setEncoder(Axis::Lifter, 0); lifter_.ticks = 0; lifter_.confidence = LifterConfidence::Known; }
+        if (raw.bottomLimit && !raw.topLimit)      { hal_.setEncoder(Axis::Lifter, cfg_.bootBottomTicks); lifter_.ticks = cfg_.bootBottomTicks; lifter_.confidence = LifterConfidence::Known; }
         else if (raw.topLimit && !raw.bottomLimit) { hal_.setEncoder(Axis::Lifter, travel()); lifter_.ticks = travel(); lifter_.confidence = LifterConfidence::Known; }
         else if (invertChanged)                    { lifter_.confidence = LifterConfidence::Unknown; }
     }
@@ -51,6 +51,7 @@ void MotionSupervisor::begin(Ms now) {
     applyPendingConfig();
     RawInputs raw; hal_.readInputs(raw);
     BootResolution r = bootResolve(raw.topLimit, raw.bottomLimit, raw.homeSwitch, travel());
+    if (r.lifter == LifterConfidence::Known && raw.bottomLimit && !raw.topLimit) r.lifterTicks = cfg_.bootBottomTicks;   // 0 is the switch's closing point, not the resting spot
     lifter_.confidence = r.lifter;
     lifter_.travelTicks = travel();
     if (r.lifter == LifterConfidence::Known) { hal_.setEncoder(Axis::Lifter, r.lifterTicks); lifter_.ticks = r.lifterTicks; lifter_.referencedAt = now; }
@@ -468,8 +469,9 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
             lastCal_ = calib_.result();
             cfg_.travelTicks = lastCal_.travel; cfg_.travelCalibrated = true;
             cfg_.minPowerUp = lastCal_.minUp; cfg_.minPowerDown = lastCal_.minDown;
+            cfg_.bootBottomTicks = -lastCal_.bottomRest;
             for (int i = 0; i < kSlots; ++i) { cfg_.overshootUp[i] = lastCal_.overUp[i]; cfg_.overshootDown[i] = lastCal_.overDown[i]; cfg_.velUp[i] = lastCal_.velUp[i]; cfg_.velDown[i] = lastCal_.velDown[i]; }
-            if (cfgPending_) { pendingCfg_.travelTicks = cfg_.travelTicks; pendingCfg_.travelCalibrated = true; pendingCfg_.minPowerUp = cfg_.minPowerUp; pendingCfg_.minPowerDown = cfg_.minPowerDown; }
+            if (cfgPending_) { pendingCfg_.travelTicks = cfg_.travelTicks; pendingCfg_.travelCalibrated = true; pendingCfg_.minPowerUp = cfg_.minPowerUp; pendingCfg_.minPowerDown = cfg_.minPowerDown; pendingCfg_.bootBottomTicks = cfg_.bootBottomTicks; }
             lifter_.travelTicks = cfg_.travelTicks; lifter_.travelCalibrated = true;
             calUpdated_ = true;
             emit(Ev::Measure, 3, lastCal_.travel, static_cast<int32_t>(lastCal_.travelSpreadPct * 10), in.nowMs);
