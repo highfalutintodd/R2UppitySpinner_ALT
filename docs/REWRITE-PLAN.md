@@ -672,6 +672,11 @@ shallower rest, never high. Todd sends `#PTRAVEL0` (1137 agrees with both switch
 tests; 1,176,647 bytes. Next: re-test 4 (recalibrate once to measure the rest, restart at the
 bottom, check the top closing), then Phase 5.
 
+**Status 2026-10-04 (late): Phase 4 complete.** Re-test 4 (build `9743ad66`): the calibration stored
+`rest=37`, power-up on the bottom switch started the count at −37, and the top switch then closed at
+1131 for 1137 of travel (it was 1172 that morning); `#PTRAVEL0` is in use. Phase 5 starts from
+`docs/PHASE5-BRIEF.md`.
+
 ---
 
 ## 6. Verification strategy

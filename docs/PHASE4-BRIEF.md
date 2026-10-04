@@ -1,6 +1,8 @@
 # Phase 4 brief — full web UI
 
-**Status 2026-09-27 (night): implemented** on branch `claude/uppity-spinner-phase-4-1e5680`
+**Status 2026-10-04: complete**, bench-passed on Todd's droid (`docs/BENCH-PHASE4.md`, results
+sections); the next phase starts from `docs/PHASE5-BRIEF.md`. **2026-09-27 (night): implemented**
+on branch `claude/uppity-spinner-phase-4-1e5680`
 (what was built and where it deviates: `docs/REWRITE-PLAN.md` §5, "Status 2026-09-27 (night)");
 the bench procedure is `docs/BENCH-PHASE4.md`. This brief is kept as the record of what Phase 4
 started from.

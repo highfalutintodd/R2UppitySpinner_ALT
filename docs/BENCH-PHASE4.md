@@ -709,3 +709,16 @@ minus that. A calibration stored before this keeps the old behaviour until the n
    deepest resting spot, so it errs low, which is the safe direction.
 
 Send back the log (`~/Desktop/uppity-bench-phase4-retest4-log.txt`).
+
+## Results 2026-10-04, re-test 4 (build 9743ad66) — Phase 4 complete
+
+- Installed from the page. The stored calibration loaded with `rest=0` (not measured yet) and was
+  re-saved in the new format on the first boot (`PERSIST=saved calibration`).
+- `#PTRAVEL0`: the calibrated 1137 is in use (`travel=1137 (calibrated)` after the restart).
+- `#PSC`: travel 1137 again (spread 0.1 %), lowest powers 25 % up and 15 % down, `rest=37` (the
+  deepest the mast settled below the bottom switch's closing point during the calibration's runs).
+- `#PRESTART` at the bottom, then **Operate → Up**: the count started at −37 and the top switch
+  closed at 1131, 6 below 1137. This morning it was 1172, 35 high. That reading is on the low
+  side, as designed.
+
+Every part of Phase 4 has now run on the droid except the optional Part E step 32 and Part F.
