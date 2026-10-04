@@ -496,7 +496,7 @@ class RotaryCharacterise {
     void start(const Params& p, Ticks current, Ms now) {
         p_ = p; if (p_.revs < 1) p_.revs = 1; if (p_.revs > kMaxRevs) p_.revs = kMaxRevs;
         res_ = CharacteriseResult{}; n_ = 0; startMs_ = now; startTicks_ = current; slew_.reset(now);
-        closed_ = false; lastRaw_ = false; finished_ = false; braking_ = false; firstSeen_ = false;
+        closed_ = false; lastRaw_ = false; finished_ = false; braking_ = false; firstSeen_ = false; primed_ = false; startOnSwitch_ = false;
         deadline_ = static_cast<Ms>(p_.revs) * 20000u + 10000u;
         firstLimit_ = p.tpr > 0 ? p.tpr * 5 / 4 : 2000;
     }
@@ -505,6 +505,11 @@ class RotaryCharacterise {
         if (finished_) return pending_;
         if (universalExit(in, in.rotaryDiag, o)) { pending_ = o; finished_ = true; return pending_; }
         if (braking_) { if (static_cast<int32_t>(now - brakeUntil_) >= 0) { finished_ = true; return pending_; } return StepOutcome::running(); }
+        // Parked at home the switch is already closed: where the head sits is not an edge, and
+        // counting it made the first "revolution" short by the distance from the leading edge to
+        // the park spot (commissioning 2026-10-04: 1179 + 1185 + 1185 stored 1183.0 for a 1185.5
+        // rotary). Only closings the head drives into count.
+        if (!primed_) { primed_ = true; closed_ = in.homeSwitch; startOnSwitch_ = in.homeSwitch; lastRaw_ = in.homeSwitchRaw; }
         if (in.homeSwitchRaw && !lastRaw_ && closed_) ++res_.closures;
         lastRaw_ = in.homeSwitchRaw;
         if (in.homeSwitch && !closed_) {
@@ -513,7 +518,8 @@ class RotaryCharacterise {
             lastEnter_ = enter_;
         }
         if (in.homeSwitch) exit_ = pos;
-        if (!in.homeSwitch && closed_) {
+        if (!in.homeSwitch && closed_ && startOnSwitch_) { closed_ = false; startOnSwitch_ = false; }   // off the switch it started on
+        else if (!in.homeSwitch && closed_) {
             closed_ = false;
             int arc = static_cast<int>(absl(exit_ - enter_)); if (n_ <= kMaxRevs) { arcs_[na_ < kMaxRevs ? na_ : kMaxRevs - 1] = arc; if (na_ < kMaxRevs) ++na_; }
             res_.lastZero = (enter_ + exit_) / 2;
@@ -555,6 +561,7 @@ class RotaryCharacterise {
     Ms startMs_ = 0, deadline_ = 0, brakeUntil_ = 0;
     Ticks startTicks_ = 0, enter_ = 0, exit_ = 0, lastEnter_ = 0, firstLimit_ = 0;
     bool closed_ = false, lastRaw_ = false, finished_ = false, braking_ = false, firstSeen_ = false;
+    bool primed_ = false, startOnSwitch_ = false;
     StepOutcome pending_;
 };
 

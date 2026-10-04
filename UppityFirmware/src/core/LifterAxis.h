@@ -295,6 +295,8 @@ struct CalibrateResult {
     uint16_t velUp[kSlots] = {}, velDown[kSlots] = {};        // ticks per second at that slot
     uint16_t overUp[kSlots] = {}, overDown[kSlots] = {};      // coast ticks after the brake command
     int slotsMeasured = 0;
+    Ticks bottomMake = 0;           // raw count where the bottom switch last closed on the way down
+    bool  bottomMakeValid = false;  // (the supervisor re-references there: that point is 0)
 };
 
 class LifterCalibrate {
@@ -357,6 +359,10 @@ class LifterCalibrate {
         if (o.result == StepResult::Running) return false;
         creeping_ = false;
         if (o.jobResult != JobResult::DoneLimit) { fail = StepOutcome::failed(JobResult::Failed, o.reason == Reason::None ? Reason::Stall : o.reason, in.lifterTicks); return true; }
+        // The creep reports where the switch closed (detail); a creep that started on its switch
+        // closed nothing, and its "make" is just where the mast was resting.
+        lastMake_ = o.detail; lastMakeReal_ = absl(o.detail - creep_.startTicks()) >= 5;
+        if (creep_.dir() < 0 && lastMakeReal_) { res_.bottomMake = o.detail; res_.bottomMakeValid = true; }
         fail.result = StepResult::Running;
         return true;
     }
@@ -364,7 +370,11 @@ class LifterCalibrate {
     void finish(StepOutcome o) { pending_ = o; phase_ = Phase::Finished; phaseChanged_ = true; }
     void rest(Ms now) { cooldownUntil_ = now + p_.cooldownMs; }
 
-    // P1: bottom -> top -> bottom -> top -> bottom, counting between limit edges.
+    // P1: bottom -> top -> bottom -> top -> bottom. Travel is counted between the points where the
+    // switches CLOSE, because that is how the frame is referenced (bottom closing = 0, top closing
+    // = travel): measured between the resting spots it included how far the mast runs on past each
+    // switch while braking (2026-10-04 on Todd's 19:1: 1192 against about 1138 switch to switch),
+    // and the count jumped by the difference at every switch. The rests stay the references for P2/P3.
     StepOutcome p1(const TickInputs& in, BridgeCommand& out) {
         if (!creeping_) return StepOutcome::running();     // a queued creep starts on the next tick
         StepOutcome fail;
@@ -372,19 +382,22 @@ class LifterCalibrate {
         if (fail.result != StepResult::Running) { finish(fail); return pending_; }
         Ticks pos = in.lifterTicks;
         switch (sub_) {
-            case 0: base_ = pos; ++sub_; queueCreep(+1); break;                                       // at bottom: reference
-            case 1: res_.travelUp[0] = pos - base_; edgeTicks_ = pos; ++sub_; rest(in.nowMs); queueCreep(-1); break;
-            case 2: res_.travelDown[0] = edgeTicks_ - pos; base_ = pos; ++sub_; rest(in.nowMs); queueCreep(+1); break;
-            case 3: res_.travelUp[1] = pos - base_; edgeTicks_ = pos; ++sub_; rest(in.nowMs); queueCreep(-1); break;
+            case 0: base_ = pos; makeLo_ = lastMake_; firstLoReal_ = lastMakeReal_; ++sub_; queueCreep(+1); break;   // at bottom: reference
+            case 1: res_.travelUp[0] = lastMake_ - makeLo_; makeHi_ = lastMake_; edgeTicks_ = pos; ++sub_; rest(in.nowMs); queueCreep(-1); break;
+            case 2: res_.travelDown[0] = makeHi_ - lastMake_; makeLo_ = lastMake_; base_ = pos; ++sub_; rest(in.nowMs); queueCreep(+1); break;
+            case 3: res_.travelUp[1] = lastMake_ - makeLo_; makeHi_ = lastMake_; edgeTicks_ = pos; ++sub_; rest(in.nowMs); queueCreep(-1); break;
             case 4: {
-                res_.travelDown[1] = edgeTicks_ - pos; base_ = pos;
-                Ticks a1 = res_.travelUp[0], a2 = res_.travelUp[1], d1 = res_.travelDown[0], d2 = res_.travelDown[1];
-                Ticks meanA = (a1 + a2) / 2, meanD = (d1 + d2) / 2;
-                float spreadA = meanA > 0 ? absl(a1 - a2) * 100.f / meanA : 100.f;
-                float spreadD = meanD > 0 ? absl(d1 - d2) * 100.f / meanD : 100.f;
-                res_.travelSpreadPct = spreadA > spreadD ? spreadA : spreadD;
-                if (meanA < 20 || res_.travelSpreadPct > 5.f) { finish(StepOutcome::failed(JobResult::Failed, Reason::NotRepeatable, static_cast<int32_t>(res_.travelSpreadPct * 10))); return pending_; }
-                res_.travel = meanA; res_.travelOk = true;
+                res_.travelDown[1] = makeHi_ - lastMake_; base_ = pos;
+                // the first up-run counts only if the first creep really closed the bottom switch
+                // (one that started on it measured from the resting spot)
+                Ticks v[4] = { res_.travelUp[1], res_.travelDown[0], res_.travelDown[1], res_.travelUp[0] };
+                int n = firstLoReal_ ? 4 : 3;
+                Ticks lo = v[0], hi = v[0], sum = 0;
+                for (int i = 0; i < n; ++i) { sum += v[i]; if (v[i] < lo) lo = v[i]; if (v[i] > hi) hi = v[i]; }
+                Ticks mean = sum / n;
+                res_.travelSpreadPct = mean > 0 ? (hi - lo) * 100.f / mean : 100.f;
+                if (mean < 20 || res_.travelSpreadPct > 5.f) { finish(StepOutcome::failed(JobResult::Failed, Reason::NotRepeatable, static_cast<int32_t>(res_.travelSpreadPct * 10))); return pending_; }
+                res_.travel = mean; res_.travelOk = true;
                 rest(in.nowMs); enter(Phase::P2MinUp, in.nowMs); tryPower_ = p_.startPower; lastGood_ = 0; probing_ = false;
                 break;
             }
@@ -509,6 +522,8 @@ class LifterCalibrate {
     Phase phase_ = Phase::Idle;
     int sub_ = 0, attempt_ = 0, idx_ = 0, slotIdx_ = 0;
     Ticks base_ = 0, edgeTicks_ = 0, probeTicks_ = 0, cruiseStart_ = 0, measureTicks_ = 0, brakeTicks_ = 0, lastTicks_ = 0;
+    Ticks lastMake_ = 0, makeLo_ = 0, makeHi_ = 0;     // P1: where the switches closed (raw counts)
+    bool lastMakeReal_ = false, firstLoReal_ = false;
     Ms cooldownUntil_ = 0, probeStart_ = 0, cruiseStartMs_ = 0, measureStart_ = 0, brakeStart_ = 0, lastMoveMs_ = 0;
     Throttle creepUp_ = 700, tryPower_ = 0, lastGood_ = 0, slotPower_ = 0;
     bool creeping_ = false, probing_ = false, measuring_ = false, braking_ = false, bursting_ = false, phaseChanged_ = false;

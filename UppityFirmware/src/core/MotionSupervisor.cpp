@@ -468,8 +468,13 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
             emit(Ev::Measure, 3, lastCal_.travel, static_cast<int32_t>(lastCal_.travelSpreadPct * 10), in.nowMs);
             emit(Ev::Measure, 4, lastCal_.minUp, lastCal_.minDown, in.nowMs);
         }
-        // the machine ends at the bottom limit: re-reference there
-        if (in.bottomLimit) { hal_.setEncoder(Axis::Lifter, 0); lifter_.ticks = 0; lifter_.confidence = LifterConfidence::Known; }
+        // The machine ends at the bottom limit: re-reference there, with 0 where the switch closed
+        // (as every other bottom reference does), not at the resting spot past it.
+        if (in.bottomLimit) {
+            const CalibrateResult& cr = calib_.result();
+            Ticks at = cr.bottomMakeValid ? in.lifterTicks - cr.bottomMake : 0;
+            hal_.setEncoder(Axis::Lifter, at); lifter_.ticks = at; lifter_.confidence = LifterConfidence::Known;
+        }
     }
     if (isRotaryJob(k)) {
         if (o.jobResult == JobResult::Stalled) { faults_.set(F_RotaryStall); if (rotary_.confidence == HomeConfidence::Latched) { rotary_.confidence = HomeConfidence::Stale; emit(Ev::ConfidenceRotary, static_cast<int32_t>(HomeConfidence::Latched), static_cast<int32_t>(HomeConfidence::Stale), 0, in.nowMs); } }

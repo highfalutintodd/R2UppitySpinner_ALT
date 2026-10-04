@@ -87,6 +87,30 @@ TEST(calibration_measures_travel_min_power_and_slots) {
     CHECK(g.sup.lifter().confidence == LifterConfidence::Known);
 }
 
+TEST(calibration_counts_travel_between_the_switch_closings) {
+    // 2026-10-04 on Todd's 19:1 the calibration stored 1192, rest to rest (the mast runs on 25-30
+    // ticks past each switch while braking), against about 1138 switch to switch: the count would
+    // jump by the difference at every switch it re-references at. A lifter that runs on like that:
+    Rig g(gregConfig(true)); g.hal.lifter.setPosition(0);
+    LifterParams p = g.hal.lifter.params(); p.tauBrakeMs = 40; p.overTravelTicks = 40; g.hal.lifter.setParams(p);
+    MotionConfig c = gregConfig(true); c.travelTicks = 0; c.travelCalibrated = false; g.sup.setConfig(c);
+    g.boot();
+    g.req(JobKind::LifterCalibrate); g.runUntilIdle(900000);
+    CHECK(g.snap().lastResult == JobResult::Done);
+    const CalibrateResult& r = g.sup.lastCalibration();
+    CHECK(absl(r.travel - 450) <= 4);                                         // rest to rest it was about 470
+    CHECK(g.snap().lifterTicks < -3);                                          // resting past the switch: its closing point is 0
+    size_t from = g.log.size();
+    g.seek(450, 0, true); g.runUntilIdle(20000); g.seek(0, 0, true); g.runUntilIdle(20000);
+    int tops = 0, bottoms = 0;
+    for (size_t i = from; i < g.log.size(); ++i) {                             // no jump at either switch
+        const Event& e = g.log[i];
+        if (e.code == Ev::LimitTop && e.a == 1) { ++tops; CHECK(absl(e.b - r.travel) <= 4); }
+        if (e.code == Ev::LimitBottom && e.a == 1) { ++bottoms; CHECK(absl(e.b) <= 4); }
+    }
+    CHECK_EQ(tops, 1); CHECK_EQ(bottoms, 1);
+}
+
 TEST(calibration_rejects_non_repeatable_travel) {
     Rig g(gregConfig(true)); g.hal.lifter.setPosition(0);
     LifterParams p; p.breakawayDuty = 0.45; p.travelTicks = 450; p.kv = 0.5; p.phantomPerMsDriving = 0.35; g.hal.lifter.setParams(p);

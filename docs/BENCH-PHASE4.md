@@ -236,7 +236,8 @@ boot). After the reset the board is LOCKED and only on its own network, `R2Uppit
 36. Afterwards, put back the things commissioning does not measure. On **Setup → WiFi**: your home
     network name and password, then **Restart to apply**. On **Setup → Tuning**: light kit in
     random mode = Sparkle (your `#PRANDOMLIGHT=7`). Travel: commissioning leaves the calibrated
-    figure in use (about 1181); your old `#PTRAVEL1150` is in the backup if you prefer it.
+    figure in use (about 1140, between the switches); your old `#PTRAVEL1150` is in the backup if
+    you prefer it.
     Anything else from the backup can go back through **Diagnostics → Configuration → Restore**,
     but do not paste the whole backup: its `#PSAFESPIN` and `#PROTARYTPR` lines would replace
     what you just measured.
@@ -472,6 +473,49 @@ Changed in the next build (host tests 155; 1,175,979 bytes, 59 %):
    height could not brake early enough and would end a tick or two below it.
 4. `#PCAL` ends with a new line, `CALBRAKE down=NNms up=NNms`: the braking times jogs and nudges use.
 
+## Results 2026-10-04, Part D (build db08a868, the dome off)
+
+Commissioning ran through all seven steps and marked the board `COMMISSIONED=2`. What the log shows:
+
+- **Step 2 (wiring):** both switches read correctly, and holding the top switch with the mast down
+  showed the expected both-made fault until you let go. While nothing was driven the count also
+  moved about 70 ticks and the bottom switch opened and closed once (412–417 s); I assume that was
+  the mast being handled. If it was not, tell me.
+- **Step 4 (rotary): wrong value stored, now fixed.** It stored 1183.0 ticks/rev for a rotary that
+  measures 1185.5. The head started parked on the home switch, and the test counted that resting
+  spot as a switch edge, so the first "turn" ran from the park spot to the next edge: 1179, then
+  1185 and 1185, average 1183.0. The September test started off the switch, which is why it never
+  showed. The next build ignores the switch it starts on. The effect of 1183.0 is small (0.2 %,
+  under a degree per turn, and every home corrects it), and re-test 3 measures it again.
+- **Step 5 (calibration): travel measured between the wrong points, now fixed.** It stored travel
+  1192, measured from where the mast rests at the bottom to where it rests at the top. The count is
+  referenced where the switches close (0 at the bottom switch, the travel at the top switch), and
+  between those points your lifter measures about 1138: it runs on 25–30 ticks past each switch
+  while braking. With the calibrated figure in use, the count would jump by about 54 at every
+  switch. Your `#PTRAVEL1150` overrides it, so nothing changed for you; don't send `#PTRAVEL0`
+  until you have calibrated again on the next build, which measures between the switch closings
+  and ends with 0 at the bottom switch rather than at the resting spot under it. The lowest powers
+  (25 % up, 15 % down) came out as before.
+- **Step 6 (safe-spin):** measured with the dome off, so the stored 897 (863 plus the 34-tick
+  margin) is a placeholder until the dome-on run. The eight **Lower 3 %** presses moved about 50
+  ticks each, not 35, and the five **Raise 1 %** about 23 each, not 12: the run-on the early-braking
+  build removes. Working back from where you stopped (863), the turned head got down to roughly 750
+  before you raised it, about 100 ticks above where it touched the frame on 2026-10-03. Nothing in
+  the log suggests it touched anything (no stall, no fault).
+- **Step 7 (acceptance)** and everything after it (presets, the rotary presets, a spin stopped with
+  **Soft stop**, home, lower, the theme switch) ran normally. A `COMMISSION=… passed` line can
+  appear just before the last lines of the move it reports on; the board prints its own messages
+  as they happen and the motion lines a moment later, so that order is cosmetic.
+
+Changed in the next build (host tests 157; 1,176,139 bytes, 59 %), on top of the early braking:
+1. The rotary test ignores the switch it starts on and counts only edges it drives into. A test
+   starting parked on the switch now measures within 1 tick of the true value; on the previous
+   build it came out 2 low, as on your board.
+2. The calibration measures travel between the switch closings and ends with 0 at the bottom
+   switch. On a simulated lifter that runs on past its switches the way yours does, the next pass
+   over each switch now lands within 2 ticks of where the count expects it. Before, it was off by
+   the run-on.
+
 ## Re-test 3: early braking, installed from the page (nothing here can reach the frame)
 
 This also does Part E step 31: the new build goes in through the page's own firmware upload. The
@@ -491,7 +535,7 @@ have watched the head turn freely.
    ```
    arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
    ```
-   It ends with `Sketch uses 1175979 bytes (59%)` (a few bytes either way is fine).
+   It ends with `Sketch uses 1176139 bytes (59%)` (a few bytes either way is fine).
 3. The monitor, in its own Terminal window (a new log file):
    ```
    arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-phase4-retest3-log.txt
@@ -506,23 +550,44 @@ have watched the head turn freely.
    ```
    arduino-cli upload --profile uppity -p /dev/cu.wchusbserial110 UppityFirmware
    ```
-5. Type `#PCAL` on the monitor. Expected: `CAL=in use …`, the `CALUP`/`CALDOWN` table, and the new
-   `CALBRAKE down=NNms up=NNms (jogs and nudges start braking this far ahead)`. From the E-STOP
-   numbers I expect about 40 down and 27 up; tell me what it says.
-6. **Operate → Up**, then on the monitor, one at a time, waiting for each to finish:
+5. Type `#PSAFESPIN904`. Answer: `#PSAFESPIN=904 (saved)`. That is your long-standing value; the
+   897 from Part D was measured with the dome off, so it stands in only until the dome-on run.
+6. Type `#PCAL` on the monitor. Expected: `CAL=in use … travel=1192 …` (today's calibration; the
+   1192 is the rest-to-rest figure, unused while `#PTRAVEL1150` is set), the `CALUP`/`CALDOWN`
+   table, and the new `CALBRAKE down=NNms up=NNms (jogs and nudges start braking this far ahead)`.
+   From the E-STOP numbers I expect about 40 down and 27 up; tell me what it says.
+7. Type `#PROTARYTEST`. The mast goes to the top if it is not there, and the head turns about four
+   times and stops just past home (the board knows where home is). Expected: `ROTARY stored:
+   1185.x ticks/rev confident=1 …` (Part D stored 1183.0). If it says anything else, send it to me
+   before going on.
+8. **Operate → Up**, then on the monitor, one at a time, waiting for each to finish:
    `#PNUDGE-20`, `#PNUDGE-50`, `#PNUDGE+20`, `#PNUDGE-12`. After each, about a second later:
    `NUDGE came to rest -NN ticks from where it started (asked -20)` and so on. Expected: each within
    about 4 ticks of what was asked (before this build: about 12 more).
-7. `#PSAFESPIN1100`, **Operate → Up**, then **90°** (the head turns at the top). Then `#PNUDGE-100`.
+9. `#PSAFESPIN1100`, **Operate → Up**, then **90°** (the head turns at the top). Then `#PNUDGE-100`.
    Expected: `CREEP CLAMPED ROTARY_NOT_HOME`, then `CLAMP came to rest at 11NN, +N from the
    safe-spin height 1100`, with N zero or a small positive number (I expect under 10; before this
    build it was −12), and the page's banner "The head may be
    turned at or below the safe-spin height". Then `#PNUDGE-20`: nothing moves, `CREEP REFUSED
    ROTARY_NOT_HOME`.
-8. Tap **Home the head**: the mast rises, the head homes, the banner goes. Then `#PSAFESPIN904`.
+10. Tap **Home the head**: the mast rises, the head homes, the banner goes. Then `#PSAFESPIN904`.
 
-Send back the log (`~/Desktop/uppity-bench-phase4-retest3-log.txt`) and the `CALBRAKE` line. If
-the nudges and the clamp look like that, carry on with **Part D** (commissioning) as written above;
-your board already runs unlocked, so there is no hurry. In step 29 stop at 920 ticks unless you can
-see that the whole sweep of the head clears lower. Part E step 32 (an upload refused while a motor
-runs) and Part F (factory reset) are optional.
+Send back the log (`~/Desktop/uppity-bench-phase4-retest3-log.txt`). Part E step 32 (an upload
+refused while a motor runs) and Part F (factory reset) are optional.
+
+## Later, with the dome on: commissioning again for the real safe-spin height
+
+On the build from re-test 3 (or later). Everything is measured again, including the rotary and the
+calibration with this build's fixes; the board stays unlocked throughout.
+
+1. **Setup → Commissioning → Start over**, tap again to confirm, then **Start**. Steps 1–7 as in
+   Part D (steps 24–30 above).
+2. Step 4 should store about 1185.5 ticks/rev. Step 5 should report travel about 1140 (between the
+   switches) instead of 1192; tell me the number. Once we have seen it, `#PTRAVEL0` can replace
+   your `#PTRAVEL1150`, so the height reads the same whichever switch it last passed.
+3. Step 6 with the dome on: **Lower 3 %** and **Lower 1 %** now move what they say (the log shows
+   `NUDGE came to rest … (asked -35)`). Down to 920 you have seen clear; below it use **Lower 1 %**
+   only, and watch the head against the dome opening and every part of the frame it would pass over
+   if it turned. Stop while it is still clearly clear. If you are not sure about the whole sweep,
+   stop at 920.
+4. Tell me the stored number and where you stopped.

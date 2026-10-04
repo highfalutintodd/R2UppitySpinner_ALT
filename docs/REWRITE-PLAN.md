@@ -637,6 +637,18 @@ tick. A creep the floor stopped sets `clampHeld` (refuse descents until a home, 
 height cannot brake early enough. The log reports `NUDGE came to rest …` / `CLAMP came to rest …`
 once the counts are still, and `#PCAL` prints `CALBRAKE`. 155 host tests; 1,175,979 bytes.
 
+**Status 2026-10-04 (later): Part D (commissioning) ran with the dome off; two measurement fixes.**
+All seven steps passed on build `db08a868` and the board is `COMMISSIONED=2`; the safe-spin value
+(897) was measured without the dome and stands in only until a dome-on run. `RotaryCharacterise`
+counted the switch the head starts parked on as an edge, so the first revolution ran from the park
+spot (1179 + 1185 + 1185 → 1183.0 stored for a 1185.5 rotary); it now ignores the starting closure
+and counts only edges it drives into. `LifterCalibrate` P1 measured travel between the resting
+spots (1192), but the frame is referenced at the switch closings (bottom closing = 0, top closing =
+travel; ~1138 apart on Todd's lifter, which runs on 25–30 ticks past each switch while braking), so
+the calibrated travel made the count jump at every switch; P1 now uses the closing positions the
+creeps report (the first up-run only if the first creep really closed the bottom switch), and the
+calibration ends with 0 at the bottom switch's closing point. 157 host tests; 1,176,139 bytes.
+
 ---
 
 ## 6. Verification strategy

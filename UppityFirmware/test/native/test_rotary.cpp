@@ -240,6 +240,25 @@ TEST(characterise_measures_ticks_per_rev_and_writes_back_when_confident) {
     delete g;
 }
 
+TEST(characterise_from_home_does_not_count_the_switch_it_starts_on) {
+    // Commissioning 2026-10-04 started parked on the switch: the first "revolution" ran from the park
+    // spot to the next leading edge (1179), and 1179 + 1185 + 1185 stored 1183.0 for a 1185.5 rotary.
+    for (double off : {-1.0, 0.0}) {
+        Rig* g = upRig();
+        MotionConfig c = gregConfig(false); c.rotary.ticksPerRev = 1191.f; c.rotary.confident = false;
+        g->sup.setConfig(c);
+        g->setRotaryAngleFromCentre(off); g->boot();
+        CHECK(g->hal.rotary.homeSwitch());                                  // parked on the switch
+        g->req(JobKind::RotaryCharacterise, 3); g->runUntilIdle(120000);
+        CHECK(g->snap().lastResult == JobResult::Done);
+        const CharacteriseResult& r = g->sup.lastCharacterisation();
+        CHECK_EQ(r.revs, 3); CHECK_EQ(r.detections, 4);
+        CHECK(std::fabs(r.meanTpr - 1184.6f) < 1.5f);
+        CHECK(r.minTpr > 1182.f);                                           // no short first revolution
+        delete g;
+    }
+}
+
 TEST(characterise_reports_no_switch_and_writes_nothing) {
     Rig* g = upRig();
     g->hal.rotary.setSwitchDisconnected(true); g->boot();
