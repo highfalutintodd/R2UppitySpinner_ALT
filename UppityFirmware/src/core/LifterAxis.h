@@ -38,6 +38,7 @@ struct BrakeTable {
     uint16_t vel[kSlots] = {};   // ticks per second, ascending
     uint8_t  ms[kSlots] = {};    // braking time at that speed
     uint8_t  n = 0;              // 0 = no calibration
+    uint8_t  medianMs = 0;       // the median over the slots (what the creeps use)
     // Braking time at `tps` ticks per second: straight-line between the two measured speeds either
     // side of it, the nearest end's time outside them; 0 without a table.
     int msAt(int32_t tps) const {
@@ -54,6 +55,10 @@ struct BrakeTable {
 };
 constexpr int kBrakeTableCapMs = 150;   // a slot that says more is not a braking time (same cap as brakeLeadMs)
 
+// One wild slot (a bump, a slipped count) must not make the seeks at that speed brake far too early
+// or too late: each slot is held within half and twice the median, the median itself as robust as
+// brakeLeadMs() is for the creeps. Todd's table (27-38 ms down, 5-28 up) is untouched but for the
+// slowest slot up (5 -> 10 ms: a slow rise brakes about 1.5 ticks earlier).
 inline BrakeTable makeBrakeTable(const uint16_t over[kSlots], const uint16_t vel[kSlots]) {
     BrakeTable t;
     for (int i = 0; i < kSlots; ++i) {
@@ -64,8 +69,17 @@ inline BrakeTable makeBrakeTable(const uint16_t over[kSlots], const uint16_t vel
         while (j > 0 && t.vel[j - 1] > v) { t.vel[j] = t.vel[j - 1]; t.ms[j] = t.ms[j - 1]; --j; }
         t.vel[j] = v; t.ms[j] = ms; ++t.n;
     }
+    if (t.n == 0) return t;
+    uint8_t sorted[kSlots];
+    for (int i = 0; i < t.n; ++i) sorted[i] = t.ms[i];
+    for (int i = 1; i < t.n; ++i) { uint8_t x = sorted[i]; int j = i - 1; while (j >= 0 && sorted[j] > x) { sorted[j + 1] = sorted[j]; --j; } sorted[j + 1] = x; }
+    int med = (t.n % 2) ? sorted[t.n / 2] : (sorted[t.n / 2 - 1] + sorted[t.n / 2] + 1) / 2;
+    t.medianMs = static_cast<uint8_t>(med);
+    for (int i = 0; i < t.n; ++i) t.ms[i] = static_cast<uint8_t>(clampv<int>(t.ms[i], (med + 1) / 2, med * 2 > kBrakeTableCapMs ? kBrakeTableCapMs : med * 2));
     return t;
 }
+
+constexpr Ticks kNoFloor = -2147483647;   // no policy floor (the head is home, the override, an ascent)
 
 // ---------------------------------------------------------------- seek
 
@@ -76,7 +90,7 @@ struct SeekParams {
     Throttle minPower = 0;          // profile/tuned minimum reliable power; 0 = approachPower
     bool     fullTravel = false;    // seeking to a limit: ignore the encoder target
     BrakeTable brake;               // the calibration's braking times for this direction (none = brake on the mark)
-    bool     floorTarget = false;   // the target is the safe-spin floor (a turned head clamped): come to rest at or above it
+    Ticks    floorTicks = kNoFloor; // descending with the head maybe turned: come to REST at or above this (the safe-spin height)
     const LifterMotorProfile* prof = nullptr;
 };
 
@@ -84,13 +98,15 @@ struct SeekParams {
 // braking time the calibration gives at that speed, so a short step that never got up to speed
 // brakes late and a fast one early. Before (code review D5) it braked within the run-on of its full
 // speed from the first tick: 56 ticks going down on Todd's lifter, so a 33-tick :PP never moved and
-// longer steps stopped up to that much early. Against the safe-spin floor the creeps' safe-side
-// margin is added (a quarter and a tick), and a board with no calibration assumes
-// kUncalibratedBrakeMs there: the floor is the one target the mast must not run past.
+// longer steps stopped up to that much early. When the policy has a floor for the descent (the head
+// may be turned), it also brakes against that floor the way the creeps do: a higher speed estimate,
+// the longer of the table's time and its median (kUncalibratedBrakeMs with no table), and a
+// quarter and a tick more, whether the target was clamped to the floor or lies just above it.
 class LifterSeek {
   public:
     enum class Phase : uint8_t { Idle, Breakaway, Ramp, Cruise, Braking, Finished };
     static constexpr Ticks kBreakawayTicks = 10;
+    static constexpr Ticks kSkipBreakawayBelow = 30;    // full-travel seeks only
     static constexpr Ms    kBrakeMs = 100;
     static constexpr Ticks kAgainstDirLimit = 8;
     static constexpr Ticks kSlowRemainingMin = 20;
@@ -110,8 +126,12 @@ class LifterSeek {
         pulse_.set(p.prof ? p.prof->pulseOnMs : 3, p.prof ? p.prof->pulseOffMs : 1);
         rampTicks_ = 0;
         for (Ticks& h : hist_) h = current;
-        histIdx_ = 0;
-        enter(Phase::Breakaway, current, now);   // short steps too: pulsed power from rest starves a 19:1 (they used to skip it under 30 ticks and stall)
+        histIdx_ = 0; stoppedByFloor_ = false;
+        // Short steps to a height run the breakaway burst too: pulsed power from rest starves a 19:1,
+        // and they used to skip it under 30 ticks (harmlessly, as they braked at once). A short run
+        // to a switch keeps the gentle start it always had.
+        if (p.fullTravel && distance_ < kSkipBreakawayBelow) enter(Phase::Cruise, current, now);
+        else enter(Phase::Breakaway, current, now);
         phaseChanged_ = true;
     }
 
@@ -132,6 +152,11 @@ class LifterSeek {
 
         // limit in the direction of travel
         if ((dir_ > 0 && in.topLimit) || (dir_ < 0 && in.bottomLimit)) { beginBrake(StepOutcome::done(JobResult::DoneLimit, Reason::LimitReached, pos), now); return StepOutcome::running(); }
+        // the policy floor (a descent with the head maybe turned): come to rest at or above it
+        if (dir_ < 0 && p_.floorTicks != kNoFloor && pos - floorAheadTicks(pos, mid, back) <= p_.floorTicks) {
+            stoppedByFloor_ = true;
+            beginBrake(StepOutcome::done(JobResult::DoneTarget, Reason::TargetReached, pos), now); return StepOutcome::running();
+        }
         // target reached (not for full-travel seeks, which end on the switch)
         if (!p_.fullTravel) {
             Ticks ahead = aheadTicks(pos, mid, back);
@@ -198,34 +223,44 @@ class LifterSeek {
     Ticks target() const { return p_.target; }
     Ticks distance() const { return distance_; }
     Ticks startTicks() const { return start_; }
-    bool  floorTarget() const { return p_.floorTarget; }
+    Ticks floorTicks() const { return p_.floorTicks; }
+    bool  stoppedByFloor() const { return stoppedByFloor_; }   // the floor, not the target, ended it
 
   private:
-    // Ticks the mast will run on if the brake goes on now (rounded up), plus the floor's margin. The
-    // speed is the travel over the last 16 ms. While the mast is gathering speed that average trails
-    // it: a short step brakes during its breakaway burst (0.62 ticks/ms averaged against 1.0 really,
-    // on the simulated 19:1). So when the last 8 ms clearly differ from the 8 before them (2 ticks or
+    // The speed in ticks per 16 ms. While the mast is gathering speed the 16 ms average trails it: a
+    // short step brakes during its breakaway burst (0.62 ticks/ms averaged against 1.0 really, on
+    // the simulated 19:1). So when the last 8 ms clearly differ from the 8 before them (2 ticks or
     // more; steady running, pulses included, differs by a tick at most), the speed is carried
     // forward: the last 8 ms plus a quarter of the change. A quarter, not the straight-line half,
     // because the speed levels off as it nears full (a sweep of steps 10-400 ticks on the simulator:
-    // mean error 2.5 ticks against 3.3 for a half and 6.5 for none). Against the safe-spin floor
-    // only a higher figure is taken (brake earlier).
-    Ticks aheadTicks(Ticks pos, Ticks mid, Ticks back) const {
-        Ticks moved = (pos - back) * dir_;                                       // ticks per 16 ms
+    // mean error 2.5 ticks against 3.3 for a half and 6.5 for none). `high` keeps the larger of the
+    // two figures (for the floor: brake earlier, never later).
+    Ticks speed16(Ticks pos, Ticks mid, Ticks back, bool high) const {
+        Ticks moved = (pos - back) * dir_;
         Ticks late = (pos - mid) * dir_, early = (mid - back) * dir_;           // the two 8 ms halves
         if (late - early >= 2 || late - early <= -2) {
             Ticks now = (5 * late - early + 1) / 2;                             // 2 x (late + (late - early) / 4)
             if (now < 0) now = 0;
-            if (!p_.floorTarget || now > moved) moved = now;
+            if (!high || now > moved) moved = now;
         }
-        Ticks ahead = 0;
+        return moved;
+    }
+    // Ticks the mast will run on if the brake goes on now (rounded up).
+    Ticks aheadTicks(Ticks pos, Ticks mid, Ticks back) const {
+        Ticks moved = speed16(pos, mid, back, false);
+        if (moved <= 0) return 0;
+        int ms = p_.brake.msAt(moved * 1000 / kVelWindow);
+        return (moved * ms + kVelWindow - 1) / kVelWindow;
+    }
+    // The same against the floor, on the safe side: the higher speed, the longer time, the margin.
+    Ticks floorAheadTicks(Ticks pos, Ticks mid, Ticks back) const {
+        Ticks moved = speed16(pos, mid, back, true), ahead = 0;
         if (moved > 0) {
-            int ms = p_.brake.msAt(moved * 1000 / kVelWindow);
-            if (ms <= 0 && p_.floorTarget) ms = kUncalibratedBrakeMs;
+            int ms = p_.brake.n ? p_.brake.msAt(moved * 1000 / kVelWindow) : kUncalibratedBrakeMs;
+            if (ms < p_.brake.medianMs) ms = p_.brake.medianMs;
             ahead = (moved * ms + kVelWindow - 1) / kVelWindow;
         }
-        if (p_.floorTarget) ahead += ahead / 4 + 1;
-        return ahead;
+        return ahead + ahead / 4 + 1;
     }
     void enter(Phase ph, Ticks pos, Ms now) { phase_ = ph; phaseMs_ = now; phaseStartTicks_ = pos; }
     void beginBrake(StepOutcome pending, Ms now) { pending_ = pending; brakeUntil_ = now + kBrakeMs; phase_ = Phase::Braking; phaseChanged_ = true; }
@@ -255,7 +290,7 @@ class LifterSeek {
     int dir_ = 1;
     Ticks start_ = 0, distance_ = 0, phaseStartTicks_ = 0, lastTicks_ = 0, slowWindowTicks_ = 0, rampTicks_ = 0;
     Ms startMs_ = 0, phaseMs_ = 0, lastMoveMs_ = 0, slowWindowStart_ = 0, slowAccumMs_ = 0, brakeUntil_ = 0;
-    bool reboosted_ = false, phaseChanged_ = false;
+    bool reboosted_ = false, phaseChanged_ = false, stoppedByFloor_ = false;
     Ticks hist_[kVelWindow] = {};
     int histIdx_ = 0;
     PulsePattern pulse_;

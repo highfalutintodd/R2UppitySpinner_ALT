@@ -313,14 +313,16 @@ void MotionSupervisor::refuse(const Step& s, Reason why, uint32_t id, const Tick
     lastJob_ = s.kind; lastResult_ = JobResult::Refused; lastReason_ = why;
 }
 
-// A turned head sent down from close above the safe-spin height (see kClampCreepTicks). Returns as
-// startStep does: 1 = a job started, 0 = nothing to do.
-int MotionSupervisor::startFloorCreep(Ticks floor, const TickInputs& in) {
+// A descent from close above the policy floor with the head maybe turned (see kClampCreepTicks): the
+// slow creep to the target (or to the floor if the target is below it), or no move at all. Returns
+// as startStep does: 1 = a job started, 0 = nothing to do.
+int MotionSupervisor::startFloorCreep(Ticks floor, Ticks target, bool clamped, const TickInputs& in) {
     if (in.lifterTicks - floor <= kClampRearmTicks) {
         // too close to move and stop above it: it stays, and the clamp holds as if it had come down
+        flushRestReport(in);
         clampHold_ = true; clampAt_ = in.lifterTicks; clampFloor_ = safeSpin();
         restReport_ = 7; restFrom_ = in.lifterTicks; restFloor_ = floor; restSince_ = in.nowMs;
-        lastReason_ = Reason::AlreadyThere;
+        heldAtFloor_ = true;
         emit(Ev::JobEnd, static_cast<int32_t>(JobKind::LifterSeek), static_cast<int32_t>(JobResult::Clamped), static_cast<int32_t>(Reason::RotaryNotHome), in.nowMs);
         return 0;
     }
@@ -331,13 +333,24 @@ int MotionSupervisor::startFloorCreep(Ticks floor, const TickInputs& in) {
     p.power = clampv<Throttle>(slow, 120, cap);
     p.stallMs = prof_->stallTimeoutMs;
     p.floorTicks = floor;
+    if (!clamped) p.stopAfter = in.lifterTicks - target;                         // a step to a height just above the floor
     p.brakeLeadMs = brakeLeadMs(cfg_.overshootDown, cfg_.velDown);
     p.floorLeadMs = p.brakeLeadMs > 0 ? p.brakeLeadMs : LifterSeek::kUncalibratedBrakeMs;
     jogByOverride_ = false;
+    creepForSeek_ = true; creepSeekTarget_ = target;
     creep_.start(p, in.lifterTicks, in.nowMs);
     job_ = JobKind::LifterCreep;
-    emit(Ev::JobStart, static_cast<int32_t>(job_), -1, static_cast<int32_t>(programId_), in.nowMs);
+    emit(Ev::JobStart, static_cast<int32_t>(job_), clamped ? -1 : -p.stopAfter, static_cast<int32_t>(programId_), in.nowMs);
     return 1;
+}
+
+// A rest report still waiting for the mast to settle is printed now, before a new one replaces it.
+void MotionSupervisor::flushRestReport(const TickInputs& in) {
+    if (!restReport_) return;
+    if (restReport_ == 7) { emit(Ev::Measure, 7, in.lifterTicks, restFloor_, in.nowMs); clampAt_ = in.lifterTicks; }
+    else if (restReport_ == 8) emit(Ev::Measure, 8, in.lifterTicks, restFloor_, in.nowMs);
+    else emit(Ev::Measure, 6, in.lifterTicks - restFrom_, restAsked_, in.nowMs);
+    restReport_ = 0;
 }
 
 int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
@@ -349,23 +362,28 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             if (programKind_ == JobKind::SafeLower && target == 0) emit(Ev::LightKit, 1, 0, 0, in.nowMs);   // lights off before lowering
             Decision d = checkLifterSeek(c, in.lifterTicks, target);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
-            if (d.verdict == Verdict::Clamp) { emit(Ev::SeekClamped, target, d.value, static_cast<int32_t>(d.reason), in.nowMs); target = d.value; }
-            if (d.verdict == Verdict::Clamp && target < in.lifterTicks && in.lifterTicks - target <= kClampCreepTicks)
-                return startFloorCreep(target, in);                                       // close above the floor: the slow way, or not at all
+            bool clamped = d.verdict == Verdict::Clamp;
+            if (clamped) { emit(Ev::SeekClamped, target, d.value, static_cast<int32_t>(d.reason), in.nowMs); target = d.value; }
             int dir = target >= in.lifterTicks ? 1 : -1;
             SeekParams p;
             p.target = target;
             p.speed = floorSpeed(static_cast<Throttle>(s.b), dir);
             p.minPower = floorSpeed(1, dir);
             p.approachPower = cfg_.approachPower > 0 ? cfg_.approachPower : pctToThrottle(prof_->defaultSeekBottomPowerPct);
-            p.fullTravel = (s.c & 1) != 0 && d.verdict != Verdict::Clamp;
+            p.fullTravel = (s.c & 1) != 0 && !clamped;
             p.brake = dir > 0 ? makeBrakeTable(cfg_.overshootUp, cfg_.velUp) : makeBrakeTable(cfg_.overshootDown, cfg_.velDown);
-            p.floorTarget = d.verdict == Verdict::Clamp && dir < 0;     // a turned head sent down: rest at or above the floor
+            // The policy's floor for a descent with the head maybe turned (the same one a jog stops
+            // at), whether the target was clamped to it or lies above it: a target just above the
+            // safe-spin height must not be overshot below it (review of Part A, 2026-10-04).
+            if (dir < 0) { Decision f = checkLifterCreep(c, -1); if (f.ok() && f.value != kNoFloor) p.floorTicks = f.value; }
             p.prof = prof_;
             if (!p.fullTravel && absl(target - in.lifterTicks) < 5) { lastReason_ = Reason::AlreadyThere; emit(Ev::JobEnd, static_cast<int32_t>(s.kind), static_cast<int32_t>(JobResult::Done), static_cast<int32_t>(Reason::AlreadyThere), in.nowMs); return 0; }
             if (p.fullTravel && ((target == 0 && in.bottomLimit) || (target == travel() && in.topLimit))) { lastReason_ = Reason::AlreadyThere; emit(Ev::JobEnd, static_cast<int32_t>(s.kind), static_cast<int32_t>(JobResult::Done), static_cast<int32_t>(Reason::AlreadyThere), in.nowMs); return 0; }
+            if (p.floorTicks != kNoFloor && in.lifterTicks - p.floorTicks <= kClampCreepTicks)
+                return startFloorCreep(p.floorTicks, target, clamped, in);                  // close above the floor: the slow way, or not at all
             // only the override lets an unaligned head come down into the opening: remember that it did
             if (dir < 0 && target <= safeSpin() && c.overrideLive && !rotaryIsHome(c)) markAlignmentSuspect(in.nowMs);
+            seekClamped_ = clamped;
             seek_.start(p, in.lifterTicks, in.nowMs);
             job_ = JobKind::LifterSeek;
             emit(Ev::JobStart, static_cast<int32_t>(job_), target, static_cast<int32_t>(programId_), in.nowMs);
@@ -397,6 +415,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             { PolicyContext without = c; without.overrideLive = false; Decision w = checkLifterCreep(without, dir);
               jogByOverride_ = p.jog && c.overrideLive && (!w.ok() || w.value > d.value); }
             if (dir < 0 && c.overrideLive && !rotaryIsHome(c) && (!step || in.lifterTicks - p.stopAfter <= safeSpin())) markAlignmentSuspect(in.nowMs);
+            creepForSeek_ = false;
             creep_.start(p, in.lifterTicks, in.nowMs);
             job_ = JobKind::LifterCreep;
             emit(Ev::JobStart, static_cast<int32_t>(job_), step ? dir * p.stopAfter : dir, static_cast<int32_t>(programId_), in.nowMs);
@@ -512,7 +531,11 @@ void MotionSupervisor::runProgram(const TickInputs& in) {
         stepCount_ = 0; endProgram(o, in);
         return;
     }
-    if (job_ == JobKind::None && stepCount_ > 0) endProgram(StepOutcome::done(JobResult::Done, lastReason_ == Reason::AlreadyThere ? Reason::AlreadyThere : Reason::None), in);
+    if (job_ == JobKind::None && stepCount_ > 0) {
+        // a descent held where it was, next to the safe-spin height with the head maybe turned, ends as clamped
+        if (heldAtFloor_) { heldAtFloor_ = false; endProgram(StepOutcome::done(JobResult::Clamped, Reason::RotaryNotHome), in); return; }
+        endProgram(StepOutcome::done(JobResult::Done, lastReason_ == Reason::AlreadyThere ? Reason::AlreadyThere : Reason::None), in);
+    }
 }
 
 void MotionSupervisor::stepJob(const TickInputs& in, BridgeCommand& lifterOut, BridgeCommand& rotaryOut) {
@@ -558,17 +581,21 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
     } else if (k == JobKind::LifterCreep || k == JobKind::LifterCalibrate) holdTarget_ = -1;
     // a nudge, or a creep the safe-spin floor stopped: say where it comes to rest (see the tick)
     if (k == JobKind::LifterCreep && (o.jobResult == JobResult::Clamped || creep_.stopAfter() > 0)) {
-        restReport_ = o.jobResult == JobResult::Clamped ? 7 : 6;
-        restFrom_ = creep_.startTicks(); restFloor_ = creep_.floorTicks(); restAsked_ = creep_.dir() * creep_.stopAfter(); restSince_ = in.nowMs;
+        flushRestReport(in);
+        restReport_ = o.jobResult == JobResult::Clamped ? 7 : creepForSeek_ ? 8 : 6;
+        restFrom_ = creep_.startTicks(); restFloor_ = o.jobResult == JobResult::Clamped || !creepForSeek_ ? creep_.floorTicks() : creepSeekTarget_;
+        restAsked_ = creep_.dir() * creep_.stopAfter(); restSince_ = in.nowMs;
         if (o.jobResult == JobResult::Clamped) { clampHold_ = true; clampAt_ = in.lifterTicks; clampFloor_ = safeSpin(); }
     }
     // A seek to a height (not to a switch): say where it comes to rest. One the safe-spin floor
-    // clamped holds the clamp as a creep's does: a second descent from rest just above the floor
-    // starts too slowly for the speed estimate to brake it in time (Phase 5 Part A).
+    // clamped or stopped holds the clamp as a creep's does: a second descent from rest just above
+    // the floor starts too slowly for the speed estimate to brake it in time (Phase 5 Part A).
     if (k == JobKind::LifterSeek && o.jobResult == JobResult::DoneTarget) {
-        restReport_ = seek_.floorTarget() ? 7 : 8;
-        restFrom_ = seek_.startTicks(); restFloor_ = seek_.target(); restSince_ = in.nowMs;
-        if (seek_.floorTarget()) { clampHold_ = true; clampAt_ = in.lifterTicks; clampFloor_ = safeSpin(); }
+        flushRestReport(in);
+        bool atFloor = seekClamped_ || seek_.stoppedByFloor();
+        restReport_ = atFloor ? 7 : 8;
+        restFrom_ = seek_.startTicks(); restFloor_ = atFloor ? seek_.floorTicks() : seek_.target(); restSince_ = in.nowMs;
+        if (atFloor) { clampHold_ = true; clampAt_ = in.lifterTicks; clampFloor_ = safeSpin(); }
     }
     if (k == JobKind::LifterCalibrate) {
         suppressLimitRef_ = false;
@@ -667,6 +694,7 @@ void MotionSupervisor::endProgram(const StepOutcome& o, const TickInputs& in) {
     }
     if (programId_ != 0) lastProgramId_ = programId_;
     stepCount_ = 0; stepIdx_ = 0; programKind_ = JobKind::None; programId_ = 0; programSource_ = ReqSource::None;
+    heldAtFloor_ = false;
     idleSince_ = in.nowMs;
 }
 
@@ -733,12 +761,7 @@ void MotionSupervisor::tick(Ms now) {
     lifter_.ticks = raw.lifterTicks; rotary_.ticks = raw.rotaryTicks;
     if (in.lifterTicks == stillL_ && in.rotaryTicks == stillR_) { if (stillTicks_ < 65535) ++stillTicks_; }
     else { stillTicks_ = 0; stillL_ = in.lifterTicks; stillR_ = in.rotaryTicks; }
-    if (restReport_ && (stillTicks_ >= kEstopStillTicks || elapsed(now, restSince_) >= 1000 || job_ != JobKind::None)) {
-        if (restReport_ == 7) { emit(Ev::Measure, 7, in.lifterTicks, restFloor_, now); clampAt_ = in.lifterTicks; }
-        else if (restReport_ == 8) emit(Ev::Measure, 8, in.lifterTicks, restFloor_, now);
-        else emit(Ev::Measure, 6, in.lifterTicks - restFrom_, restAsked_, now);
-        restReport_ = 0;
-    }
+    if (restReport_ && (stillTicks_ >= kEstopStillTicks || elapsed(now, restSince_) >= 1000 || job_ != JobKind::None)) flushRestReport(in);
 
     BridgeCommand lifterOut = brakeCmd(), rotaryOut = brakeCmd();
     bool rotaryBusy = isRotaryJob(job_) || (lastOut_[1].mode == Bridge::Drive && lastOut_[1].duty != 0);

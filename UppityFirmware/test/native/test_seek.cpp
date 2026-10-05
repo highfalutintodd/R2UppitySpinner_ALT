@@ -242,3 +242,83 @@ TEST(d5_a_seek_says_where_it_came_to_rest) {
     g.seek(1150, 0, true); g.runUntilIdle(20000); g.runMs(500);                     // to a switch: it ends on the switch, no rest line
     for (size_t i = n; i < g.log.size(); ++i) CHECK(!(g.log[i].code == Ev::Measure && g.log[i].a == 8));
 }
+
+// Review of Part A (2026-10-04): a turned head sent to a target AT or just above the safe-spin height
+// is not clamped (the target is allowed), so it got no floor margin; once short steps moved, the
+// simulated 19:1 came to rest up to 9 below the floor in 38 of 140 such moves (the old code never
+// moved them). Now every descent the policy gives a floor brakes against it.
+TEST(d5_a_turned_head_sent_just_above_the_floor_rests_at_or_above_it) {
+    for (const Setup& s : clampSetups()) {
+        int below = 0, n = 0;
+        for (Ticks start : {15, 27, 35, 60, 80, 120}) {
+            for (Ticks above : {0, 3, 8, 12}) {
+                Rig g(s.cfg); g.hal.lifter.setParams(s.lifter);
+                g.hal.lifter.setPosition(1150); g.setRotaryAngleFromCentre(0); g.boot();
+                seekTo(g, 575 + start);
+                if (g.snap().lifterTicks <= 575) continue;                              // the head-home seek itself overshot: not this case
+                g.req(JobKind::RotaryAbsolute, 90, 0, 0); g.runUntilIdle(30000);
+                if (!(g.snap().rotaryDeg > 60 && g.snap().rotaryDeg < 120)) continue;
+                g.watchSafe = floorInSim(g, 575);
+                Ticks rest = seekTo(g, 575 + above);
+                ++n;
+                if (rest < 575 || g.turnedBelowSafe) { ++below; std::printf("  %s: turned at %+d, sent to %+d, rested at %+d\n", s.name, (int)start, (int)above, (int)(rest - 575)); }
+                if (g.snap().lifterTicks > 575 + above + s.tol + 2) {}                    // stopping well above is the safe side
+            }
+        }
+        CHECK(n >= 20);
+        CHECK_EQ(below, 0);
+    }
+}
+
+// The held case reports itself as clamped, and a pending rest line is printed, not lost.
+TEST(d5_a_descent_held_next_to_the_floor_ends_clamped_and_keeps_the_last_rest_line) {
+    Setup s = clampSetups()[1];
+    Rig g(s.cfg); g.hal.lifter.setParams(s.lifter);
+    g.hal.lifter.setPosition(1150); g.setRotaryAngleFromCentre(0); g.boot();
+    seekTo(g, 585);
+    g.req(JobKind::RotaryAbsolute, 90, 0, 0); g.runUntilIdle(30000);
+    CHECK(g.snap().lifterTicks > 575 && g.snap().lifterTicks <= 575 + MotionSupervisor::kClampRearmTicks);
+    size_t from = g.log.size();
+    Ticks at = g.snap().lifterTicks;
+    g.seek(at - 10, 0); g.runUntilIdle(5000); g.runMs(1200);                           // 10 down from 15-20 above the floor: held
+    CHECK(g.snap().lastResult == JobResult::Clamped);
+    CHECK(g.snap().lastReason == static_cast<uint8_t>(Reason::RotaryNotHome));
+    CHECK_EQ(g.snap().lifterTicks, at);
+    g.seek(0, 0); g.runUntilIdle(5000); g.runMs(300);                                  // and then the clamp holds: refused
+    CHECK(g.snap().lastResult == JobResult::Refused);
+    int restLines = 0; for (size_t i = from; i < g.log.size(); ++i) if (g.log[i].code == Ev::Measure && g.log[i].a == 7) ++restLines;
+    CHECK(restLines >= 1);
+    CHECK(g.snap().lifterTicks >= 575);
+    Rig h(s.cfg); h.hal.lifter.setParams(s.lifter);                                    // a rest line pending when the next move starts is printed first
+    h.hal.lifter.setPosition(1150); h.setRotaryAngleFromCentre(0); h.boot();
+    h.seek(700, 0); h.runUntilIdle(20000);                                             // no settle: the report is still pending
+    h.seek(600, 0); h.runUntilIdle(20000); h.runMs(1200);
+    int targets[2] = {0, 0}; int k = 0;
+    for (auto& e : h.log) if (e.code == Ev::Measure && e.a == 8 && k < 2) targets[k++] = e.c;
+    CHECK_EQ(k, 2); CHECK_EQ(targets[0], 700); CHECK_EQ(targets[1], 600);
+}
+
+// A short run to a switch keeps the gentle start it always had (the breakaway burst is for heights).
+TEST(d5_a_short_run_to_a_switch_starts_as_gently_as_before) {
+    for (int dir : {-1, +1}) {
+        Rig g(backdrivingConfig()); g.hal.lifter.setParams(backdrivingLifter());
+        g.hal.lifter.setPosition(dir > 0 ? 0 : 1150); g.setRotaryAngleFromCentre(0); g.boot();
+        seekTo(g, dir > 0 ? 1125 : 25);
+        g.seek(dir > 0 ? 1150 : 0, 0, true); g.runUntilIdle(20000);
+        double hit = dir > 0 ? g.hal.lifter.impactVelocityTop() : g.hal.lifter.impactVelocityBottom();
+        CHECK(g.snap().lastResult == JobResult::DoneLimit);
+        CHECK(hit < 0.8);                                                               // review: 0.44 / 0.69 before, 1.02 / 0.94 with the burst
+    }
+}
+
+TEST(d5_brake_table_holds_a_wild_slot_near_the_median) {
+    uint16_t over[kSlots] = {}, vel[kSlots] = {};
+    CHECK_EQ(makeBrakeTable(over, vel).n, 0);
+    for (int i = 3; i <= 17; ++i) { vel[i] = static_cast<uint16_t>(100 * i); over[i] = static_cast<uint16_t>(vel[i] * 30 / 1000); }   // 30 ms everywhere
+    over[10] = 300;                                                                     // one bump: 300 ms at 1000 ticks/s
+    over[11] = 1;                                                                       // and one that barely ran on
+    BrakeTable t = makeBrakeTable(over, vel);
+    CHECK_EQ(t.n, 15); CHECK_NEAR(t.medianMs, 30, 1);
+    CHECK(t.msAt(1000) <= 60); CHECK(t.msAt(1100) >= 15);                              // held within half and twice the median
+    CHECK_NEAR(t.msAt(500), 30, 1); CHECK_NEAR(t.msAt(5000), 30, 1);                    // outside the measured speeds: the end slots
+}

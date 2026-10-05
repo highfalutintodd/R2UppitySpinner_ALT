@@ -16,31 +16,39 @@ board watches how fast the mast is really going over the last 16 ms and looks up
 `#PSC` calibration table, how long the brake takes at that speed (27 ms at the slow end going
 down, 38 ms at the fast end, as your table measured). It starts braking that far ahead.
 
-Against the safe-spin height with the head turned, it adds the same safety margin the jogs have
-used since 2026-10-04 (a quarter more, plus a tick), so the mast comes to rest at or above that
-height. Close above it, a full-speed start cannot brake in time, so there it goes the slow way:
+Whenever the head may be turned and the mast is above the safe-spin height, a descent also brakes
+against that height with the same safety margin the jogs have used since 2026-10-04 (a quarter
+more, plus a tick), so the mast comes to rest at or above it. That holds whether the target was
+below the safe-spin height (the board clamps it there) or just above it (a target of 880 with 878
+set). Close above that height a full-speed start cannot brake in time, so there it goes the slow
+way:
 
 | Where the turned head starts | What a descent does |
 |---|---|
-| more than 60 ticks above the safe-spin height | a seek, braking early by its speed plus the margin |
+| more than 60 ticks above the safe-spin height | a seek, braking early by its speed, and against the height with the margin |
 | 21 to 60 ticks above | the slow creep Rescue's jog uses (2026-10-04: came to rest +4 above 1100) |
 | 20 ticks above or less | nothing moves; the log says `CLAMP came to rest at …` where it already is |
 
-After any of these, a second descent is refused until the head is home (as after a clamped jog).
+After the mast has stopped at that height, a second descent is refused until the head is home (as
+after a clamped jog).
 
 **What you will notice.** Short moves (a few percent) now move. Every seek to a height (not to a
 switch) prints one more line when the mast has stopped: `SEEK came to rest at 909, +2 from its
 target 909`. The boot line says `phase 5`.
 
-**What was tested.** On the Mac: 212 host tests pass (10 new), each new one failing on the old
+**What was tested.** On the Mac: 216 host tests pass (14 new), each new one failing on the old
 build except a sanity check of the simulator itself; the firmware compiles clean with every
-warning on (1,183,039 bytes, 60 %). The simulator ran two lifters: a fast 6.3:1 and a copy of
+warning on (1,183,503 bytes, 60 %). A separate review of the first version of this change found
+that a turned head sent to a target *just above* the safe-spin height could overshoot below it on
+the simulator (the old build never moved such short steps, so it was safe only by accident); that
+is fixed and is now one of the tests. The simulator ran two lifters: a fast 6.3:1 and a copy of
 yours (about 1.5 ticks/ms flat out, braking in about 40 ms down and 26 ms up, as your E-STOPs and
 `#PCAL` showed), each with the table its own calibration stores. Every step from 10 to 400 ticks,
 both ways, now moves; on the 6.3:1 every one comes to rest within 5 ticks, on the copy of yours
 within 9 (2.5 on average; before, steps under about 60 ticks did not move and longer ones stopped
 up to 29 short). A turned head sent down from anywhere 2 to 120 ticks above the safe-spin height
-came to rest at or above it on all five simulated set-ups (before: up to 49 below). **Nothing has
+came to rest at or above it on all five simulated set-ups (before: up to 49 below), and so did one
+sent to a target 0 to 12 ticks above that height from 15 to 120 ticks above it. **Nothing has
 run on the droid yet.** Your lifter is not the simulator; the numbers you record below are the
 real test.
 
@@ -64,7 +72,7 @@ held: every move is a fixed target.
    ```
    arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
    ```
-   It ends with `Sketch uses 1183039 bytes (60%)` (a few bytes either way is fine).
+   It ends with `Sketch uses 1183503 bytes (60%)` (a few bytes either way is fine).
 3. In a second Terminal window, the monitor (leave it running for the whole of Part A):
    ```
    arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-phase5a-log.txt
