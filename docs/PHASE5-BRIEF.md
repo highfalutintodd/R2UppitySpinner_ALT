@@ -12,10 +12,10 @@ measured on Todd's periscope; their "Results" sections are the ground truth.
 Phases 0–4 are done and verified on Todd's 19:1 periscope, the last of them on 2026-10-04: four
 web pages (Operate, Setup, Diagnostics, Rescue), firmware upload from the page, the rescue tools
 (60 s override, hold-to-jog, `#PNUDGE`, `#PSETHOME`) and commissioning, run end to end with the
-dome on. Latest commit on the session branch `claude/uppity-spinner-phase-4-1e5680`: the one
-that added this brief (Todd fast-forwards `v4-rewrite` to it). Build on the droid: `9743ad66`.
-Host tests: 163. Flash: 1,176,727 bytes of 1,966,080 (59 %) (the last fix, a home-check window
-found in Todd's free testing, is in `docs/BENCH-PHASE4.md`; install it before starting).
+dome on. A full code review followed (`docs/CODE-REVIEW-2026-10.md`, branch
+`claude/code-review-2026-10`, merged into `v4-rewrite`): 27 defects fixed plus Todd's D1-D4, and
+bench-passed on the droid the same day. **Build on the droid: `7d93e1d8`. Host tests: 202. Flash:
+1,181,615 bytes of 1,966,080 (60 %).** Start the Phase 5 worktree from `v4-rewrite`.
 
 Todd's numbers (all stored on the board; nothing to re-send after a flash): 19:1 profile,
 inverted, travel 1137 between the switch closings (calibrated, `#PTRAVEL0`), the mast rests up
@@ -27,6 +27,32 @@ password is stored on the board and is never printed or written down); the board
 is DHCP and has been `192.168.86.69` lately (the `WIFI joined` boot line shows it).
 
 **Heartbeat tag: `&PERI`** (Todd's decision, 2026-10-04).
+
+## What the code review changed that Phase 5 must keep
+
+- **Attended vs unattended sources.** The rescue override and the commissioning unlock now apply
+  only to moves from `SerialUsb`, `Web`, `Commission` (and `Test`); random mode passes the
+  commissioning unlock only (`MotionSupervisor::attendedSource`). **`ReqSource::Mesh` is
+  unattended**: a mesh `:PP0` during a rescue never gets the override. Keep it that way, and keep
+  `#POVERRIDE`/`#PSETHOME` refused from the mesh (`Console::onRescue`).
+- **Stop is `CommandQueue::cancelAll()`**: it ends the running job and refuses everything queued
+  (`REFUSED CANCEL`). A mesh `&STOP`-style verb, if any, uses the same call; `&ESTOP` still goes
+  only to `EstopLatch::trip`.
+- **Intake holds have owners** (`kHoldPersist`, `kHoldOta`, `kHoldRestart`). Anything new that
+  must pause motion intake gets its own bit.
+- **Restarts wait** for no job, drivers off and the save landed (`Console::requestRestart`). A
+  mesh-triggered restart, if one is ever added, goes through it.
+- **Serial lines:** a lost byte spoils its line (`kLostBytes`), over-long lines are dropped,
+  other boards' `:` lines are silent, and `#PBAUD`/`#PCMDTX` re-register the receive hooks
+  (`SerialFront::rehook`). Mesh input should follow the same rules: one line per message, foreign
+  lines silent, never `INVALID` for another board's traffic.
+- **Settings:** a forced v3 import keeps measured values; a settings blob from a newer schema is
+  read and not written back. Phase 5's new fields are appended with a schema bump as usual.
+  D8 from the review (`#PCONFIG` does not say whether ticks/rev was measured) is a good fit for
+  Phase 5's settings work.
+- **Tests:** `test_review.cpp` holds the review's regression tests; the rig has a ground-truth
+  safety watch (`Rig::watchSafe`) that any new mesh-driven motion test should switch on; UBSan
+  reports now fail `make test`.
 
 ## Lessons from Phase 4 that shape Phase 5
 
@@ -124,7 +150,11 @@ one there.
   Todd's lifter): a `:PP` step shorter than that does not move, longer short moves stop up to that
   much early. Fix by braking on the run-on at the speed actually reached (the creeps' `ahead`
   approach, from the same calibration table); it changes every seek, so bench it. Seen 2026-10-04
-  (942 → 909 did not move). For the code review.
+  (942 → 909 did not move). The code review folded in the clamped-seek margin (its D5): when the
+  target is the safe-spin floor, brake on the safe side as the creeps do. Still open; Todd decides
+  whether it goes before or alongside Phase 5.
+- From the code review, still open: D6 (`LIMIT_MISMATCH` for a wrong `#PTRAVEL`), D7 (jog press
+  ids), D8 (`#PCONFIG` tpr confidence). The optional D2 re-test is in the review's results.
 - Backlog: nudges land a few ticks short going up (+9 for +12): the braking lead uses the median
   of the calibration table, and slow upward creeps stop quicker than that; a speed-matched lead
   from the same table would fix it. A device PIN for mutating web routes. The `TICK` lines during
@@ -133,10 +163,11 @@ one there.
 
 ## Paste this to start the next session
 
-    Continuing the Uppity Spinner ALT v4 rewrite. Phases 0-4 are bench-verified on my periscope.
-    Read CLAUDE.md first, then docs/PHASE5-BRIEF.md, then docs/REWRITE-PLAN.md section 1.1, the
-    phase table in section 5 and Appendix C, then memory project_v4_rewrite and
-    project_todd_periscope_hardware. Start Phase 5 (mesh and DroidNet) with the &PERI heartbeat
+    Continuing the Uppity Spinner ALT v4 rewrite. Phases 0-4 and the October code review are
+    bench-verified on my periscope. Read CLAUDE.md first, then docs/PHASE5-BRIEF.md, then
+    docs/REWRITE-PLAN.md section 1.1, the phase table in section 5 and Appendix C, the summary
+    and "Your decisions" sections of docs/CODE-REVIEW-2026-10.md, then memory project_v4_rewrite
+    and project_todd_periscope_hardware. Start Phase 5 (mesh and DroidNet) with the &PERI heartbeat
     tag; ask me the WCB fleet questions in the brief before writing mesh code that depends on
     them. Mesh stays off by default. Keep the definition of done from CLAUDE.md, write
     docs/BENCH-PHASE5.md for me in the same voice as the earlier bench docs with complete
