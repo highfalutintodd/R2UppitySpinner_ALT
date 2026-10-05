@@ -313,6 +313,33 @@ void MotionSupervisor::refuse(const Step& s, Reason why, uint32_t id, const Tick
     lastJob_ = s.kind; lastResult_ = JobResult::Refused; lastReason_ = why;
 }
 
+// A turned head sent down from close above the safe-spin height (see kClampCreepTicks). Returns as
+// startStep does: 1 = a job started, 0 = nothing to do.
+int MotionSupervisor::startFloorCreep(Ticks floor, const TickInputs& in) {
+    if (in.lifterTicks - floor <= kClampRearmTicks) {
+        // too close to move and stop above it: it stays, and the clamp holds as if it had come down
+        clampHold_ = true; clampAt_ = in.lifterTicks; clampFloor_ = safeSpin();
+        restReport_ = 7; restFrom_ = in.lifterTicks; restFloor_ = floor; restSince_ = in.nowMs;
+        lastReason_ = Reason::AlreadyThere;
+        emit(Ev::JobEnd, static_cast<int32_t>(JobKind::LifterSeek), static_cast<int32_t>(JobResult::Clamped), static_cast<int32_t>(Reason::RotaryNotHome), in.nowMs);
+        return 0;
+    }
+    CreepParams p;
+    p.dir = -1;
+    Throttle cap = effectiveMaxThrottle(cfg_.motor, cfg_.expertMode);
+    Throttle slow = cfg_.jogPowerDown > 0 ? cfg_.jogPowerDown : pctToThrottle(prof_->defaultMinPowerPct);
+    p.power = clampv<Throttle>(slow, 120, cap);
+    p.stallMs = prof_->stallTimeoutMs;
+    p.floorTicks = floor;
+    p.brakeLeadMs = brakeLeadMs(cfg_.overshootDown, cfg_.velDown);
+    p.floorLeadMs = p.brakeLeadMs > 0 ? p.brakeLeadMs : LifterSeek::kUncalibratedBrakeMs;
+    jogByOverride_ = false;
+    creep_.start(p, in.lifterTicks, in.nowMs);
+    job_ = JobKind::LifterCreep;
+    emit(Ev::JobStart, static_cast<int32_t>(job_), -1, static_cast<int32_t>(programId_), in.nowMs);
+    return 1;
+}
+
 int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
     PolicyContext c = policy(in);
     switch (s.kind) {
@@ -323,6 +350,8 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             Decision d = checkLifterSeek(c, in.lifterTicks, target);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
             if (d.verdict == Verdict::Clamp) { emit(Ev::SeekClamped, target, d.value, static_cast<int32_t>(d.reason), in.nowMs); target = d.value; }
+            if (d.verdict == Verdict::Clamp && target < in.lifterTicks && in.lifterTicks - target <= kClampCreepTicks)
+                return startFloorCreep(target, in);                                       // close above the floor: the slow way, or not at all
             int dir = target >= in.lifterTicks ? 1 : -1;
             SeekParams p;
             p.target = target;
@@ -330,7 +359,8 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             p.minPower = floorSpeed(1, dir);
             p.approachPower = cfg_.approachPower > 0 ? cfg_.approachPower : pctToThrottle(prof_->defaultSeekBottomPowerPct);
             p.fullTravel = (s.c & 1) != 0 && d.verdict != Verdict::Clamp;
-            { int slot = clampv<int>(p.speed / 50, 0, kSlots - 1); p.stopComp = dir > 0 ? cfg_.overshootUp[slot] : cfg_.overshootDown[slot]; }
+            p.brake = dir > 0 ? makeBrakeTable(cfg_.overshootUp, cfg_.velUp) : makeBrakeTable(cfg_.overshootDown, cfg_.velDown);
+            p.floorTarget = d.verdict == Verdict::Clamp && dir < 0;     // a turned head sent down: rest at or above the floor
             p.prof = prof_;
             if (!p.fullTravel && absl(target - in.lifterTicks) < 5) { lastReason_ = Reason::AlreadyThere; emit(Ev::JobEnd, static_cast<int32_t>(s.kind), static_cast<int32_t>(JobResult::Done), static_cast<int32_t>(Reason::AlreadyThere), in.nowMs); return 0; }
             if (p.fullTravel && ((target == 0 && in.bottomLimit) || (target == travel() && in.topLimit))) { lastReason_ = Reason::AlreadyThere; emit(Ev::JobEnd, static_cast<int32_t>(s.kind), static_cast<int32_t>(JobResult::Done), static_cast<int32_t>(Reason::AlreadyThere), in.nowMs); return 0; }
@@ -363,6 +393,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             if (step) p.stopAfter = clampv<Ticks>(absl(s.a), 1, kMaxStepTicks);
             p.floorTicks = d.value;
             p.brakeLeadMs = dir < 0 ? brakeLeadMs(cfg_.overshootDown, cfg_.velDown) : brakeLeadMs(cfg_.overshootUp, cfg_.velUp);
+            p.floorLeadMs = p.brakeLeadMs > 0 ? p.brakeLeadMs : LifterSeek::kUncalibratedBrakeMs;   // no table: a creep stopped ON the floor ran 6-33 below it (simulator)
             { PolicyContext without = c; without.overrideLive = false; Decision w = checkLifterCreep(without, dir);
               jogByOverride_ = p.jog && c.overrideLive && (!w.ok() || w.value > d.value); }
             if (dir < 0 && c.overrideLive && !rotaryIsHome(c) && (!step || in.lifterTicks - p.stopAfter <= safeSpin())) markAlignmentSuspect(in.nowMs);
@@ -531,6 +562,14 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
         restFrom_ = creep_.startTicks(); restFloor_ = creep_.floorTicks(); restAsked_ = creep_.dir() * creep_.stopAfter(); restSince_ = in.nowMs;
         if (o.jobResult == JobResult::Clamped) { clampHold_ = true; clampAt_ = in.lifterTicks; clampFloor_ = safeSpin(); }
     }
+    // A seek to a height (not to a switch): say where it comes to rest. One the safe-spin floor
+    // clamped holds the clamp as a creep's does: a second descent from rest just above the floor
+    // starts too slowly for the speed estimate to brake it in time (Phase 5 Part A).
+    if (k == JobKind::LifterSeek && o.jobResult == JobResult::DoneTarget) {
+        restReport_ = seek_.floorTarget() ? 7 : 8;
+        restFrom_ = seek_.startTicks(); restFloor_ = seek_.target(); restSince_ = in.nowMs;
+        if (seek_.floorTarget()) { clampHold_ = true; clampAt_ = in.lifterTicks; clampFloor_ = safeSpin(); }
+    }
     if (k == JobKind::LifterCalibrate) {
         suppressLimitRef_ = false;
         if (o.result == StepResult::Done) {
@@ -696,6 +735,7 @@ void MotionSupervisor::tick(Ms now) {
     else { stillTicks_ = 0; stillL_ = in.lifterTicks; stillR_ = in.rotaryTicks; }
     if (restReport_ && (stillTicks_ >= kEstopStillTicks || elapsed(now, restSince_) >= 1000 || job_ != JobKind::None)) {
         if (restReport_ == 7) { emit(Ev::Measure, 7, in.lifterTicks, restFloor_, now); clampAt_ = in.lifterTicks; }
+        else if (restReport_ == 8) emit(Ev::Measure, 8, in.lifterTicks, restFloor_, now);
         else emit(Ev::Measure, 6, in.lifterTicks - restFrom_, restAsked_, now);
         restReport_ = 0;
     }

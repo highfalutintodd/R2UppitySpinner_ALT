@@ -25,6 +25,48 @@ inline BootResolution bootResolve(bool top, bool bottom, bool homeSwitch, Ticks 
     return r;
 }
 
+// ---------------------------------------------------------------- calibrated braking
+
+constexpr int kSlots = 21;   // calibration slots: 0, 5, 10 ... 100 %
+
+// The calibration's stopping distances as braking TIMES against the speed they were measured at:
+// for each 5 % slot, the pulsed cruise speed (ticks/s) and how far the mast ran on after the brake
+// (ticks). On Todd's 19:1 (#PCAL 2026-10-04) the time grows with speed, 27 -> 38 ms going down and
+// 5 -> 28 ms going up, so a seek looks up the time at the speed it has actually reached instead of
+// the run-on of the speed it was asked for (code review 2026-10, D5).
+struct BrakeTable {
+    uint16_t vel[kSlots] = {};   // ticks per second, ascending
+    uint8_t  ms[kSlots] = {};    // braking time at that speed
+    uint8_t  n = 0;              // 0 = no calibration
+    // Braking time at `tps` ticks per second: straight-line between the two measured speeds either
+    // side of it, the nearest end's time outside them; 0 without a table.
+    int msAt(int32_t tps) const {
+        if (n == 0) return 0;
+        if (tps <= vel[0]) return ms[0];
+        for (int i = 0; i + 1 < n; ++i) {
+            if (tps >= vel[i + 1]) continue;
+            int32_t span = vel[i + 1] - vel[i];
+            if (span <= 0) return ms[i];
+            return ms[i] + static_cast<int>((static_cast<int32_t>(ms[i + 1]) - ms[i]) * (tps - vel[i]) / span);
+        }
+        return ms[n - 1];
+    }
+};
+constexpr int kBrakeTableCapMs = 150;   // a slot that says more is not a braking time (same cap as brakeLeadMs)
+
+inline BrakeTable makeBrakeTable(const uint16_t over[kSlots], const uint16_t vel[kSlots]) {
+    BrakeTable t;
+    for (int i = 0; i < kSlots; ++i) {
+        if (vel[i] == 0 || over[i] == 0) continue;       // a slot that measured no run-on is not a measurement
+        int m = static_cast<int>((static_cast<int32_t>(over[i]) * 1000 + vel[i] / 2) / vel[i]);
+        uint16_t v = vel[i]; uint8_t ms = static_cast<uint8_t>(m > kBrakeTableCapMs ? kBrakeTableCapMs : m);
+        int j = t.n;                                     // insertion by speed
+        while (j > 0 && t.vel[j - 1] > v) { t.vel[j] = t.vel[j - 1]; t.ms[j] = t.ms[j - 1]; --j; }
+        t.vel[j] = v; t.ms[j] = ms; ++t.n;
+    }
+    return t;
+}
+
 // ---------------------------------------------------------------- seek
 
 struct SeekParams {
@@ -33,18 +75,29 @@ struct SeekParams {
     Throttle approachPower = 300;   // soft-approach floor (profile seek-bottom power)
     Throttle minPower = 0;          // profile/tuned minimum reliable power; 0 = approachPower
     bool     fullTravel = false;    // seeking to a limit: ignore the encoder target
-    Ticks    stopComp = 0;          // calibrated coast distance at this speed
+    BrakeTable brake;               // the calibration's braking times for this direction (none = brake on the mark)
+    bool     floorTarget = false;   // the target is the safe-spin floor (a turned head clamped): come to rest at or above it
     const LifterMotorProfile* prof = nullptr;
 };
 
+// A seek brakes `ahead` ticks before its target: the speed over the last kVelWindow ms times the
+// braking time the calibration gives at that speed, so a short step that never got up to speed
+// brakes late and a fast one early. Before (code review D5) it braked within the run-on of its full
+// speed from the first tick: 56 ticks going down on Todd's lifter, so a 33-tick :PP never moved and
+// longer steps stopped up to that much early. Against the safe-spin floor the creeps' safe-side
+// margin is added (a quarter and a tick), and a board with no calibration assumes
+// kUncalibratedBrakeMs there: the floor is the one target the mast must not run past.
 class LifterSeek {
   public:
     enum class Phase : uint8_t { Idle, Breakaway, Ramp, Cruise, Braking, Finished };
     static constexpr Ticks kBreakawayTicks = 10;
-    static constexpr Ticks kSkipBreakawayBelow = 30;
     static constexpr Ms    kBrakeMs = 100;
     static constexpr Ticks kAgainstDirLimit = 8;
     static constexpr Ticks kSlowRemainingMin = 20;
+    static constexpr int   kVelWindow = 16;             // ms of position history for the speed estimate
+    // No table: the longest braking time measured on any lifter so far (Todd's 19:1 going down at
+    // full speed, ~40 ms) and half as much again. Used only against the safe-spin floor.
+    static constexpr int   kUncalibratedBrakeMs = 60;
 
     void start(const SeekParams& p, Ticks current, Ms now) {
         p_ = p;
@@ -56,8 +109,9 @@ class LifterSeek {
         slowWindowStart_ = now; slowWindowTicks_ = current; slowAccumMs_ = 0; reboosted_ = false;
         pulse_.set(p.prof ? p.prof->pulseOnMs : 3, p.prof ? p.prof->pulseOffMs : 1);
         rampTicks_ = 0;
-        if (distance_ < kSkipBreakawayBelow) enter(Phase::Cruise, current, now);
-        else enter(Phase::Breakaway, current, now);
+        for (Ticks& h : hist_) h = current;
+        histIdx_ = 0;
+        enter(Phase::Breakaway, current, now);   // short steps too: pulsed power from rest starves a 19:1 (they used to skip it under 30 ticks and stall)
         phaseChanged_ = true;
     }
 
@@ -73,12 +127,15 @@ class LifterSeek {
             if (elapsed(now, brakeUntil_) < 0x80000000u && now != brakeUntil_ && static_cast<int32_t>(now - brakeUntil_) >= 0) { phase_ = Phase::Finished; return pending_; }
             return StepOutcome::running();
         }
+        Ticks back = hist_[histIdx_], mid = hist_[(histIdx_ + kVelWindow / 2) % kVelWindow];   // where it was 16 and 8 ms ago
+        hist_[histIdx_] = pos; histIdx_ = (histIdx_ + 1) % kVelWindow;
 
         // limit in the direction of travel
         if ((dir_ > 0 && in.topLimit) || (dir_ < 0 && in.bottomLimit)) { beginBrake(StepOutcome::done(JobResult::DoneLimit, Reason::LimitReached, pos), now); return StepOutcome::running(); }
         // target reached (not for full-travel seeks, which end on the switch)
         if (!p_.fullTravel) {
-            if ((dir_ > 0 && pos >= p_.target - p_.stopComp) || (dir_ < 0 && pos <= p_.target + p_.stopComp)) {
+            Ticks ahead = aheadTicks(pos, mid, back);
+            if ((dir_ > 0 && pos >= p_.target - ahead) || (dir_ < 0 && pos <= p_.target + ahead)) {
                 beginBrake(StepOutcome::done(JobResult::DoneTarget, Reason::TargetReached, pos), now); return StepOutcome::running();
             }
         }
@@ -140,8 +197,36 @@ class LifterSeek {
     int  dir() const { return dir_; }
     Ticks target() const { return p_.target; }
     Ticks distance() const { return distance_; }
+    Ticks startTicks() const { return start_; }
+    bool  floorTarget() const { return p_.floorTarget; }
 
   private:
+    // Ticks the mast will run on if the brake goes on now (rounded up), plus the floor's margin. The
+    // speed is the travel over the last 16 ms. While the mast is gathering speed that average trails
+    // it: a short step brakes during its breakaway burst (0.62 ticks/ms averaged against 1.0 really,
+    // on the simulated 19:1). So when the last 8 ms clearly differ from the 8 before them (2 ticks or
+    // more; steady running, pulses included, differs by a tick at most), the speed is carried
+    // forward: the last 8 ms plus a quarter of the change. A quarter, not the straight-line half,
+    // because the speed levels off as it nears full (a sweep of steps 10-400 ticks on the simulator:
+    // mean error 2.5 ticks against 3.3 for a half and 6.5 for none). Against the safe-spin floor
+    // only a higher figure is taken (brake earlier).
+    Ticks aheadTicks(Ticks pos, Ticks mid, Ticks back) const {
+        Ticks moved = (pos - back) * dir_;                                       // ticks per 16 ms
+        Ticks late = (pos - mid) * dir_, early = (mid - back) * dir_;           // the two 8 ms halves
+        if (late - early >= 2 || late - early <= -2) {
+            Ticks now = (5 * late - early + 1) / 2;                             // 2 x (late + (late - early) / 4)
+            if (now < 0) now = 0;
+            if (!p_.floorTarget || now > moved) moved = now;
+        }
+        Ticks ahead = 0;
+        if (moved > 0) {
+            int ms = p_.brake.msAt(moved * 1000 / kVelWindow);
+            if (ms <= 0 && p_.floorTarget) ms = kUncalibratedBrakeMs;
+            ahead = (moved * ms + kVelWindow - 1) / kVelWindow;
+        }
+        if (p_.floorTarget) ahead += ahead / 4 + 1;
+        return ahead;
+    }
     void enter(Phase ph, Ticks pos, Ms now) { phase_ = ph; phaseMs_ = now; phaseStartTicks_ = pos; }
     void beginBrake(StepOutcome pending, Ms now) { pending_ = pending; brakeUntil_ = now + kBrakeMs; phase_ = Phase::Braking; phaseChanged_ = true; }
     void finish(StepOutcome o) { pending_ = o; phase_ = Phase::Finished; phaseChanged_ = true; }
@@ -171,6 +256,8 @@ class LifterSeek {
     Ticks start_ = 0, distance_ = 0, phaseStartTicks_ = 0, lastTicks_ = 0, slowWindowTicks_ = 0, rampTicks_ = 0;
     Ms startMs_ = 0, phaseMs_ = 0, lastMoveMs_ = 0, slowWindowStart_ = 0, slowAccumMs_ = 0, brakeUntil_ = 0;
     bool reboosted_ = false, phaseChanged_ = false;
+    Ticks hist_[kVelWindow] = {};
+    int histIdx_ = 0;
     PulsePattern pulse_;
     Phase phase_ = Phase::Idle;
     StepOutcome pending_;
@@ -187,6 +274,7 @@ struct CreepParams {
     Ms       maxMs = 30000;       // wizard only
     Ticks    stopAfter = 0;       // step ("#PNUDGE"): stop after this much travel; 0 = run to a limit (or the lease)
     int      brakeLeadMs = 0;     // start braking this much travel-time early (brakeLeadMs()); 0 = on the mark
+    int      floorLeadMs = 0;     // the same against the policy floor; never 0 there (see the supervisor)
 };
 
 // A step and the policy floor are targets the mast must come to REST on, not merely reach: a
@@ -210,7 +298,7 @@ class LifterCreep {
         if (universalExit(in, in.lifterDiag, o)) { pending_ = o; finished_ = true; return pending_; }
         if (braking_) { if (static_cast<int32_t>(now - brakeUntil_) >= 0) { finished_ = true; return pending_; } return StepOutcome::running(); }
         Ticks back = hist_[histIdx_]; hist_[histIdx_] = pos; histIdx_ = (histIdx_ + 1) % kVelWindow;   // where it was kVelWindow ms ago
-        Ticks ahead = aheadTicks(pos, back);
+        Ticks ahead = aheadTicks(pos, back, p_.brakeLeadMs);
         if ((p_.dir > 0 && in.topLimit) || (p_.dir < 0 && in.bottomLimit)) return beginBrake(StepOutcome::done(JobResult::DoneLimit, Reason::LimitReached, pos), now);
         // The switch at the end we are moving AWAY from can only make if the mast is going the
         // other way: a reversed mechanism (v3's "inverted") or swapped limit wires. The encoder
@@ -219,7 +307,8 @@ class LifterCreep {
         bool away = p_.dir > 0 ? in.bottomLimit : in.topLimit;
         if (primed_ && away && !awayWas_) return beginBrake(StepOutcome::failed(JobResult::Failed, Reason::WrongLimit, pos), now);
         awayWas_ = away; primed_ = true;
-        Ticks floorAhead = ahead > 0 ? ahead + ahead / 4 + 1 : 0;
+        Ticks floorLead = aheadTicks(pos, back, p_.floorLeadMs > p_.brakeLeadMs ? p_.floorLeadMs : p_.brakeLeadMs);
+        Ticks floorAhead = floorLead > 0 ? floorLead + floorLead / 4 + 1 : 0;
         if (p_.dir < 0 && pos - floorAhead <= p_.floorTicks) return beginBrake(StepOutcome::done(JobResult::Clamped, Reason::RotaryNotHome, pos), now);
         if (p_.stopAfter > 0 && (pos - start_) * p_.dir + ahead >= p_.stopAfter) return beginBrake(StepOutcome::done(JobResult::DoneTarget, Reason::TargetReached, pos), now);
         if (p_.jog && !in.jogLeaseLive) return beginBrake(StepOutcome::done(JobResult::Done, Reason::LeaseExpired, pos), now);
@@ -239,10 +328,10 @@ class LifterCreep {
   private:
     StepOutcome beginBrake(StepOutcome pending, Ms now) { pending_ = pending; brakeUntil_ = now + kBrakeMs; braking_ = true; return StepOutcome::running(); }
     // ticks the mast will run on if the brake goes on now (rounded up; 0 without a lead)
-    Ticks aheadTicks(Ticks pos, Ticks back) const {
+    Ticks aheadTicks(Ticks pos, Ticks back, int leadMs) const {
         Ticks moved = (pos - back) * p_.dir;
-        if (moved <= 0 || p_.brakeLeadMs <= 0) return 0;
-        return (moved * p_.brakeLeadMs + kVelWindow - 1) / kVelWindow;
+        if (moved <= 0 || leadMs <= 0) return 0;
+        return (moved * leadMs + kVelWindow - 1) / kVelWindow;
     }
     Ticks hist_[kVelWindow] = {};
     int histIdx_ = 0;
@@ -258,8 +347,6 @@ class LifterCreep {
 // ---------------------------------------------------------------- calibration
 // (appended; see docs/REWRITE-PLAN.md Appendix F.3 "LifterCalibrate")
 namespace uppity {
-
-constexpr int kSlots = 21;   // 0, 5, 10 ... 100 %
 
 // How early a creep starts braking, as a time. The calibration stored, for each 5 % slot, the
 // cruise speed (ticks/s) and how far the mast ran on after the brake (ticks); their ratio is close

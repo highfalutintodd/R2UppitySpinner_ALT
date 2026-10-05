@@ -197,7 +197,10 @@ TEST(spin_runs_until_preempted_and_stalls_when_jammed) {
 
 TEST(jog_floors_at_12_percent_and_needs_override_below_safe_height) {
     Rig g(gregConfig(false)); g.hal.lifter.setPosition(100); g.hal.rotary.setPosition(500); g.boot();
-    g.seek(450, 0, true); g.runUntilIdle(20000); g.seek(100, 700); g.runUntilIdle(20000);
+    g.seek(450, 0, true); g.runUntilIdle(20000);
+    g.req(JobKind::RotaryHome); g.runUntilIdle(60000);                // home, so the descent below the safe height is allowed
+    g.seek(100, 700); g.runUntilIdle(20000);                          // (a turned head now stops above it: Phase 5 Part A)
+    CHECK(g.snap().lifterTicks < 225);
     g.queue.jogKeepalive(g.hal.nowMs());
     g.req(JobKind::RotaryJog, 50); g.runMs(20);
     const Event* e = g.last(Ev::Refused); CHECK(e != nullptr); if (e) CHECK_EQ(e->b, (int)Reason::BelowSafeHeight);

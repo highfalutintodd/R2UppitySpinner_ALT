@@ -46,7 +46,7 @@ class Sim:
         self.jogUntil = 0; self.jog = None
         self.cm = {"step": 0, "active": False, "run": "idle", "msg": "", "detail": 0, "prevSafeSpin": 0}
         self.enabledUntil = 0
-        self.log = "Uppity Spinner ALT v4.0.0-dev  phase 4  build %s  (dev server)\nHAL=ok\nEXPANDER=ok (drivers off, lights off)\nSETTINGS=loaded schema 4\nREADY (type #PHELP)\n" % self.build
+        self.log = "Uppity Spinner ALT v4.0.0-dev  phase 5  build %s  (dev server)\nHAL=ok\nEXPANDER=ok (drivers off, lights off)\nSETTINGS=loaded schema 4\nREADY (type #PHELP)\n" % self.build
         threading.Thread(target=self.run, daemon=True).start()
 
     # ---- helpers
@@ -253,7 +253,7 @@ class Sim:
         m = re.match(r"#P([A-Z]+)=(.*)$", line)
         if m and m.group(1) not in ("SEQNAME",): self.setkey(m.group(1), m.group(2)); return
         if line == "#PSTATE": say("STATE=%s lifter=%d/%d(%d%%) rotary %ddeg" % (self.job, self.lifter, self.travel(), self.pct(), self.rot)); return
-        if line == "#PSTATUS": say("VERSION=4.0.0-dev phase4 build %s\nWIFI=ap \"R2Uppity-SIM0\" 192.168.4.1 clients=1 home=WordNet up 127.0.0.1" % self.build); return
+        if line == "#PSTATUS": say("VERSION=4.0.0-dev phase5 build %s\nWIFI=ap \"R2Uppity-SIM0\" 192.168.4.1 clients=1 home=WordNet up 127.0.0.1" % self.build); return
         if line == "#PCONFIG":
             say("CONFIG=begin v4.0.0-dev schema=4 (every #P line below can be pasted back)")
             for k in ["MOTOR", "INVERT", "TRAVEL", "SAFESPIN", "ROTARYTPR", "HOMEOFFSET", "HOMEPARK", "WIGGLE", "MINUP", "MINDOWN", "APPROACH", "EXPERT", "DRIFT", "ROTARYMIN", "ROTARYOFF", "DRIVESIGN", "AGGRESSION", "ID", "BAUD", "DEDUP", "DEBUG", "CMDTX", "LIFTERNC", "ROTARYNC", "WIFI", "APCHANNEL", "THEME", "RANDOMLIGHT", "COMMISSIONED"]:
@@ -356,7 +356,7 @@ class Sim:
     def restart(self):
         def later():
             time.sleep(0.8)
-            with self.lock: self.build = "%08x" % random.getrandbits(32); self.t0 = time.time(); self.log += "\nUppity Spinner ALT v4.0.0-dev  phase 4  build %s  (dev server, restarted)\nREADY\n" % self.build
+            with self.lock: self.build = "%08x" % random.getrandbits(32); self.t0 = time.time(); self.log += "\nUppity Spinner ALT v4.0.0-dev  phase 5  build %s  (dev server, restarted)\nREADY\n" % self.build
         threading.Thread(target=later, daemon=True).start()
 
     def stop(self):

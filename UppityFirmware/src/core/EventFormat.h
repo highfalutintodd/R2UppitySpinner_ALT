@@ -86,6 +86,7 @@ inline int formatEvent(const Event& e, char* buf, size_t n) {
                                                e.c ? "" : "; contact arc narrower than two creep steps");
             if (e.a == 6) return std::snprintf(buf, n, "%sNUDGE came to rest %+ld ticks from where it started (asked %+ld)", head, (long)e.b, (long)e.c);
             if (e.a == 7) return std::snprintf(buf, n, "%sCLAMP came to rest at %ld, %+ld from the safe-spin height %ld", head, (long)e.b, (long)(e.b - e.c), (long)e.c);
+            if (e.a == 8) return std::snprintf(buf, n, "%sSEEK came to rest at %ld, %+ld from its target %ld", head, (long)e.b, (long)(e.b - e.c), (long)e.c);
             return std::snprintf(buf, n, "%sMEASURE %ld %ld %ld", head, (long)e.a, (long)e.b, (long)e.c);
         case Ev::Refused: return std::snprintf(buf, n, "%s%s REFUSED %s", head, jobName(e.a), reasonName(e.b));
         case Ev::Override: return e.a ? std::snprintf(buf, n, "%sOVERRIDE on for %lds: descents without a home and rotary jog below the safe-spin height are allowed", head, (long)(e.b + 999) / 1000)

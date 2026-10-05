@@ -99,6 +99,12 @@ class MotionSupervisor {
     // After a creep has stopped a turned head at the safe-spin height, a rise of this much (or a
     // home, or a new safe-spin setting) re-arms descents: from there it can brake early again.
     static constexpr Ticks kClampRearmTicks = 20;
+    // A turned head sent down from close above the safe-spin height (Phase 5 Part A): from rest, a
+    // seek's full-power breakaway gathers more speed than any estimate sees in time (the simulated
+    // 19:1 started 9-30 ticks above came to rest up to 7 below). Within kClampRearmTicks it does not
+    // move at all; up to kClampCreepTicks it goes the slow way, the creep Rescue's jog uses (bench
+    // 2026-10-04: +4 above 1100); from farther up the seek brakes early with the floor's margin.
+    static constexpr Ticks kClampCreepTicks = 60;
 
     MotionSupervisor(Hal& hal, EstopLatch& estop, CommandQueue& queue, SnapshotPublisher& pub, EventLog& events);
 
@@ -165,6 +171,7 @@ class MotionSupervisor {
     void refuse(const Step& s, Reason why, uint32_t id, const TickInputs& in);
     PolicyContext policy(const TickInputs& in) const;
     void markAlignmentSuspect(Ms now);
+    int  startFloorCreep(Ticks floor, const TickInputs& in);
     void updateAlignment(const TickInputs& in);
     Ticks travel() const;
     Ticks safeSpin() const;
@@ -239,8 +246,8 @@ class MotionSupervisor {
     bool jogByOverride_ = false;          // the running jog was allowed only because the override was on (D4)
     bool clampHold_ = false;              // a creep came to rest at the safe-spin height with the head turned (SafetyPolicy clampHeld)
     Ticks clampAt_ = 0, clampFloor_ = 0;
-    uint8_t restReport_ = 0;              // 6 nudge / 7 clamped creep: log where it came to rest once the counts are still
-    Ticks restFrom_ = 0, restFloor_ = 0;
+    uint8_t restReport_ = 0;              // 6 nudge / 7 clamped creep or seek / 8 seek: log where it came to rest once the counts are still
+    Ticks restFrom_ = 0, restFloor_ = 0;  // where it started; the floor (7) or the target (8)
     int32_t restAsked_ = 0;
     Ms restSince_ = 0;
     bool overrideWas_ = false;            // for the OVERRIDE on/off log lines (set, expired, cancelled, cleared by E-STOP)

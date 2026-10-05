@@ -170,7 +170,7 @@ TEST(seek_clamps_at_safe_height_when_rotary_unknown_and_says_why) {
     g.seek(0, 700); g.runUntilIdle(20000);
     const Event* c = g.last(Ev::SeekClamped);
     CHECK(c != nullptr); if (c) { CHECK_EQ(c->a, 0); CHECK_EQ(c->b, 225); CHECK_EQ(c->c, static_cast<int32_t>(Reason::RotaryNotHome)); }
-    CHECK(absl(g.snap().lifterTicks - 225) <= 15);            // parked at the safe height, loudly
+    CHECK(g.snap().lifterTicks >= 225); CHECK(g.snap().lifterTicks <= 225 + 30);   // no table: brakes 60 ms early there (Phase 5 Part A), not on the mark            // parked at the safe height, loudly
     // Now put the head on the switch at rest: SwitchLive -> home -> descent allowed
     g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks);
     g.runMs(500);                                             // an at-rest switch state has to hold 400 ms to count
@@ -374,7 +374,7 @@ TEST(jog_down_stops_at_safe_height_when_not_home_and_obeys_lease) {
     for (int i = 0; i < 6000 && g.snap().lifterTicks > 240; ++i) { g.queue.jogKeepalive(g.hal.nowMs()); g.runMs(1); }
     g.runUntilIdle(500);
     CHECK(g.snap().lastResult == JobResult::Clamped);
-    CHECK(absl(g.snap().lifterTicks - 225) <= 15);
+    CHECK(g.snap().lifterTicks >= 225); CHECK(g.snap().lifterTicks <= 225 + 30);   // no table: brakes 60 ms early there (Phase 5 Part A), not on the mark
     // lease: a jog without keepalive ends by itself (up from the bottom, well short of the top)
     g.hal.lifter.setPosition(0); g.runMs(5);
     g.queue.jogKeepalive(g.hal.nowMs());

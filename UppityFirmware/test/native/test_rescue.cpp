@@ -259,7 +259,7 @@ TEST(crash_20261003_a_turned_head_clamped_at_the_safe_height_stays_there) {
     holdJog(g, -1, 1500);                                                           // first press: stops at the threshold
     CHECK(g.snap().lastResult == JobResult::Clamped);
     Ticks clamped = g.snap().lifterTicks;
-    CHECK(clamped <= 225); CHECK(clamped > 200);
+    CHECK(clamped >= 225); CHECK(clamped <= 225 + 30);                              // no table: it brakes 60 ms early there (Phase 5 Part A); it used to land on or below
     holdJog(g, -1, 1500);                                                           // second press: must not move
     CHECK(g.snap().lastResult == JobResult::Refused); CHECK_EQ(lastRefusalReason(g), (int32_t)Reason::RotaryNotHome);
     CHECK(g.snap().lifterTicks >= clamped - 2);
@@ -286,24 +286,26 @@ TEST(crash_20261003_the_same_hole_through_two_seeks) {
     CHECK(!g.hal.lifter.bottomLimit());
 }
 
-TEST(crash_20261003_ph_from_the_clamped_state_raises_homes_then_lowers) {
+TEST(crash_20261003_ph_from_the_clamped_state_homes_then_lowers) {
     Rig g(gregConfig(false)); turnedAtTheTop(g);
-    g.seek(0, 650, true); g.runUntilIdle(20000);                                   // clamped at the threshold, head turned
+    g.seek(0, 650, true); g.runUntilIdle(20000); g.runMs(5);                       // clamped at the threshold, head turned
     CHECK(g.snap().alignmentSuspect);
+    Ticks rest = g.snap().lifterTicks; CHECK(rest >= 225);                          // since Phase 5 Part A it rests at or above it
     size_t from = g.log.size();
+    g.watchSafe = 225;
     g.req(JobKind::SafeLower, 0, 700, 0); g.runUntilIdle(120000);
     CHECK(g.snap().lastResult == JobResult::DoneLimit); CHECK(g.hal.lifter.bottomLimit());
     CHECK(!g.snap().alignmentSuspect);
-    // the order: up to the top, home, then down; the head never came down while turned
-    int order[3] = {-1, -1, -1}; int k = 0;
-    for (size_t i = from; i < g.log.size() && k < 3; ++i) {
+    CHECK_EQ(g.turnedBelowSafe, 0); CHECK_EQ(g.rotaryBelowSafe, 0);                 // the head never came down while turned
+    // the order: home, then down (up to the top first only when it rests AT the threshold)
+    int order[2] = {-1, -1}; int k = 0;
+    for (size_t i = from; i < g.log.size() && k < 2; ++i) {
         const Event& e = g.log[i];
         if (e.code != Ev::JobStart) continue;
-        if (k == 0 && e.a == (int32_t)JobKind::LifterSeek && e.b == 450) order[k++] = 0;
-        else if (k == 1 && e.a == (int32_t)JobKind::RotaryHome) order[k++] = 1;
-        else if (k == 2 && e.a == (int32_t)JobKind::LifterSeek && e.b == 0) order[k++] = 2;
+        if (k == 0 && e.a == (int32_t)JobKind::RotaryHome) order[k++] = 0;
+        else if (k == 1 && e.a == (int32_t)JobKind::LifterSeek && e.b == 0) order[k++] = 1;
     }
-    CHECK_EQ(k, 3);
+    CHECK_EQ(k, 2);
 }
 
 TEST(crash_20261003_a_held_jog_that_meets_something_stops_by_itself) {
