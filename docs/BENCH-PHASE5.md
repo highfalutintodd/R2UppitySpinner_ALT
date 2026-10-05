@@ -1,10 +1,12 @@
 # Bench procedure — Phase 5 (seek braking, then the mesh)
 
-For Todd. Phase 5 has two halves. **Part A** is the code review's D5, which you approved on
-2026-10-04: a seek now brakes by the speed it actually reached, so short moves move and every
-move comes to rest close to where it was sent, and a turned head sent down comes to rest at or
-above the safe-spin height, never below it. **The mesh parts (B onward)** follow once Part A has
-passed; they are written after your answers about the WCB fleet.
+For Todd. Phase 5 has two halves, in one build. **Part A** is the code review's D5, which you
+approved on 2026-10-04: a seek now brakes by the speed it actually reached, so short moves move
+and every move comes to rest close to where it was sent, and a turned head sent down comes to
+rest at or above the safe-spin height, never below it. **Part B** is the WCB mesh: off until you
+turn it on, then the periscope is device 5 on your mesh (your answers, 2026-10-04: three WCBs on
+6.2.0, octets 3C:4E, channel 1, checksum on, Sabé at 20, the `;W3;S4` wire stays). Do Part A
+first, with the mesh off; Part B only once Part A has passed.
 
 ## Part A — seek braking (D5)
 
@@ -72,7 +74,8 @@ held: every move is a fixed target.
    ```
    arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
    ```
-   It ends with `Sketch uses 1183503 bytes (60%)` (a few bytes either way is fine).
+   It ends with `Sketch uses 1224987 bytes (62%)` (a few bytes either way is fine; the mesh code
+   makes it about 41 KB bigger than the last build, and it stays off until Part B).
 3. In a second Terminal window, the monitor (leave it running for the whole of Part A):
    ```
    arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-phase5a-log.txt
@@ -89,9 +92,11 @@ held: every move is a fixed target.
 ### Checks
 
 1. **Boot lines.** `Uppity Spinner ALT v4.0.0-dev  phase 5  build …` (a new build id, not
-   `7d93e1d8`), `SETTINGS=loaded schema 4`, `CALIBRATION=loaded travel=1137 … rest=37`, and the
-   `CONFIG` line with `travel=1137 (calibrated) safespin=878 tpr=1185.0`. *Success:* the same
-   numbers as before the install; nothing was re-measured.
+   `7d93e1d8`), once only `SETTINGS=migrated from schema 4 … to 5` and `PERSIST=saved settings`
+   (the settings gained the mesh fields, all off), `CALIBRATION=loaded travel=1137 … rest=37`,
+   the `CONFIG` line with `travel=1137 (calibrated) safespin=878 tpr=1185.0`, `WIFI joined
+   "WordNet"` as before, and `MESH=off (#PMESH1 and #PRESTART …)`. *Success:* the same numbers
+   as before the install; nothing was re-measured.
 2. **Head home, at the top.** On the page: **Operate → Up**, wait for it to stop, then **Home**.
    *Success:* the head ends home and the page shows no alignment banner.
 3. **The presets, head home.** Tap these one at a time, each after the last has stopped:
@@ -183,3 +188,172 @@ sounded different (a move that should have moved and did not, a stop that looked
 - In step 6, `+N` negative (it came to rest below 1100): stop there, tap **Home the head**, type
   `#PSAFESPIN878`, and send the log. At 966 at the very worst the head is still 88 ticks above the
   height you measured with the dome on.
+
+---
+
+## Part B — the WCB mesh
+
+**What it is.** With the mesh on, the periscope joins your WCBs' ESP-NOW network as its own
+board, number 5. From the mesh it takes `:P` moves (through the same safety rules as every other
+source, and never with the rescue override or the commissioning unlock), `#PSTATE`/`#PSTATUS`/
+`#PCONFIG` questions, `#PRESUME`, and the DroidNet verbs `&ESTOP`, `&ESTOP,RESET`, `&DISABLE`,
+`&STATUS`, `&HELLO`; `?STOP`, `&ESTOP` and `:PX` latch the E-STOP the moment they arrive, like on
+the serial ports. Settings, commissioning, unlocking and restarts are refused from the mesh
+(`MESH=refused …`). It sends `&PERI,HB,<version>,<uptime>,<state>,<height %>,<angle>,<homed>`
+every 10 s to everyone, `&PERI,POS,<height %>,<angle>` to Sabé when it moves (at most once a
+second), `&PERI,STATE,…` when the state changes, and `&PERI,FAULT,…` to Sabé (to everyone if Sabé
+does not answer). Anything else on the mesh gets no answer.
+
+**What it costs you.** The mesh library takes over the WiFi station, so **while the mesh is on
+the board does not join WordNet.** The page is then only on the board's own network: join your
+phone or laptop to `R2Uppity-FB3F` (its password as before) and open `http://192.168.4.1`. The
+WordNet details stay stored; turning the mesh off brings everything back after a restart.
+
+**What was tested.** On the Mac: 232 host tests (16 for the mesh: the message types, the E-STOP
+patterns, the `#P` lines the mesh may and may not run, the `&PERI` lines and their timing, the
+settings, the duplicate filter, a mesh `:PP0` with a turned head and the override on (it stops at
+the safe-spin height), and a mesh E-STOP during a descent braking like every other E-STOP). The
+page's Mesh section was driven in the browser against the simulated board. **Nothing has run on a
+real mesh.** The library is Greg's newest, 1.17.1 (commit 534a6c9 from 2026-10-04, not yet tagged;
+`UppityFirmware/libs/WCB_Client/VENDORED.md`).
+
+**One thing I could not check from here.** Your WCBs' quantity is 3 and the periscope is 5. The
+WCBs reach a board above their quantity once they have learned it from its announcements, which
+the periscope sends; whether firmware 6.2.0 already does that is what step 13 finds out, with a
+harmless question. If it does not, nothing is unsafe: the periscope still hears broadcasts and
+sends its heartbeats, and step 13 says what the choices are.
+
+**Rule for Part B:** the head is home (or the mast is at the top) for everything that moves, as
+in Part A. The only motion sent over the mesh is `:PP100` (up, always allowed) and `:PH` (lower
+safely: it homes the head first). The E-STOP test runs during a spin at the top, where every angle
+is clear and you have all the time you need to press Enter.
+
+You need: the WCB config tool or a serial console on one WCB (the DroidNet console works too:
+anything that lets you type a WCB command), and Sabé powered as usual.
+
+### Turn it on
+
+8. On the page (still at the WordNet address): **Setup → Mesh**. Fill in, pressing **Save** after
+   each and waiting for `Saved` under it:
+   - **Mesh MAC octets:** `3C:4E`
+   - **Mesh password:** your WCBs' mesh password (what `?WCBP` shows on a WCB). Type it **here
+     only**: never into the Terminal monitor, which writes every typed line into the log file.
+     After saving, the box shows `(set — type to change)`; the password is never shown or printed.
+   - **How many WCBs:** `3`
+   - **This board's mesh number:** `5`
+   - **Mesh channel:** `1`
+   - **Checksum:** On
+   - **Heartbeat every:** `10`
+   - **Join the mesh:** On. The first **Save** asks again, with the home-network warning; tap it a
+     second time.
+
+   The monitor shows each line, for example `#PMESHID=5 (saved) (takes effect after #PRESTART)`,
+   and `MESH note: after #PRESTART the board joins the WCB mesh and stays OFF your home network…`.
+9. Tap **Restart to apply** (tap twice). The board restarts; the page loses it, as expected.
+10. Join the laptop or phone to the WiFi network `R2Uppity-FB3F` and open `http://192.168.4.1`.
+    In the monitor, the boot now shows:
+    - `WIFI mesh mode: access point on the mesh channel 1, home network not joined (it stays stored).`
+    - a few lines starting `[WCB_Client]` from Greg's library, including a WARNING that device 5 is
+      above the quantity 3 (expected: it is what step 13 checks);
+    - `MESH=joined as id 5 (3 WCBs, octets 3C:4E, channel 1, checksum on); &PERI,HB every 10s …`
+    *Success:* those lines, and no `MESH=not started` or `MESH=FAILED`.
+11. Within a minute: `MESH WCB1 online`, `MESH WCB2 online`, `MESH WCB3 online`, and with Sabé on,
+    `MESH controller 20 online`. Then on the page, **Setup → Mesh** shows `on as 5 · WCBs 3/3 · Sabé
+    seen`, and **Diagnostics** has a Mesh row with the same. Type into the monitor:
+    ```
+    #PSTATUS
+    ```
+    *Success:* a line `MESH=on id=5 wcbs=3/3 online controller=online … hb=N …` with N growing by
+    one every 10 s.
+12. **The heartbeat in DroidNet.** In the DroidNet console (or Sabé's log), lines like
+    `&PERI,HB,4.0.0-dev,123,IDLE,100,0,1` every 10 s (state, height %, angle, 1 = head home).
+    *Success:* they appear. If DroidNet shows nothing but steps 11 and 13 work, the WCB the Pi is
+    on may not be forwarding mesh broadcasts to its USB port; note it and go on.
+
+### Reaching it over the mesh
+
+13. **A harmless question first.** On a WCB's console, type:
+    ```
+    ;W5#PSTATE
+    ```
+    (`;W5` sends the rest to board 5.) *Success:* the periscope's monitor shows `MESH #P line from
+    N` followed by the usual `STATE=…`, `LIMITS=…`, `JOB=…`, `SEQ=…` lines. **If nothing arrives
+    within a few seconds,** try once more after a minute (the WCBs learn board 5 from its
+    announcements, which repeat about once a minute). If it still does not arrive, stop Part B here
+    and tell me: the WCBs on 6.2.0 then do not learn a board above their quantity, and the choices
+    are a WCB firmware update (6.2.1 is Greg's latest release), raising the WCBs' quantity, or
+    broadcasts only. I would not change the WCBs without talking it through.
+14. **A refusal, harmless by design.** On the WCB console:
+    ```
+    ;W5#PSAFESPIN0
+    ```
+    *Success:* `MESH=refused a #P command from the mesh: settings, …` and nothing changes (type
+    `#PSAFESPIN` into the monitor: it still says 878).
+15. **Up, over the mesh.** Make sure the head is home (page: **Operate → Home**). Then on the WCB
+    console:
+    ```
+    ;W5:PP100
+    ```
+    *Success:* `MESH :PP100 from N`, and the mast rises to the top. (If it was already at the top:
+    `already there`.)
+16. **E-STOP over the mesh, during a spin at the top.** With the mast at the top, type into the
+    periscope's monitor:
+    ```
+    :PR40
+    ```
+    The head spins slowly. On the WCB console type `?STOP` and press Enter while it spins.
+    *Success:* the spin stops at once, `MESH ?STOP from N: E-STOP latched` in the monitor, the
+    page shows the red E-STOP banner, and nothing moves until it is released. **If the head keeps
+    spinning,** press **E-STOP** on the page (that always works), note it, and try the DroidNet verb
+    instead once it is released and spinning again: `;W5&ESTOP` (then the WCB does not pass `?STOP`
+    on to a client board). Then release it from the mesh, on the WCB console:
+    ```
+    ;W5&ESTOP,RESET
+    ```
+    *Success:* `ESTOP=released (mesh &ESTOP,RESET from N)`, the banner goes, and nothing starts
+    moving by itself. Then **Operate → Home** to bring the head home.
+17. **&DISABLE, &STATUS and &HELLO.** Start a slow spin again (`:PR40` in the monitor), then on the
+    WCB console:
+    ```
+    ;W5&DISABLE
+    ```
+    *Success:* `STOP=mesh &DISABLE`, the spin ends (not an E-STOP: no banner). **Operate → Home**.
+    Then:
+    ```
+    ;W5&STATUS
+    ```
+    ```
+    ;W5&HELLO
+    ```
+    *Success:* in DroidNet (or Sabé's log) a heartbeat, `&PERI,STATE,IDLE` and `&PERI,ACK,STATUS`
+    right away, then `&PERI,HELLO,4.0.0-dev,1`.
+18. **Lower safely, over the mesh.** Head home or not, on the WCB console:
+    ```
+    ;W5:PH
+    ```
+    *Success:* `MESH :PH from N`; the head homes first if it needs to, then the mast lowers to the
+    bottom. In DroidNet the `&PERI,HB` line now ends `,0,0,1` (height 0, angle 0, home).
+19. **Optional: the same command both ways.** If Sabé (or DroidNet) can send one button both
+    through `;W3;S4` and to board 5, press one that sends `:PP100` both ways at once. *Success:*
+    the mast moves once, and the monitor says `(a duplicate of the same line on the serial bus:
+    ran once)` on one of them.
+
+### Turn it off again (or leave it on)
+
+20. If you want the board back on WordNet: page (at `http://192.168.4.1`) → **Setup → Mesh → Join
+    the mesh: Off → Save**, then **Restart to apply**. After the restart it joins WordNet as before
+    (`WIFI joined "WordNet" …`, and `MESH=off`). The mesh settings stay stored for next time.
+    If you prefer the mesh on, nothing else is needed; the page stays at `http://192.168.4.1`.
+
+### Send back (Part B)
+
+The monitor log (a new file name is fine: change `phase5a` to `phase5b` in the monitor line), what
+step 13 did, and a few `&PERI` lines as DroidNet showed them.
+
+### Not in this build, on purpose
+
+- **Sabé's side** (show `&PERI` on its dashboard, send `&ESTOP,RESET` on its own reset, route `:P`
+  to board 5) is Sabé's repository and needs your go-ahead separately.
+- **The DroidNet Command Library entry for 4.0** is ready in `tools/droidnet/` (validated with the
+  library's own checker). Sending it to Travis is a pull request on his repository: a public step
+  I will not take without your OK.

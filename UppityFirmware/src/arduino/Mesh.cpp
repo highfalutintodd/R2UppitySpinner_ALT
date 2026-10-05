@@ -90,10 +90,17 @@ void Mesh::handle(const char* text, uint8_t sender, Ms now) {
     char b[kMeshPacketMax + 1];
     MeshMsg m = classifyMesh(text);
     switch (m) {
-        case MeshMsg::Line:
+        case MeshMsg::Line: {
             ++ours_;
+            const char* p = text; while (*p == ' ') ++p;
+            bool forUs = p[0] && p[1] == 'P';                     // ":P…" / "#P…"; other boards' lines are not logged
+            uint32_t dupsBefore = d_.disp->droppedDuplicates();
             d_.disp->handleLine(text, ReqSource::Mesh, now);      // the same filter as every port: other boards' lines are silent, duplicates run once
+            bool dup = d_.disp->droppedDuplicates() != dupsBefore;
+            // a "#P" line is logged without its text: it could carry a password
+            if (forUs) d_.console->printf("MESH %s from %u%s", p[0] == ':' ? p : "#P line", sender, dup ? " (a duplicate of the same line on the serial bus: ran once)" : "");
             break;
+        }
         case MeshMsg::Estop:
             d_.console->printf("MESH &ESTOP from %u: E-STOP latched (release: the page's Reset, #PRESUME, or &ESTOP,RESET)", sender);
             if (formatMeshAck(b, sizeof b, m) > 0) reply(b);
