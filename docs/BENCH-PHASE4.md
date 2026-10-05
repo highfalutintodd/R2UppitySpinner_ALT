@@ -722,3 +722,52 @@ Send back the log (`~/Desktop/uppity-bench-phase4-retest4-log.txt`).
   side, as designed.
 
 Every part of Phase 4 has now run on the droid except the optional Part E step 32 and Part F.
+
+## Results 2026-10-04, free testing including Comlink (build 9743ad66)
+
+What you tried:
+- The height presets and the rotary presets.
+- Spins both ways up to 100 %, including one reversed mid-turn, and a new command interrupting a
+  rotation.
+- Random mode at all three levels, including the aggressive multi-turn spins.
+- The light kit modes, and chains from Comlink (lights and up; up, down and lights off).
+- `:PH` stopping a spin and stopping random mode, and **Soft stop**.
+- An E-STOP between moves.
+- Theme changes while moving: saved once the board was idle, as designed.
+- `#PCONFIG`: no passwords printed.
+
+Homes after up to nine turns found the switch within 2 ticks of where the count expected it.
+Everything did what it should.
+
+Two things in the log, both changed in the next build (host tests 163; 1,176,727 bytes, 59 %):
+1. **A head that coasts off the home switch counted as home for up to 400 ms.** At 724.246 a
+   random spin ended just as the head reached the switch; the head coasted 42 ticks on, about 13°
+   past home. While the head is still, a change of the home switch only counts once it has held
+   for 400 ms (that filter stops lifter vibration flickering it), and the "is the head home?"
+   check read that held value. Your `:PH` arrived 618 ms later, just after that window, so the
+   board homed first and then lowered. Inside the window it would have skipped the home and
+   lowered the head turned 13°. Now a head counts as home on the switch only while the switch
+   reads closed at that moment; off it, the count decides (homes show the count is good to a
+   couple of ticks). On the simulator, with a head that coasts 17° past home, the descent queued
+   behind the spin is now held at the safe-spin height; before, it went all the way down.
+2. An E-STOP pressed while nothing is moving now logs `ESTOP nothing was moving; drivers off`
+   instead of "braked to a stop … after 0 ms".
+
+## Before Phase 5: install the latest build
+
+The window in item 1 cannot be recreated safely by hand, and the simulator covers it. Install the
+build, then run a minute of random mode and a `:PH` after a spin, to see that homing and lowering
+behave as before.
+1. In the Terminal app, one line at a time:
+   ```
+   git -C "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3" merge --ff-only claude/uppity-spinner-phase-4-1e5680
+   ```
+   ```
+   cd "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3"
+   ```
+   ```
+   arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
+   ```
+   It ends with `Sketch uses 1176727 bytes (59%)`.
+2. **Setup → Firmware → Choose File**, `UppityFirmware.ino.bin` in the `uppity-build` folder on
+   your Desktop, **Upload**.

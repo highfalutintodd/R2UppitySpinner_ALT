@@ -14,7 +14,8 @@ web pages (Operate, Setup, Diagnostics, Rescue), firmware upload from the page, 
 (60 s override, hold-to-jog, `#PNUDGE`, `#PSETHOME`) and commissioning, run end to end with the
 dome on. Latest commit on the session branch `claude/uppity-spinner-phase-4-1e5680`: the one
 that added this brief (Todd fast-forwards `v4-rewrite` to it). Build on the droid: `9743ad66`.
-Host tests: 161. Flash: 1,176,647 bytes of 1,966,080 (59 %).
+Host tests: 163. Flash: 1,176,727 bytes of 1,966,080 (59 %) (the last fix, a home-check window
+found in Todd's free testing, is in `docs/BENCH-PHASE4.md`; install it before starting).
 
 Todd's numbers (all stored on the board; nothing to re-send after a flash): 19:1 profile,
 inverted, travel 1137 between the switch closings (calibrated, `#PTRAVEL0`), the mast rests up
@@ -33,6 +34,9 @@ is DHCP and has been `192.168.86.69` lately (the `WIFI joined` boot line shows i
   the mast free-wheeled down, because the simulator modelled the screw as self-locking (it now
   has a back-drive model). A mesh E-STOP must land on the same latch as every other source
   (`EstopLatch::trip`, from any context) and nothing else; test it on the simulator and bench it.
+- **A trust label is not the sensor.** The rotary's SwitchLive label lags the switch by a 400 ms
+  hold at rest; "is the head home" must read the switch itself (fixed in `rotaryIsHome`). Any new
+  input that gates motion (mesh commands included) must look at current state, not a filtered one.
 - **Every position reference uses the same point**, the switch closings: 0 at the bottom switch,
   the travel at the top switch, the calibration's end, and power-up. The `&PERI` height must be
   derived from the same count, as a share of the travel.

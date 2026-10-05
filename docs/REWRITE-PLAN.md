@@ -677,6 +677,13 @@ bottom, check the top closing), then Phase 5.
 1131 for 1137 of travel (it was 1172 that morning); `#PTRAVEL0` is in use. Phase 5 starts from
 `docs/PHASE5-BRIEF.md`.
 
+**Later the same day:** Todd's free testing (random at all levels, spins, Comlink chains, `:PH`
+interrupting spins and random) found a window in `rotaryIsHome`: SwitchLive follows the switch only
+after a 400 ms hold at rest (and not at all while the rotary is busy), so a head that coasted off the
+switch after a spin still counted as home and a descent queued behind the spin could start (one coasted
+13° past home; Todd's `:PH` came 618 ms later and homed first). SwitchLive now counts as home only while
+the switch reads closed; off it the count decides, as for Latched. 163 host tests; 1,176,727 bytes.
+
 ---
 
 ## 6. Verification strategy

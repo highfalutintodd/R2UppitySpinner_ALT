@@ -445,3 +445,36 @@ TEST(clamp_hold_rearms_after_a_rise_and_ends_with_a_home_or_a_new_safe_spin_heig
     g.seek(0, 0, true); g.runUntilIdle(20000);
     CHECK(g.snap().lastResult == JobResult::DoneLimit);
 }
+
+// ---------------------------------------------------------------- bench 2026-10-04: a head that coasts off the switch
+// A random spin ended as the head entered the home switch and the head coasted ~45 ticks on.
+// The trust label stayed SWITCH_LIVE until the switch had read open for 400 ms at rest, so for
+// that long the head counted as home wherever it had stopped.
+
+TEST(policy_switch_live_counts_as_home_only_while_the_switch_is_closed) {
+    PolicyContext c; c.ticksPerRev = 1185.f; c.safeSpinTicks = 225;
+    c.lifter.confidence = LifterConfidence::Known; c.lifter.ticks = 450;
+    c.rotary.confidence = HomeConfidence::SwitchLive;
+    c.homeSwitch = true;  c.rotary.ticks = 60;  CHECK(rotaryIsHome(c));       // on the switch: home
+    c.homeSwitch = false; c.rotary.ticks = 60;  CHECK(!rotaryIsHome(c));      // off it, 18 degrees by the count: not home
+    c.homeSwitch = false; c.rotary.ticks = 10;  CHECK(rotaryIsHome(c));       // off it but within 10 degrees: home
+    c.rotary.ticks = 60; Decision d = checkLifterSeek(c, 450, 0);
+    CHECK(d.verdict == Verdict::Clamp); CHECK_EQ(d.value, 225);
+}
+
+TEST(descent_queued_behind_a_spin_that_coasts_past_home_is_clamped) {
+    Rig g(gregConfig(false)); g.hal.lifter.setPosition(450);
+    sim::RotaryParams rp = g.hal.rotary.params(); rp.tauBrakeMs = 200; g.hal.rotary.setParams(rp);   // a head that coasts well past
+    g.setRotaryAngleFromCentre(0); g.boot();
+    g.req(JobKind::RotarySpin, 700);
+    bool left = false;
+    for (int i = 0; i < 20000; ++i) { g.runMs(1); bool on = g.hal.rotary.homeSwitch(); if (!on) left = true; if (left && on) break; }
+    g.seek(0, 0, true);                                                         // arrives as the head reaches the switch
+    double lowest = 1e9;
+    for (int k = 0; k < 4000; ++k) { g.runMs(1); if (g.hal.lifter.position() < lowest) lowest = g.hal.lifter.position(); }
+    double a = std::fmod(g.hal.rotary.position() - rp.camCentreTicks, rp.ticksPerRev); if (a < 0) a += rp.ticksPerRev;
+    if (a > rp.ticksPerRev / 2) a -= rp.ticksPerRev;
+    CHECK(std::fabs(a) * 360.0 / rp.ticksPerRev > 10.0);                       // it did stop outside the home window
+    CHECK(lowest >= 222);                                                       // before: down to ~100 with the head 17 degrees off
+    CHECK(g.last(Ev::SeekClamped) != nullptr);
+}

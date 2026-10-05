@@ -59,10 +59,18 @@ inline Ticks homeToleranceTicks(float ticksPerRev) {
 }
 
 // "Is the head aligned with the dome opening?" — the only definition in the firmware.
+// SwitchLive means "resting on the switch", but that label follows the switch slowly at rest (a
+// change must hold 400 ms there, against the flicker a lifter thump causes), and not at all while
+// the rotary is busy. A head that coasted off the switch after a spin stayed "home" for that long
+// (bench 2026-10-04: one stopped ~9 degrees past; a faster one stops beyond the 10-degree window)
+// and a descent queued behind the spin could start. So SwitchLive counts as home only while the
+// switch reads closed now; off it, the count decides, as for Latched.
 inline bool rotaryIsHome(const PolicyContext& c) {
     if (c.rotaryDisabled) return true;
     switch (c.rotary.confidence) {
-        case HomeConfidence::SwitchLive: return absl(c.homeOffsetTicks) <= homeToleranceTicks(c.ticksPerRev > 0 ? c.ticksPerRev : 1184.f);   // on the switch = at the centre
+        case HomeConfidence::SwitchLive:
+            if (c.homeSwitch) return absl(c.homeOffsetTicks) <= homeToleranceTicks(c.ticksPerRev > 0 ? c.ticksPerRev : 1184.f);   // on the switch = at the centre
+            [[fallthrough]];
         case HomeConfidence::Latched: {
             if (c.ticksPerRev <= 0) return false;
             Ticks tpr = static_cast<Ticks>(c.ticksPerRev + 0.5f);

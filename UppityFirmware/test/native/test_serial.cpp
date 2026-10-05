@@ -157,7 +157,9 @@ TEST(event_formatter_writes_readable_lines) {
     e.code = Ev::EstopSettled; e.a = -14; e.b = 0; e.c = 152;
     formatEvent(e, buf, sizeof buf);
     CHECK(std::string(buf) == "t=12.345 ESTOP braked to a stop: lifter -14 ticks, rotary +0 since the latch; drivers off after 152 ms");
-    e.c = 2000 | 0x10000; formatEvent(e, buf, sizeof buf);
+    e.a = 0; e.b = 0; e.c = 0; formatEvent(e, buf, sizeof buf);
+    CHECK(std::string(buf) == "t=12.345 ESTOP nothing was moving; drivers off");
+    e.a = -14; e.c = 2000 | 0x10000; formatEvent(e, buf, sizeof buf);
     CHECK(std::string(buf).find("drivers off after 2000 ms of braking, before the counts settled") != std::string::npos);
     e.code = Ev::Alignment; e.a = 0; e.b = 1118; e.c = 1; formatEvent(e, buf, sizeof buf);
     CHECK(std::string(buf) == "t=12.345 ALIGNMENT above the safe-spin height again at 1118: the head may turn here, and must home before going below that height");
