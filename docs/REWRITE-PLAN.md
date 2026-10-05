@@ -684,6 +684,26 @@ switch after a spin still counted as home and a descent queued behind the spin c
 13° past home; Todd's `:PH` came 618 ms later and homed first). SwitchLive now counts as home only while
 the switch reads closed; off it the count decides, as for Latched. 163 host tests; 1,176,727 bytes.
 
+**Status 2026-10-04 (late night): Phase 5 implemented**, awaiting the bench (`docs/BENCH-PHASE5.md`,
+branch `claude/phase5-mesh`). Part A, the code review's D5: a seek brakes `ahead` ticks before its
+target, its speed over the last 16 ms (carried forward by a quarter of the change between the two
+8 ms halves while it is clearly accelerating or slowing) times the braking time the calibration
+table gives at that speed (`BrakeTable`, each slot held within half and twice the median); short
+steps always run the breakaway burst (pulsed power from rest starves a 19:1); a run to a switch is
+unchanged. Every descent the policy gives a floor (the creep's floor: the head may be turned)
+brakes against it on the safe side (higher estimate, the longer time, a quarter and a tick; 60 ms
+with no table), and from close above it is held where it is (≤ 20 ticks) or goes the slow way, as
+a creep (≤ 60 ticks); a seek stopped at the floor holds the clamp. On the simulator (a copy of
+Todd's 19:1 with its own calibration) steps of 10-400 ticks land within 9 ticks (mean 2.5); before,
+nothing under ~60 ticks moved. An independent review of the first version found a turned head sent
+to a target just *above* the floor could overshoot below it; fixed and tested. The mesh (§1.1):
+off by default; WCB_Client 1.17.1 vendored in `libs/WCB_Client`; `MeshProtocol.h` decides (pure)
+and `Mesh.cpp` moves bytes; the radio task only trips the latch and copies the line; mesh `:P` is
+unattended (`ReqSource::Mesh`), mesh `#P` is limited to questions and `#PRESUME`; `&PERI` per C.2
+with HB/POS/STATE/FAULT/ACK/HELLO; mesh on = AP on the mesh channel, no home network; settings
+schema 5. Todd's device id is 5 with a WCB quantity of 3: the WCBs must learn it from its WDP
+adverts (bench step 13 checks). 232 host tests; 1,224,987 bytes (62 %).
+
 ---
 
 ## 6. Verification strategy
