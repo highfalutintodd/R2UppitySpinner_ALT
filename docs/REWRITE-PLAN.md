@@ -699,10 +699,10 @@ nothing under ~60 ticks moved. An independent review of the first version found 
 to a target just *above* the floor could overshoot below it; fixed and tested. The mesh (§1.1):
 off by default; WCB_Client 1.17.1 vendored in `libs/WCB_Client`; `MeshProtocol.h` decides (pure)
 and `Mesh.cpp` moves bytes; the radio task only trips the latch and copies the line; mesh `:P` is
-unattended (`ReqSource::Mesh`), mesh `#P` is limited to questions and `#PRESUME`; `&PERI` per C.2
+unattended (`ReqSource::Mesh`), mesh `#P` is limited to `#PSTATE`/`#PSTATUS`/`#PCAL`/`#PHELP` and `#PRESUME` (nothing that reads flash); a mesh message that is not exactly one line of at most 207 characters is dropped whole; `&PERI` per C.2
 with HB/POS/STATE/FAULT/ACK/HELLO; mesh on = AP on the mesh channel, no home network; settings
 schema 5. Todd's device id is 5 with a WCB quantity of 3: the WCBs must learn it from its WDP
-adverts (bench step 13 checks). 232 host tests; 1,224,987 bytes (62 %).
+adverts (bench step 13 checks). A second review of the mesh found six defects, all fixed with tests. 234 host tests; 1,225,487 bytes (62 %).
 
 ---
 
