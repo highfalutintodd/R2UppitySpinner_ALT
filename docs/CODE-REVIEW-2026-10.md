@@ -302,8 +302,9 @@ used against the safe-spin floor for a turned head, has no safe-side margin (a c
 extra); on your calibrated lifter today it stops short, which is the safe side, and your 878
 includes a 34-tick margin. *Change:* brake by the speed actually reached, from the same
 calibration table, with the creep's quarter margin when the target is the safe-spin floor. It
-changes every seek, so it needs its own bench run with the head home. **Recommend: next session,
-with a bench section of its own.**
+changes every seek, so it needs its own bench run with the head home. **Todd's decision
+(2026-10-04): build it as Part A of Phase 5** (spec, tests and bench constraints in
+`docs/PHASE5-BRIEF.md`).
 
 **D6. A wrong `#PTRAVEL` moves every height** (medium). `src/core/MotionSupervisor.cpp:155-163`.
 Finding 3 covers the profile guess. A `#PTRAVEL` larger than the real switch-to-switch distance
@@ -554,3 +555,10 @@ The rotary test takes about 10 s, which gives plenty of time to queue a turn beh
 4. *Success:* the test stops (`ROTARYTEST ABORTED CANCEL`), the log shows `ROT_ABS REFUSED CANCEL`,
    and the head does not go to 90°. Nothing is stored: a stopped test changes no setting. Then
    press **Home the head**.
+
+## Results 2026-10-04, D2 re-test (same build)
+
+At the top, `#PROTARYTEST`, then **Soft stop** while it turned: `ROTARYTEST ABORTED CANCEL`, the head
+stopped where it was, and nothing was stored (no `ROTARY stored` line). **Home the head** then found
+the switch at the third turn as expected. The 90° press never reached the board (no `QUEUED=ROT_ABS`
+in the log), so there was no queued move for Stop to cancel: that half of D2 rests on its host test.
