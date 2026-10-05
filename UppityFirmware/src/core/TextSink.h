@@ -8,7 +8,7 @@ struct TextSink {
     virtual ~TextSink() = default;
     virtual void line(const char* text) = 0;
     void printf(const char* fmt, ...) __attribute__((format(printf, 2, 3))) {
-        char buf[200];
+        char buf[300];          // a #PS line with a full 254-character stored sequence must print whole (#PCONFIG replays it)
         va_list ap; va_start(ap, fmt); std::vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
         line(buf);
     }

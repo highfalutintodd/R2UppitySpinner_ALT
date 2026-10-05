@@ -103,15 +103,18 @@ inline void sanitize(Settings& s) {
     if (s.theme > 1) s.theme = 0;
 }
 
-// Load `stored` bytes (a blob written by this or an earlier schema) over defaults. Returns
-// the schema the blob carried, 0 if the blob was unusable (too short or from the future).
+// Load `stored` bytes over defaults. Returns the schema the blob carried, 0 if it was unusable
+// (too short or no schema). A blob from a NEWER build (an older build flashed over it) is read for
+// what this build knows: the layout only ever grows at the end, so the known part means the same.
+// The caller must not write it back (code review 2026-10, finding 12: it used to be replaced with
+// defaults, losing INVERT, the safe-spin height and the commissioning).
 inline uint16_t migrateSettings(Settings& out, const uint8_t* blob, size_t n) {
     out = Settings{};
-    if (n < 8) return 0;                                     // not even the header
+    if (n < offsetof(Settings, schema) + sizeof(out.schema)) return 0;   // not even the header
     Settings tmp{};
     size_t take = n < sizeof(Settings) ? n : sizeof(Settings);
     std::memcpy(&tmp, blob, take);
-    if (tmp.schema == 0 || tmp.schema > kSettingsSchema) return 0;
+    if (tmp.schema == 0) return 0;
     // schema-specific defaults for fields that did not exist when the blob was written go here
     // (a reserve byte reads as 0, so a field whose default is 0 needs nothing):
     if (tmp.schema < 2) tmp.randomLight = 0;
@@ -145,13 +148,14 @@ struct Calibration {
 };
 static_assert(sizeof(Calibration) == 256, "Calibration layout changed");
 
+// As migrateSettings: a newer blob is read for its known part and must not be written back.
 inline uint16_t migrateCalibration(Calibration& out, const uint8_t* blob, size_t n) {
     out = Calibration{};
     if (n < 8) return 0;
     Calibration tmp{};
     size_t take = n < sizeof(Calibration) ? n : sizeof(Calibration);
     std::memcpy(&tmp, blob, take);
-    if (tmp.schema == 0 || tmp.schema > kCalibrationSchema) return 0;
+    if (tmp.schema == 0) return 0;
     out = tmp; out.schema = kCalibrationSchema;
     if (out.travel < 100 || out.travel > 5000) out.valid = 0;
     return tmp.schema;
@@ -314,6 +318,13 @@ inline char* stringField(Settings& s, const StringKey& k) { return reinterpret_c
 inline const char* stringField(const Settings& s, const StringKey& k) { return reinterpret_cast<const char*>(&s) + k.offset; }
 inline void setStringField(Settings& s, const StringKey& k, const char* v) { std::snprintf(stringField(s, k), k.cap, "%s", v ? v : ""); }
 
+// A value the console may store. WPA2 needs 8 to 63 characters: a shorter access-point password
+// is refused with nothing changed (sanitize() used to turn it into the published default
+// "Astromech" and save that). Empty clears the home network, which is fine.
+inline bool acceptStringValue(const StringKey& k, const char* v) {
+    if (std::strcmp(k.name, "APPASS") == 0) return v && std::strlen(v) >= 8;
+    return true;
+}
 inline const SettingKey* findSettingKey(const char* name, size_t len) {
     for (int i = 0; i < kSettingKeyCount; ++i) {
         const char* k = kSettingKeys[i].name;
@@ -351,41 +362,66 @@ inline void ImportReport::add(const char* fmt, ...) {
 // One-shot, conservative: a v3 value is taken only when it is clearly the builder's own
 // number, never when it is v3's default (a default is a guess about somebody else's hardware:
 // v3's minheight default of half travel is what let Todd's head hit the lifter frame).
-inline void importV3(Settings& s, const V3Prefs& v, ImportReport& rep) {
+// keepOwn (a forced #PV3IMPORT on a board that already has numbers): a v3 value only fills a
+// setting the board has not got its own value for, so a measured or commissioned number is never
+// replaced by v3's (code review 2026-10: 1185.0 ticks/rev became 1191, safe-spin 878 became 904).
+// calibrated: the lifter calibration applies, so v3's minimum powers are not taken over it.
+inline void importV3(Settings& s, const V3Prefs& v, ImportReport& rep, bool keepOwn = false, bool calibrated = false) {
     rep.n = 0; rep.taken = 0;
     if (!v.present) { rep.add("V3 import: no v3 settings in flash (nothing to take)"); s.v3Imported = 1; return; }
+    auto kept = [&](const char* what) { rep.add("V3 import: kept this board's own %s", what); };
     uint8_t motor = s.motor;
-    if (v.motortype >= 0 && v.motortype < static_cast<int32_t>(LifterMotor::Count)) { motor = static_cast<uint8_t>(v.motortype); s.motor = motor; rep.add("V3 import: motor profile %d (%s)", (int)motor, profileFor(static_cast<LifterMotor>(motor)).name); ++rep.taken; }
+    if (v.motortype >= 0 && v.motortype < static_cast<int32_t>(LifterMotor::Count)) {
+        if (keepOwn && s.commissioned) kept("motor profile (commissioned)");
+        else { motor = static_cast<uint8_t>(v.motortype); s.motor = motor; rep.add("V3 import: motor profile %d (%s)", (int)motor, profileFor(static_cast<LifterMotor>(motor)).name); ++rep.taken; }
+    }
     else rep.add("V3 import: motortype absent, keeping profile %d", (int)motor);
     const LifterMotorProfile& prof = profileFor(static_cast<LifterMotor>(motor));
     if (v.lftminpwr >= 1 && v.lftminpwr <= 100) {
-        if (v.lftminpwr != prof.defaultMinPowerPct) { s.minPowerUpPct = s.minPowerDownPct = static_cast<uint8_t>(v.lftminpwr); rep.add("V3 import: lifter min power %ld%% (up and down)", (long)v.lftminpwr); ++rep.taken; }
+        if (keepOwn && (calibrated || s.minPowerUpPct || s.minPowerDownPct)) kept(calibrated ? "minimum powers (calibrated)" : "minimum powers");
+        else if (v.lftminpwr != prof.defaultMinPowerPct) { s.minPowerUpPct = s.minPowerDownPct = static_cast<uint8_t>(v.lftminpwr); rep.add("V3 import: lifter min power %ld%% (up and down)", (long)v.lftminpwr); ++rep.taken; }
         else rep.add("V3 import: lifter min power %ld%% is the profile default, skipped", (long)v.lftminpwr);
     }
     if (v.lftseekbotpwr >= 1 && v.lftseekbotpwr <= 100) {
-        if (v.lftseekbotpwr != prof.defaultSeekBottomPowerPct) { s.approachPowerPct = static_cast<uint8_t>(v.lftseekbotpwr); rep.add("V3 import: approach power %ld%%", (long)v.lftseekbotpwr); ++rep.taken; }
+        if (keepOwn && s.approachPowerPct) kept("approach power");
+        else if (v.lftseekbotpwr != prof.defaultSeekBottomPowerPct) { s.approachPowerPct = static_cast<uint8_t>(v.lftseekbotpwr); rep.add("V3 import: approach power %ld%%", (long)v.lftseekbotpwr); ++rep.taken; }
         else rep.add("V3 import: approach power %ld%% is the profile default, skipped", (long)v.lftseekbotpwr);
     }
     if (v.rotminpwr >= 10 && v.rotminpwr <= 100) {
-        if (v.rotminpwr != 40) { s.rotaryMinPct = static_cast<uint8_t>(v.rotminpwr); rep.add("V3 import: rotary min power %ld%%", (long)v.rotminpwr); ++rep.taken; }
+        if (keepOwn && s.rotaryMinPct != 40) kept("rotary minimum power");
+        else if (v.rotminpwr != 40) { s.rotaryMinPct = static_cast<uint8_t>(v.rotminpwr); rep.add("V3 import: rotary min power %ld%%", (long)v.rotminpwr); ++rep.taken; }
         else rep.add("V3 import: rotary min power 40%% is the default, skipped");
     }
     bool travelTaken = false;
     if (v.lftdist >= 100 && v.lftdist <= 5000) {
-        if (v.lftdist != prof.defaultTravelTicks) { s.travelTicks = static_cast<uint16_t>(v.lftdist); travelTaken = true; rep.add("V3 import: travel %ld ticks", (long)v.lftdist); ++rep.taken; }
+        if (keepOwn && (calibrated || s.travelTicks)) kept(calibrated ? "travel (calibrated)" : "travel (#PTRAVEL)");
+        else if (v.lftdist != prof.defaultTravelTicks) { s.travelTicks = static_cast<uint16_t>(v.lftdist); travelTaken = true; rep.add("V3 import: travel %ld ticks", (long)v.lftdist); ++rep.taken; }
         else rep.add("V3 import: travel %ld is the profile guess (v3 never measured it), skipped: send #PTRAVEL<ticks> or run #PSC", (long)v.lftdist);
     }
     if (v.minheight > 0 && v.minheight <= 5000) {
         bool isDefault = v.lftdist > 0 && v.minheight == v.lftdist / 2;
         bool tooHigh = v.lftdist > 0 && v.minheight >= v.lftdist;
-        if (isDefault) rep.add("V3 import: minheight %ld is v3's half-travel default, NOT taken (only the top counts as clear until #PSAFESPIN)", (long)v.minheight);
+        if (keepOwn && s.safeSpinTicks) kept("safe-spin height");
+        else if (isDefault) rep.add("V3 import: minheight %ld is v3's half-travel default, NOT taken (only the top counts as clear until #PSAFESPIN)", (long)v.minheight);
         else if (tooHigh) rep.add("V3 import: minheight %ld is not below travel, skipped", (long)v.minheight);
         else { s.safeSpinTicks = static_cast<uint16_t>(v.minheight); rep.add("V3 import: safe-spin height %ld ticks above the bottom switch (v3 minheight)%s", (long)v.minheight, travelTaken ? "" : "; confirm by eye before the first rotation below the top"); ++rep.taken; }
     }
-    if (v.rotenccount >= 100 && v.rotenccount <= 5000) { s.ticksPerRev = static_cast<float>(v.rotenccount); s.tprConfident = 0; rep.add("V3 import: rotary %ld ticks/rev (v3's figure; #PROTARYTEST3 or #PROTARYTPR<tenths> to refine)", (long)v.rotenccount); ++rep.taken; }
-    if (v.driftpct >= 0 && v.driftpct <= 20 && v.driftpct != 5) { s.driftPct = static_cast<uint8_t>(v.driftpct); rep.add("V3 import: drift %ld%%", (long)v.driftpct); ++rep.taken; }
-    if (v.aggression >= 0 && v.aggression <= 2 && v.aggression != 1) { s.aggressiveness = static_cast<uint8_t>(v.aggression); rep.add("V3 import: aggressiveness %ld", (long)v.aggression); ++rep.taken; }
-    if (v.expertmode == 1) { s.expertMode = 1; rep.add("V3 import: expert mode on"); ++rep.taken; }
+    if (v.rotenccount >= 100 && v.rotenccount <= 5000) {
+        if (keepOwn && s.ticksPerRev > 0) kept("rotary ticks/rev");
+        else { s.ticksPerRev = static_cast<float>(v.rotenccount); s.tprConfident = 0; rep.add("V3 import: rotary %ld ticks/rev (v3's figure; #PROTARYTEST3 or #PROTARYTPR<tenths> to refine)", (long)v.rotenccount); ++rep.taken; }
+    }
+    if (v.driftpct >= 0 && v.driftpct <= 20 && v.driftpct != 5) {
+        if (keepOwn && s.driftPct != 5) kept("drift setting");
+        else { s.driftPct = static_cast<uint8_t>(v.driftpct); rep.add("V3 import: drift %ld%%", (long)v.driftpct); ++rep.taken; }
+    }
+    if (v.aggression >= 0 && v.aggression <= 2 && v.aggression != 1) {
+        if (keepOwn && s.aggressiveness != 1) kept("random level");
+        else { s.aggressiveness = static_cast<uint8_t>(v.aggression); rep.add("V3 import: aggressiveness %ld", (long)v.aggression); ++rep.taken; }
+    }
+    if (v.expertmode == 1) {
+        if (keepOwn && s.commissioned) kept("expert mode setting (commissioned)");
+        else { s.expertMode = 1; rep.add("V3 import: expert mode on"); ++rep.taken; }
+    }
     if (v.wizstate >= 0) rep.add("V3 import: wizard state %ld noted; v4 stays LOCKED until #PUNLOCK (or commissioning, phase 4)", (long)v.wizstate);
     s.v3Imported = 1;
     sanitize(s);

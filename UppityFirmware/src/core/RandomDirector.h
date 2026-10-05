@@ -45,6 +45,9 @@ class RandomDirector {
     // is idle; returns the element count (0 = nothing to do yet).
     int next(Ms now, bool sequencerIdle, const Snapshot& s, const Limits& lim, Command* out, int cap) {
         if (!active_ || cap < 13) return 0;
+        // The console ends the show on the E-STOP event; that event travels through a ring that drops
+        // the newest when full. Seeing the latch here too means the show never resumes after a reset.
+        if (s.estop) { stop("ESTOP"); return 0; }
         if (running_) { if (!sequencerIdle) return 0; running_ = false; dueAt_ = now + nextDelayMs_; }
         if (!sequencerIdle || static_cast<int32_t>(now - dueAt_) < 0) return 0;
         int base = 0;

@@ -51,19 +51,32 @@ class CommandQueue {
     // Out-of-band controls (atomics, any context).
     void cancel() { cancel_.store(true, std::memory_order_release); }
     bool takeCancel() { return cancel_.exchange(false, std::memory_order_acq_rel); }
-    void jogKeepalive(Ms nowMs) { jogUntil_.store(nowMs + kJogLeaseMs, std::memory_order_release); }
+    // Both leases are a deadline, 0 = none. A deadline compared by signed difference reads as live
+    // again once millis() is 2^31 ms (24.9 days) past it, so the supervisor's tick clears an expired
+    // one (expireLeases) within a millisecond of its end, and a computed deadline of 0 is stored as 1.
+    void jogKeepalive(Ms nowMs) { jogUntil_.store(nonZero(nowMs + kJogLeaseMs), std::memory_order_release); }
     // The page's finger came off the jog button: end the lease now instead of letting it run out.
-    // (Stored as "now", not 0: 0 would read as a live lease again once millis() passes 2^31.)
-    void jogRelease(Ms nowMs) { jogUntil_.store(nowMs, std::memory_order_release); }
-    bool jogLeaseLive(Ms nowMs) const { return static_cast<int32_t>(jogUntil_.load(std::memory_order_acquire) - nowMs) > 0; }
-    void setOverride(Ms untilMs) { overrideUntil_.store(untilMs, std::memory_order_release); }
+    void jogRelease(Ms) { jogUntil_.store(0, std::memory_order_release); }
+    bool jogLeaseLive(Ms nowMs) const { return live(jogUntil_.load(std::memory_order_acquire), nowMs); }
+    void setOverride(Ms untilMs) { overrideUntil_.store(untilMs, std::memory_order_release); }   // 0 = off
     Ms   overrideUntil() const { return overrideUntil_.load(std::memory_order_acquire); }
-    bool overrideLive(Ms nowMs) const { Ms u = overrideUntil(); return u != 0 && static_cast<int32_t>(u - nowMs) > 0; }
+    bool overrideLive(Ms nowMs) const { return live(overrideUntil(), nowMs); }
+    // Supervisor tick: an expired deadline becomes 0. A renewal that lands meanwhile wins (CAS).
+    void expireLeases(Ms nowMs) { expire(jogUntil_, nowMs); expire(overrideUntil_, nowMs); }
+
+    // The queue's lock, for the supervisor's settings hand-over (a few hundred bytes copied under it).
+    Lock& guard() { return lock_; }
 
     static constexpr Ms kJogLeaseMs = 2000;
     static constexpr Ms kOverrideMs = 60000;
 
   private:
+    static bool live(Ms until, Ms nowMs) { return until != 0 && static_cast<int32_t>(until - nowMs) > 0; }
+    static Ms nonZero(Ms t) { return t ? t : 1; }
+    static void expire(std::atomic<uint32_t>& a, Ms nowMs) {
+        uint32_t u = a.load(std::memory_order_acquire);
+        if (u != 0 && !live(u, nowMs)) a.compare_exchange_strong(u, 0, std::memory_order_acq_rel);
+    }
     Lock& lock_;
     MotionRequest buf_[kDepth];
     int head_ = 0, count_ = 0;

@@ -74,7 +74,10 @@ class Dispatcher {
         }
         Command els[Sequencer::kMaxElements];
         char bad[64];
-        // the id, if any, is on the first element; a mismatch drops the whole line silently
+        // A ':' line that is not ":P..." is another board's (":SE00" for the dome panels, ":OP01"...):
+        // silent, never INVALID (hard rule 7; v3 was silent too). The id, if any, is on the first
+        // element; a mismatch drops the whole line silently.
+        { const char* p = line; while (*p == ' ') ++p; if (p[1] != 'P') return false; }
         { Command first; if (parseLine(line, first) && first.id >= 0 && first.id != id_) { ++droppedId_; return false; } }
         int n = Sequencer::parseChain(line, els, Sequencer::kMaxElements, bad, sizeof bad);
         if (n < 0) { out_->printf("INVALID=%s", bad); return false; }

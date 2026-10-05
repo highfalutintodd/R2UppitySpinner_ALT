@@ -65,10 +65,17 @@ struct MotionConfig {
 
 class MotionSupervisor {
   public:
-    static constexpr Ms kEnableTimeoutMs = 50;
+    // The drivers are switched on from loop() (I2cService): a loop() pass held up by a long print
+    // (#PCONFIG on USB is ~60 ms) made a 50 ms wait fail with a sticky EXPANDER fault. Nothing moves
+    // while it waits, so the wait can be generous; a dead expander still faults.
+    static constexpr Ms kEnableTimeoutMs = 250;
     static constexpr int kLimitMakeTicks = 3, kLimitBreakTicks = 20;
     static constexpr int kHomeMakeTicks = 2, kHomeBreakTicks = 30;
     static constexpr Ms  kRestSwitchHoldMs = 400;    // at rest, a home-switch state must hold this long to count
+    // A rest contact (zero the frame on a closed switch) needs the head still for this long: longer
+    // than the switch's release debounce, so a head coasting off the switch after an interrupted
+    // spin is never zeroed where it happens to be (code review 2026-10, finding 1).
+    static constexpr Ms  kRestContactStillMs = 50;
     static constexpr Ms kTickEventMs = 1000;
     static constexpr Ms kEnCycleLowMs = 50;      // EN held low to clear the TB9051FTG latch
     static constexpr Ms kEnVerifyMs = 400;       // then enabled while DIAG is re-evaluated
@@ -105,10 +112,18 @@ class MotionSupervisor {
     // (logged). Any context.
     void requestSetRotaryHome() { setHomeReq_.store(true, std::memory_order_release); }
     bool alignmentSuspect() const { return alignmentSuspect_; }
-    // Persist sets this around an NVS commit (a flash erase stalls both cores): no new program
-    // starts while it is set; queued requests simply wait. Any context.
-    void setHoldIntake(bool hold) { holdIntake_.store(hold, std::memory_order_release); }
-    bool holdIntake() const { return holdIntake_.load(std::memory_order_acquire); }
+    // The head may be turned (off home above the safe height, or turned below it, since its last
+    // home), whatever the height: what the console checks before switching the rotary off.
+    bool headMayBeTurned() const { return turnedSinceHome_; }
+    // Persist holds the intake around an NVS commit (a flash erase stalls both cores), the OTA
+    // paths for a whole upload: no new program starts while any holder is set; queued requests
+    // simply wait. One bit per holder, so a settings save that ends mid-upload cannot release the
+    // upload's hold. Any context.
+    static constexpr uint8_t kHoldPersist = 1, kHoldOta = 2, kHoldRestart = 4;
+    void setHoldIntake(uint8_t owner, bool hold) {
+        if (hold) holdIntake_.fetch_or(owner, std::memory_order_acq_rel); else holdIntake_.fetch_and(static_cast<uint8_t>(~owner), std::memory_order_acq_rel);
+    }
+    bool holdIntake() const { return holdIntake_.load(std::memory_order_acquire) != 0; }
     uint32_t lastProgramId() const { return lastProgramId_; }
 
     // Read-only views for tests, the console and persistence.
@@ -140,6 +155,8 @@ class MotionSupervisor {
     int  startStep(const Step& s, const TickInputs& in);     // 1 started, 0 skipped, -1 refused
     void runProgram(const TickInputs& in);                   // start the next runnable step
     bool lifterAboveSafeNow(const TickInputs& in) const;
+    void watchHomeSwitch(const TickInputs& in, bool rotaryBusy);
+    bool attendedSource(bool forUnlock) const;
     void stepJob(const TickInputs& in, BridgeCommand& lifterOut, BridgeCommand& rotaryOut);
     void endStep(const StepOutcome& o, const TickInputs& in);
     void endProgram(const StepOutcome& o, const TickInputs& in);
@@ -180,11 +197,16 @@ class MotionSupervisor {
     Debounce top_, bottom_, home_;
     bool topWas_ = false, botWas_ = false, homeWas_ = false;
     bool homePending_ = false; Ms homePendingSince_ = 0;
+    Ticks rotStillAt_ = 0; Ms rotStillSince_ = 0;  // the rotary count and since when it has not moved (rest contact)
+    Ticks rotLast_ = 0;                            // the rotary count at the end of the last tick, in the current frame
+    Ticks swClosedRun_ = 0;                        // how far the count has moved while the home switch read closed without a break
+    Ms swOpenSince_ = 0; bool swOpen_ = false;     // the switch reading open at rest clears HOME_SWITCH_STUCK
 
     // program + job slot
     Step steps_[kMaxSteps];
     int stepCount_ = 0, stepIdx_ = 0;
     uint32_t programId_ = 0;
+    ReqSource programSource_ = ReqSource::None;   // who asked for the running program (the override and the commissioning unlock are for attended sources)
     JobKind programKind_ = JobKind::None;
     JobKind job_ = JobKind::None;
     LifterSeek seek_;
@@ -221,7 +243,7 @@ class MotionSupervisor {
     int32_t restAsked_ = 0;
     Ms restSince_ = 0;
     bool overrideWas_ = false;            // for the OVERRIDE on/off log lines (set, expired, cancelled, cleared by E-STOP)
-    std::atomic<bool> holdIntake_{false};
+    std::atomic<uint8_t> holdIntake_{0};
     uint32_t lastProgramId_ = 0;
     bool restRequired_ = false; Ticks stillL_ = 0, stillR_ = 0; uint16_t stillTicks_ = 0;
     uint8_t enCycle_ = 0;

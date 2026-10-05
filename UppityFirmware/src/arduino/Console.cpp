@@ -129,8 +129,11 @@ void Console::stopRandom(const char* why) {
 void Console::beginCmdSerial() {
     if (!d_.cmd) return;
     d_.cmd->end();
+    // A TX buffer, so replies echoed at 9600 baud (#PCMDTX1) never hold up loop() (~1 ms a byte).
+    d_.cmd->setTxBufferSize(512);
     // GPIO0 is a boot strap; it is only driven as TX when the builder has wired it and asked for it.
     d_.cmd->begin(s_.cmdBaud, SERIAL_8N1, board::kCmdRx, s_.cmdTx ? board::kCmdTx : -1);
+    if (d_.cmdFront) d_.cmdFront->rehook();       // end() dropped the receive hooks (code review 2026-10: the bus went deaf)
 }
 
 void Console::importV3Now(bool forced) {
@@ -138,7 +141,8 @@ void Console::importV3Now(bool forced) {
     d_.persist->readV3(v);
     ImportReport rep;
     Settings before = s_;
-    importV3(s_, v, rep);
+    // forced (#PV3IMPORT): a v3 value only fills a setting this board has no value of its own for
+    importV3(s_, v, rep, forced, forced && calibrationApplies(s_, cal_));
     for (int i = 0; i < rep.n; ++i) line(rep.line[i]);
     if (rep.taken > 0 || forced) printf("V3 import: %d value%s taken%s", rep.taken, rep.taken == 1 ? "" : "s", forced ? " (forced)" : "");
     if (std::memcmp(&before, &s_, sizeof s_) != 0) { applySettings(false); d_.persist->requestSaveSettings(); }
@@ -185,12 +189,30 @@ void Console::update(Ms now) {
     if (n > 0) d_.disp->submitDirector(chain, n);
     // flash
     d_.persist->update(snap, *d_.sup);
-    if (restartPending_ && elapsed(now, restartAt_) > 300) { d_.usb->flush(); ESP.restart(); }
+    if (restartKind_ && elapsed(now, restartAt_) > 300) {
+        bool idle = snap.activeJob == JobKind::None && !snap.enabled && !d_.persist->pending();
+        bool late = elapsed(now, restartAt_) > 5000;
+        if (idle || late) {
+            if (!idle) line("RESTART=after 5 s without the board going idle; a pending save may be lost");
+            if (restartKind_ == 2) d_.persist->factoryReset();     // disarmed here, like every other NVS write
+            d_.usb->flush(); ESP.restart();
+        }
+    }
 }
 
 void Console::handleEcosystemLine(const char* l) {
     if (std::strncmp(l, "&ESTOP,RESET", 12) == 0) { if (d_.estop->release(millis())) line("ESTOP=released"); }
     // every other &-line is someone else's business (Sabé / Roam-A-Dome heartbeats)
+}
+
+// Restarts wait for the board to be idle (Console::update): random mode and any chain end now, and
+// the intake is held so nothing new starts in the meantime (code review 2026-10: a restart 300 ms
+// after the request dropped a save that was deferred while the drivers were on, and could cut off
+// a random action that started in between).
+void Console::requestRestart(uint8_t kind, const char* why) {
+    stopRandom(why); d_.seq->clear(why);
+    d_.sup->setHoldIntake(MotionSupervisor::kHoldRestart, true);
+    restartKind_ = kind; restartAt_ = millis();
 }
 
 void Console::noteEstop(bool latched) {
@@ -214,7 +236,7 @@ void Console::onRescue(const Command& c, ReqSource src) {
             // an attended, local action: never from the Marcduino bus (other boards) or the mesh
             if (src != ReqSource::SerialUsb && src != ReqSource::Web) { line("OVERRIDE=refused (only from the USB console or the web page)"); return; }
             if (d_.estop->tripped()) { line("OVERRIDE=refused (E-STOP latched: reset it first)"); return; }
-            d_.q->setOverride(now + CommandQueue::kOverrideMs);
+            { Ms until = now + CommandQueue::kOverrideMs; d_.q->setOverride(until ? until : 1); }   // 0 means off
             line("OVERRIDE=on (60 s; #POVERRIDE0 ends it)");
             return;
         case Verb::Jog: {
@@ -246,6 +268,8 @@ void Console::onRescue(const Command& c, ReqSource src) {
             return;
         }
         case Verb::SetHome:
+            // the operator vouches that the head is lined up: someone has to be looking at it
+            if (src != ReqSource::SerialUsb && src != ReqSource::Web) { line("SETHOME=refused (only from the USB console or the web page)"); return; }
             if (d_.estop->tripped()) { line("SETHOME=refused (E-STOP latched)"); return; }
             if (s_.rotaryDisabled) { line("SETHOME=refused (the rotary is disabled)"); return; }
             if (refuseWhileMoving("SETHOME")) return;
@@ -301,9 +325,9 @@ bool Console::refuseWhileMoving(const char* what) {
     return false;
 }
 
-void Console::pushOperatorJob(JobKind k, int32_t a, int32_t c) {
+void Console::pushOperatorJob(JobKind k, int32_t a, int32_t c, ReqSource src) {
     stopRandom("operator job"); d_.seq->clear("operator job");
-    MotionRequest r; r.kind = k; r.a = a; r.c = c; r.source = ReqSource::SerialUsb;
+    MotionRequest r; r.kind = k; r.a = a; r.c = c; r.source = src;   // the line's own source: the override is for attended ones
     uint32_t id = d_.q->push(r);
     if (id == 0) line("BUSY=queue_full"); else printf("QUEUED=%s id=%lu", jobName(static_cast<int>(k)), static_cast<unsigned long>(id));
 }
@@ -319,17 +343,19 @@ void Console::onConfig(const Command& c, const char* raw, ReqSource src) {
         case Verb::Config: printConfig(); break;
         case Verb::Cal: printCal(); break;
         case Verb::V3Dump: printV3(); break;
-        case Verb::V3Import: importV3Now(true); break;
+        case Verb::V3Import: if (!refuseWhileMoving("V3IMPORT")) importV3Now(true); break;
         case Verb::Help: printHelp(); break;
         case Verb::ClearFault: d_.sup->requestClearFault(); line("FAULT=clear_requested"); break;
-        case Verb::RotaryTest: pushOperatorJob(JobKind::RotaryCharacterise, c.hasA ? clampv<int32_t>(c.a, 1, 10) : 3, 8); break;   // 8: home afterwards
-        case Verb::Calibrate: pushOperatorJob(JobKind::LifterCalibrate, 0); break;
+        case Verb::RotaryTest: pushOperatorJob(JobKind::RotaryCharacterise, c.hasA ? clampv<int32_t>(c.a, 1, 10) : 3, 8, src); break;   // 8: home afterwards
+        case Verb::Calibrate: pushOperatorJob(JobKind::LifterCalibrate, 0, 0, src); break;
         case Verb::Unlock: s_.commissioned = 1; applySettings(false); d_.persist->requestSaveSettings(); line("COMMISSIONED=1 (saved: the board boots unlocked from now on; #PLOCK to undo)"); break;
         case Verb::Lock: s_.commissioned = 0; applySettings(false); d_.persist->requestSaveSettings(); line("COMMISSIONED=0 (saved)"); break;
         case Verb::Set: setKey(c); break;
         case Verb::RotaryToggle:
             s_.rotaryDisabled = s_.rotaryDisabled ? 0 : 1; applySettings(false); d_.persist->requestSaveSettings();
             printf("#PROTARYOFF=%u (%s, saved)", s_.rotaryDisabled, s_.rotaryDisabled ? "rotary disabled: no homing, descents never wait for it" : "rotary enabled");
+            if (s_.rotaryDisabled && d_.sup->headMayBeTurned())
+                line("ROTARYOFF note: the head may be turned right now, so descents still stop at the safe-spin height until #PRESTART (or turn the rotary back on and home it)");
             break;
         case Verb::LimitPolarity: {
             uint8_t nc = c.letter == 'C' ? 1 : 0;
@@ -359,18 +385,18 @@ void Console::onConfig(const Command& c, const char* raw, ReqSource src) {
         case Verb::Zero: if (!d_.persist->clearSequences()) line("BUSY"); else line("SEQ clearing all stored sequences"); break;
         case Verb::Factory:
             if (refuseWhileMoving("FACTORY")) break;
-            d_.persist->factoryReset(); line("FACTORY=done, restarting"); restartPending_ = true; restartAt_ = millis();
+            line("FACTORY=clearing settings, calibration and sequences, then restarting (once the motors are off)"); requestRestart(2, "factory reset");
             break;
         case Verb::WifiReset:
             if (refuseWhileMoving("WIFIRESET")) break;
             s_.staSsid[0] = '\0'; s_.staPass[0] = '\0'; std::snprintf(s_.apPass, sizeof s_.apPass, "Astromech"); s_.wifiEnabled = 1; s_.apChannel = 1;
             d_.persist->requestSaveSettings();
-            line("WIFI=reset to the access point only, password \"Astromech\"; restarting"); restartPending_ = true; restartAt_ = millis();
+            line("WIFI=reset to the access point only, password \"Astromech\"; restarting once it is saved"); requestRestart(1, "wifi reset");
             break;
         case Verb::Restart:
             if (refuseWhileMoving("RESTART")) break;
-            if (d_.persist->pending()) line("RESTART=waiting for PERSIST=saved first");
-            line("RESTART=in 300 ms"); restartPending_ = true; restartAt_ = millis();
+            line(d_.persist->pending() ? "RESTART=waiting for PERSIST=saved first (the drivers switch off 2 s after a move)" : "RESTART=in 300 ms");
+            requestRestart(1, "restart");
             break;
         case Verb::Invalid: default: line("INVALID"); break;
     }
@@ -379,6 +405,8 @@ void Console::onConfig(const Command& c, const char* raw, ReqSource src) {
 void Console::setKey(const Command& c) {
     if (const StringKey* sk = findStringKey(c.key, std::strlen(c.key))) {
         if (!c.text) { if (sk->secret) printf("#P%s=%s  (%s)", sk->name, stringField(s_, *sk)[0] ? "(set)" : "(empty)", sk->help); else printf("#P%s=%s  (%s)", sk->name, stringField(s_, *sk), sk->help); return; }
+        // a too-short access-point password used to become the published default and be saved
+        if (!acceptStringValue(*sk, c.text)) { printf("OUT_OF_RANGE=#P%s (WPA2 needs 8 or more characters; nothing changed)", sk->name); return; }
         Settings before = s_;
         setStringField(s_, *sk, c.text);
         sanitize(s_);
@@ -386,7 +414,6 @@ void Console::setKey(const Command& c) {
         if (changed) d_.persist->requestSaveSettings();
         if (sk->secret) printf("#P%s=%s (%s; takes effect after #PRESTART)", sk->name, stringField(s_, *sk)[0] ? "(set)" : "(cleared)", changed ? "saved" : "unchanged");
         else printf("#P%s=%s (%s; takes effect after #PRESTART)", sk->name, stringField(s_, *sk), changed ? "saved" : "unchanged");
-        if (std::strcmp(sk->name, "APPASS") == 0 && std::strlen(c.text) > 0 && std::strlen(c.text) < 8) line("APPASS note: WPA2 needs 8+ characters; kept the previous password");
         return;
     }
     const SettingKey* k = findSettingKey(c.key, std::strlen(c.key));
@@ -406,7 +433,9 @@ void Console::setKey(const Command& c) {
     else if (std::strcmp(k->name, "TRAVEL") == 0 && s_.safeSpinTicks) note = " (SAFESPIN kept: it is ticks above the bottom switch, not a share of travel)";
     else if (std::strcmp(k->name, "ROTARYTPR") == 0) note = s_.ticksPerRev > 0 ? " (marked confident: no two-turn measurement on the first rotary move)" : " (cleared: the next rotary move measures it)";
     else if (std::strcmp(k->name, "LIFTERNC") == 0 || std::strcmp(k->name, "ROTARYNC") == 0) note = " (takes effect after #PRESTART)";
-    else if (std::strcmp(k->name, "BAUD") == 0 || std::strcmp(k->name, "CMDTX") == 0) { beginCmdSerial(); note = " (command UART reopened)"; }
+    else if (std::strcmp(k->name, "BAUD") == 0 || std::strcmp(k->name, "CMDTX") == 0) {
+        if (before.cmdBaud != s_.cmdBaud || before.cmdTx != s_.cmdTx) { beginCmdSerial(); note = " (command UART reopened)"; }   // a replayed #PCONFIG must not reopen it
+    }
     else if (std::strcmp(k->name, "COMMISSIONED") == 0) note = s_.commissioned ? " (unlocked)" : " (LOCKED)";
     else if (std::strcmp(k->name, "WIFI") == 0 || std::strcmp(k->name, "APCHANNEL") == 0) note = " (takes effect after #PRESTART)";
     applySettings(false);

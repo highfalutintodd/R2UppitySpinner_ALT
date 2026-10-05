@@ -7,13 +7,17 @@ MotionSupervisor::MotionSupervisor(Hal& hal, EstopLatch& estop, CommandQueue& qu
     lastOut_[0] = brakeCmd(); lastOut_[1] = brakeCmd();
 }
 
-void MotionSupervisor::setConfig(const MotionConfig& c) { pendingCfg_ = c; cfgPending_ = true; }
+// loop() hands settings over while the supervisor (same core, higher priority) may be reading
+// them: the copy and the flag go across under the queue's lock, never half-written.
+void MotionSupervisor::setConfig(const MotionConfig& c) { Lock& l = queue_.guard(); l.lock(); pendingCfg_ = c; cfgPending_ = true; l.unlock(); }
 
 void MotionSupervisor::applyPendingConfig() {
-    if (!cfgPending_ || job_ != JobKind::None) return;
-    cfgPending_ = false;
-    bool invertChanged = pendingCfg_.lifterInverted != cfg_.lifterInverted;
-    cfg_ = pendingCfg_;
+    if (job_ != JobKind::None) return;
+    MotionConfig next;
+    { Lock& l = queue_.guard(); l.lock(); bool p = cfgPending_; if (p) { next = pendingCfg_; cfgPending_ = false; } l.unlock(); if (!p) return; }
+    bool invertChanged = next.lifterInverted != cfg_.lifterInverted;
+    cfg_ = next;
+    if (invertChanged) holdTarget_ = -1;           // a hold target from the old sense would drive the wrong way
     if (invertChanged || !invertApplied_) {
         invertApplied_ = true;
         hal_.setLifterInverted(cfg_.lifterInverted);
@@ -34,7 +38,13 @@ Ticks MotionSupervisor::travel() const { return cfg_.travelTicks > 0 ? cfg_.trav
 // guess: v3's default of half travel let Todd's head hit the lifter frame at 54 % on
 // 2026-09-19. Until the builder sets it (#PSAFESPIN, or v3's stored "minheight"), only the
 // top counts as clear: lifterAboveSafeNow() still passes on the top limit switch.
-Ticks MotionSupervisor::safeSpin() const { return cfg_.safeSpinTicks > 0 ? cfg_.safeSpinTicks : travel(); }
+//
+// The safe-spin height is ticks above the bottom switch, but the top switch sets the count to the
+// travel in use. With only the profile's guess (no #PTRAVEL, no calibration: a factory reset and a
+// settings restore, or a v3 import) the count reads ~200 high after the first trip to the top, and
+// the head would turn that far below the height measured as clear (code review 2026-10, finding 7).
+// So the setting counts only once the travel is measured or set; until then only the top is clear.
+Ticks MotionSupervisor::safeSpin() const { return cfg_.safeSpinTicks > 0 && cfg_.travelCalibrated ? cfg_.safeSpinTicks : travel(); }
 Ticks MotionSupervisor::tpr() const { return cfg_.rotary.ticksPerRev > 0 ? static_cast<Ticks>(cfg_.rotary.ticksPerRev + 0.5f) : 0; }
 
 Throttle MotionSupervisor::floorSpeed(Throttle speed, int dir) const {
@@ -84,15 +94,30 @@ PolicyContext MotionSupervisor::policy(const TickInputs& in) const {
     c.homeOffsetTicks = cfg_.rotary.homeOffsetTicks;
     c.rotaryDisabled = cfg_.rotaryDisabled;
     c.estop = in.estop;
-    c.locked = !cfg_.commissioned && !cfg_.commissioningActive;
+    c.locked = !cfg_.commissioned && !(cfg_.commissioningActive && attendedSource(true));
     c.lifterFault = faults_.lifterBlocked();
     c.rotaryFault = faults_.rotaryBlocked();
     c.globalFault = faults_.globalBlocked();
-    c.overrideLive = queue_.overrideLive(in.nowMs);
+    c.overrideLive = queue_.overrideLive(in.nowMs) && attendedSource(false);
     c.alignmentSuspect = turnedSinceHome_;
     c.clampHeld = clampHold_ && turnedSinceHome_;
-    c.topLimit = in.topLimit; c.bottomLimit = in.bottomLimit; c.homeSwitch = in.homeSwitch;
+    c.topLimit = in.topLimit; c.bottomLimit = in.bottomLimit;
+    c.homeSwitch = in.homeSwitch && in.homeSwitchRaw;    // "closed now": the debounced value reads closed 30 ms after the head has left
     return c;
+}
+
+// The rescue override and the commissioning unlock are for someone watching the droid: the USB
+// console, the web page, the commissioning flow's own steps (and the host tests). A ":PP0" from the
+// dome's bus, the mesh or a trigger input never gets them (code review 2026-10, finding 5: during a
+// rescue a bus command lowered the turned head into the frame). Random mode's moves pass the
+// commissioning unlock (step 7 runs it; the sequencer refuses a ":PM" from the bus meanwhile) but
+// never the override.
+bool MotionSupervisor::attendedSource(bool forUnlock) const {
+    switch (programSource_) {
+        case ReqSource::SerialUsb: case ReqSource::Web: case ReqSource::Commission: case ReqSource::Test: return true;
+        case ReqSource::Random: return forUnlock;
+        default: return false;
+    }
 }
 
 // The policy's "at or below the safe-spin height = inside the opening = lined up" is only true
@@ -107,8 +132,9 @@ void MotionSupervisor::markAlignmentSuspect(Ms now) {
 }
 
 void MotionSupervisor::updateAlignment(const TickInputs& in) {
-    if (cfg_.rotaryDisabled) turnedSinceHome_ = false;
-    else {
+    // Switching the rotary off does not line the head up: a head that may be turned stays so until
+    // a restart (code review 2026-10, finding 6). A board that powers up with it off starts clear.
+    if (!cfg_.rotaryDisabled) {
         PolicyContext c = policy(in);
         bool home = rotaryIsHome(c);
         if (!home && (lifterAboveSafe(c) || isRotaryJob(job_))) turnedSinceHome_ = true;
@@ -162,9 +188,16 @@ void MotionSupervisor::updateKnowledge(const TickInputs& in, bool rotaryBusy) {
     if (homeSeen != homeWas_) emit(Ev::HomeSwitch, homeSeen ? 1 : 0, in.rotaryTicks, 0, in.nowMs);
     homeWas_ = homeSeen;
 
-    // Rotary rest contact: a closed switch with the motor at rest is a trusted zero.
-    if (!cfg_.rotaryDisabled && !rotaryBusy) {
-        if (homeSeen) {
+    // Rotary rest contact: a closed switch with the head at rest is a trusted zero. "At rest" is the
+    // count, not the job: after an interrupted spin the job ends with the head still coasting, and
+    // the switch's release debounce reads closed for 30 ms after the head has left it. A zero taken
+    // then sits wherever the head happened to be (code review 2026-10, finding 1: 11-20 degrees).
+    // So the switch must read closed now and the count must have been still for kRestContactStillMs.
+    // A switch flagged stuck closed is not a contact at all.
+    if (in.rotaryTicks != rotStillAt_) { rotStillAt_ = in.rotaryTicks; rotStillSince_ = in.nowMs; }
+    bool rotaryStill = elapsed(in.nowMs, rotStillSince_) >= kRestContactStillMs;
+    if (!cfg_.rotaryDisabled && !rotaryBusy && !faults_.has(F_HomeSwitchStuck)) {
+        if (homeSeen && in.homeSwitch && in.homeSwitchRaw && rotaryStill) {
             if (rotary_.confidence == HomeConfidence::Latched && tpr() > 0) {
                 Ticks err = signedTickDelta(0, in.rotaryTicks, tpr());
                 if (absl(err) > homeToleranceTicks(cfg_.rotary.ticksPerRev)) { hal_.setEncoder(Axis::Rotary, 0); rotary_.ticks = 0; emit(Ev::HomeFrameCorrected, err, 0, 0, in.nowMs); }
@@ -173,7 +206,7 @@ void MotionSupervisor::updateKnowledge(const TickInputs& in, bool rotaryBusy) {
             }
             if (rotary_.confidence != HomeConfidence::SwitchLive) emit(Ev::ConfidenceRotary, static_cast<int32_t>(rotary_.confidence), static_cast<int32_t>(HomeConfidence::SwitchLive), 0, in.nowMs);
             rotary_.confidence = HomeConfidence::SwitchLive; rotary_.provenance = HomeProvenance::RestContact; rotary_.referencedAt = in.nowMs;
-        } else if (rotary_.confidence == HomeConfidence::SwitchLive) {
+        } else if (!homeSeen && rotary_.confidence == HomeConfidence::SwitchLive) {
             rotary_.confidence = HomeConfidence::Latched;
             emit(Ev::ConfidenceRotary, static_cast<int32_t>(HomeConfidence::SwitchLive), static_cast<int32_t>(HomeConfidence::Latched), 0, in.nowMs);
         }
@@ -184,6 +217,37 @@ void MotionSupervisor::updateKnowledge(const TickInputs& in, bool rotaryBusy) {
 
 bool MotionSupervisor::lifterAboveSafeNow(const TickInputs& in) const {
     return in.topLimit || (lifter_.confidence != LifterConfidence::Unknown && in.lifterTicks > safeSpin());
+}
+
+// A home switch that stays closed while the head turns well past its contact arc is stuck closed
+// (a stuck microswitch, a shorted lead): every resting angle would read as home and a turned head
+// could be lowered (code review 2026-10, finding 3). The count's travel while the switch reads
+// closed without a break is watched during every rotary job; past twice the arc plus margin (or a
+// tenth of a turn, whichever is more) it is HOME_SWITCH_STUCK: the frame goes STALE, rest contacts
+// and homes are refused, so a descent below the safe-spin height waits. It clears once the switch
+// reads open at rest for kRestSwitchHoldMs (plan F.6 "next open read") or by #PCLEARFAULT.
+// A switch stuck at power-up cannot be told from a head parked on it until the head turns.
+void MotionSupervisor::watchHomeSwitch(const TickInputs& in, bool rotaryBusy) {
+    if (cfg_.rotaryDisabled) { swClosedRun_ = 0; return; }
+    if (!in.homeSwitchRaw) {
+        swClosedRun_ = 0;
+        if (!swOpen_) { swOpen_ = true; swOpenSince_ = in.nowMs; }
+        if (faults_.has(F_HomeSwitchStuck) && !rotaryBusy && elapsed(in.nowMs, swOpenSince_) >= kRestSwitchHoldMs) {
+            faults_.clear(F_HomeSwitchStuck); emit(Ev::Fault, static_cast<int32_t>(faults_.mask()), 0, 3, in.nowMs);
+        }
+        return;
+    }
+    swOpen_ = false;
+    swClosedRun_ += in.rotaryTicks - rotLast_;
+    if (!rotaryBusy || faults_.has(F_HomeSwitchStuck)) return;
+    Ticks arc = cfg_.rotary.contactArcTicks;
+    Ticks lim = 2 * arc + 20;
+    if (tpr() > 0 && tpr() / 10 > lim) lim = tpr() / 10;
+    else if (tpr() <= 0 && lim < 120) lim = 120;
+    if (absl(swClosedRun_) <= lim) return;
+    faults_.set(F_HomeSwitchStuck);
+    emit(Ev::Fault, static_cast<int32_t>(faults_.mask()), 1, 3, in.nowMs);
+    if (rotaryHomeKnown()) { emit(Ev::ConfidenceRotary, static_cast<int32_t>(rotary_.confidence), static_cast<int32_t>(HomeConfidence::Stale), 0, in.nowMs); rotary_.confidence = HomeConfidence::Stale; }
 }
 
 int MotionSupervisor::expandRequest(const MotionRequest& r, const TickInputs& in, Step* steps) {
@@ -360,6 +424,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             if ((s.c & 4) && !turnedSinceHome_ && lifter_.confidence != LifterConfidence::Unknown && in.lifterTicks <= safeSpin() && !in.topLimit) return 0;   // inside the opening, lined up: unless it may be turned
             Decision d = checkRotary(c, false);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
+            if (faults_.has(F_HomeSwitchStuck)) { refuse(s, Reason::SwitchStuck, programId_, in); return -1; }   // its sweep would take the stuck reading as an edge
             RotaryHomeParams p;
             p.rc = &cfg_.rotary; p.floor = rotaryFloor(); p.referenced = rotaryReferenced(); p.tpr = tpr(); p.sweepDir = 1; p.homeOffset = cfg_.rotary.homeOffsetTicks;
             rhome_.start(p, in.rotaryTicks, in.nowMs);
@@ -471,7 +536,7 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
             cfg_.minPowerUp = lastCal_.minUp; cfg_.minPowerDown = lastCal_.minDown;
             cfg_.bootBottomTicks = -lastCal_.bottomRest;
             for (int i = 0; i < kSlots; ++i) { cfg_.overshootUp[i] = lastCal_.overUp[i]; cfg_.overshootDown[i] = lastCal_.overDown[i]; cfg_.velUp[i] = lastCal_.velUp[i]; cfg_.velDown[i] = lastCal_.velDown[i]; }
-            if (cfgPending_) { pendingCfg_.travelTicks = cfg_.travelTicks; pendingCfg_.travelCalibrated = true; pendingCfg_.minPowerUp = cfg_.minPowerUp; pendingCfg_.minPowerDown = cfg_.minPowerDown; pendingCfg_.bootBottomTicks = cfg_.bootBottomTicks; }
+            { Lock& l = queue_.guard(); l.lock(); if (cfgPending_) { pendingCfg_.travelTicks = cfg_.travelTicks; pendingCfg_.travelCalibrated = true; pendingCfg_.minPowerUp = cfg_.minPowerUp; pendingCfg_.minPowerDown = cfg_.minPowerDown; pendingCfg_.bootBottomTicks = cfg_.bootBottomTicks; } l.unlock(); }
             lifter_.travelTicks = cfg_.travelTicks; lifter_.travelCalibrated = true;
             calUpdated_ = true;
             emit(Ev::Measure, 3, lastCal_.travel, static_cast<int32_t>(lastCal_.travelSpreadPct * 10), in.nowMs);
@@ -486,7 +551,10 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
         }
     }
     if (isRotaryJob(k)) {
-        if (o.jobResult == JobResult::Stalled) { faults_.set(F_RotaryStall); if (rotary_.confidence == HomeConfidence::Latched) { rotary_.confidence = HomeConfidence::Stale; emit(Ev::ConfidenceRotary, static_cast<int32_t>(HomeConfidence::Latched), static_cast<int32_t>(HomeConfidence::Stale), 0, in.nowMs); } }
+        // A job that started at rest on the switch is still SWITCH_LIVE here (the label does not
+        // follow the switch while the rotary is busy): a stall demotes it as well, or the frozen
+        // count would be trusted as home (code review 2026-10, finding 2).
+        if (o.jobResult == JobResult::Stalled) { faults_.set(F_RotaryStall); if (rotaryHomeKnown()) { emit(Ev::ConfidenceRotary, static_cast<int32_t>(rotary_.confidence), static_cast<int32_t>(HomeConfidence::Stale), 0, in.nowMs); rotary_.confidence = HomeConfidence::Stale; } }
     }
     if (k == JobKind::RotaryHome) {
         if (o.result == StepResult::Done) {
@@ -501,9 +569,9 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
             emit(Ev::HomeEdge, lastHome_.enter, lastHome_.exit, lastHome_.closures, in.nowMs);
             emit(Ev::HomeSettle, lastHome_.contact ? 1 : 0, lastHome_.wiggles | (static_cast<int32_t>(lastHome_.lastMoveResult) << 8) | (static_cast<int32_t>(lastHome_.lastMoveReason) << 16), lastHome_.nudges, in.nowMs);
             if (was != HomeConfidence::Latched) emit(Ev::ConfidenceRotary, static_cast<int32_t>(was), static_cast<int32_t>(HomeConfidence::Latched), 0, in.nowMs);
-        } else if (rotary_.confidence == HomeConfidence::Latched) {
+        } else if (rotaryHomeKnown()) {
+            emit(Ev::ConfidenceRotary, static_cast<int32_t>(rotary_.confidence), static_cast<int32_t>(HomeConfidence::Stale), 0, in.nowMs);
             rotary_.confidence = HomeConfidence::Stale;   // frame untouched, trust reduced
-            emit(Ev::ConfidenceRotary, static_cast<int32_t>(HomeConfidence::Latched), static_cast<int32_t>(HomeConfidence::Stale), 0, in.nowMs);
         }
     }
     if (k == JobKind::RotaryCharacterise && o.result == StepResult::Done) {
@@ -517,7 +585,7 @@ void MotionSupervisor::endStep(const StepOutcome& o, const TickInputs& in) {
             cfg_.rotary.contactArcTicks = static_cast<uint16_t>(lastChar_.arcMean);
             cfg_.rotary.chatterPerPass = static_cast<uint8_t>(lastChar_.detections > 0 ? clampv<int>(lastChar_.closures / lastChar_.detections, 0, 255) : 0);
             charUpdated_ = true;
-            if (cfgPending_) pendingCfg_.rotary = cfg_.rotary;
+            { Lock& l = queue_.guard(); l.lock(); if (cfgPending_) pendingCfg_.rotary = cfg_.rotary; l.unlock(); }
         }
         Ticks zero = lastChar_.lastZero;
         hal_.setEncoder(Axis::Rotary, in.rotaryTicks - zero);
@@ -556,7 +624,7 @@ void MotionSupervisor::endProgram(const StepOutcome& o, const TickInputs& in) {
         if (programKind_ == JobKind::SafeLower) emit(Ev::JobEnd, static_cast<int32_t>(programKind_), static_cast<int32_t>(o.jobResult), static_cast<int32_t>(o.reason), in.nowMs);
     }
     if (programId_ != 0) lastProgramId_ = programId_;
-    stepCount_ = 0; stepIdx_ = 0; programKind_ = JobKind::None; programId_ = 0;
+    stepCount_ = 0; stepIdx_ = 0; programKind_ = JobKind::None; programId_ = 0; programSource_ = ReqSource::None;
     idleSince_ = in.nowMs;
 }
 
@@ -580,6 +648,7 @@ void MotionSupervisor::refuseAll(Reason why, const TickInputs& in) {
 
 void MotionSupervisor::tick(Ms now) {
     ++tickCount_;
+    queue_.expireLeases(now);                       // an expired override or jog lease is cleared, never left to wrap
     applyPendingConfig();
 
     RawInputs raw; hal_.readInputs(raw);
@@ -590,7 +659,7 @@ void MotionSupervisor::tick(Ms now) {
         emit(Ev::HomeManual, raw.rotaryTicks, static_cast<int32_t>(rotary_.confidence), static_cast<int32_t>(why), now);
         if (why == Reason::None) {
             Ticks at = cfg_.rotary.homeOffsetTicks;          // the visual home is where "0 degrees" sits
-            hal_.setEncoder(Axis::Rotary, at); raw.rotaryTicks = at; rotary_.ticks = at;
+            hal_.setEncoder(Axis::Rotary, at); raw.rotaryTicks = at; rotary_.ticks = at; rotLast_ = at;   // a re-reference, not travel (watchHomeSwitch)
             rotary_.confidence = HomeConfidence::Latched; rotary_.provenance = HomeProvenance::Manual; rotary_.referencedAt = now;
             faults_.clear(F_RotaryStall);
         }
@@ -638,6 +707,7 @@ void MotionSupervisor::tick(Ms now) {
             hal_.panicStop();
             queue_.setOverride(0);                 // a stop ends the rescue override and any jog lease: both must be asked for again
             queue_.jogRelease(now);
+            holdTarget_ = -1;                      // nothing resumes after the release, the drift hold included (plan F.5)
             emit(Ev::Estop, static_cast<int32_t>(estop_.source()), 1, 0, now);
             if (state_ != MotionState::Stopped) { emit(Ev::StateChange, static_cast<int32_t>(state_), static_cast<int32_t>(MotionState::Stopped), 0, now); state_ = MotionState::Stopped; }
             estopBraking_ = enableRequested_ && enabled;          // drivers on: keep them on to brake (see kEstopStillTicks)
@@ -662,6 +732,7 @@ void MotionSupervisor::tick(Ms now) {
     if (wasStopped_) { wasStopped_ = false; estopBraking_ = false; emit(Ev::Estop, static_cast<int32_t>(estop_.source()), 0, 0, now); state_ = cfg_.commissioned ? MotionState::Idle : MotionState::Locked; emit(Ev::StateChange, static_cast<int32_t>(MotionState::Stopped), static_cast<int32_t>(state_), 0, now); idleSince_ = now; }
 
     updateKnowledge(in, rotaryBusy);
+    watchHomeSwitch(in, rotaryBusy);
 
     // ---- alignment: may the head be turned? (see markAlignmentSuspect) ----
     updateAlignment(in);
@@ -703,6 +774,7 @@ void MotionSupervisor::tick(Ms now) {
         if (holdIntake() || resting) { /* NVS commit in progress, or the mechanism is still coasting: leave requests queued */ }
         else if (queue_.pop(r)) {
             restRequired_ = false;
+            programSource_ = r.source;
             stepCount_ = expandRequest(r, in, steps_); stepIdx_ = 0; programId_ = r.id; programKind_ = r.kind;
             runProgram(in);
             if (job_ != JobKind::None) { arming_ = !enabled; armingSince_ = now; }
@@ -712,7 +784,7 @@ void MotionSupervisor::tick(Ms now) {
             Ticks tr = travel();
             int32_t driftPct = tr > 0 ? absl(in.lifterTicks - holdTarget_) * 100 / tr : 0;
             if (driftPct > cfg_.driftPct) {
-                stepCount_ = 1; stepIdx_ = 0; programId_ = 0; programKind_ = JobKind::LifterHold;
+                stepCount_ = 1; stepIdx_ = 0; programId_ = 0; programKind_ = JobKind::LifterHold; programSource_ = ReqSource::None;
                 steps_[0].kind = JobKind::LifterSeek; steps_[0].a = holdTarget_; steps_[0].b = floorSpeed(1, in.lifterTicks < holdTarget_ ? 1 : -1); steps_[0].c = 0;
                 emit(Ev::Hold, 1, holdTarget_, in.lifterTicks, now);
                 runProgram(in);
@@ -744,6 +816,10 @@ void MotionSupervisor::tick(Ms now) {
     // ---- output stage: a brake tick between opposite-direction drives (TB9051FTG 7.1 Note 1) ----
     BridgeCommand outs[2] = { lifterOut, rotaryOut };
     for (int i = 0; i < 2; ++i) {
+        // An E-STOP from another core can land after this tick sampled the latch (web, port 81, UART):
+        // its panic hook has zeroed the outputs, and a drive written now would undo that for a
+        // millisecond. The latch is read again right before each write (plan §3.2).
+        if (estop_.tripped()) outs[i] = brakeCmd();
         if (outs[i].mode == Bridge::Drive && outs[i].duty != 0) {
             int sign = outs[i].duty > 0 ? 1 : -1;
             if (lastDriveSign_[i] != 0 && sign != lastDriveSign_[i] && lastOut_[i].mode == Bridge::Drive && lastOut_[i].duty != 0) outs[i] = brakeCmd();
@@ -768,6 +844,7 @@ void MotionSupervisor::tick(Ms now) {
 void MotionSupervisor::reportTickStats(uint32_t cycleUs, bool late) { if (cycleUs > cycleUsMax_) cycleUsMax_ = cycleUs; if (late) ++lateTicks_; }
 
 void MotionSupervisor::publish(const TickInputs& in, BridgeCommand lifterOut, BridgeCommand rotaryOut) {
+    rotLast_ = rotary_.ticks;                       // every tick ends here: the count in the frame the next tick reads
     Snapshot& s = snap_;
     s.tMs = in.nowMs;
     s.state = state_;

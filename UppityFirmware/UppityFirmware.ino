@@ -90,11 +90,14 @@ static void drainEvents() {
 }
 
 void setup() {
+    // A TX buffer, so a long print (#PCONFIG is ~850 bytes, ~60 ms at 115200) never holds up loop(),
+    // which switches the drivers on for the supervisor (code review 2026-10, finding 14).
+    Serial.setTxBufferSize(1024);
     Serial.begin(115200);
     delay(200);
     Console::Deps d;
     d.sup = &gSup; d.q = &gQueue; d.estop = &gEstop; d.pub = &gSnapshot; d.i2c = &gI2c; d.persist = &gPersist;
-    d.seq = &gSeq; d.disp = &gDisp; d.dir = &gDir; d.hal = &gHal; d.usb = &Serial; d.cmd = &Serial2; d.log = &gLog; d.web = &gWebLines;
+    d.seq = &gSeq; d.disp = &gDisp; d.dir = &gDir; d.hal = &gHal; d.usb = &Serial; d.cmd = &Serial2; d.log = &gLog; d.web = &gWebLines; d.cmdFront = &gCmd;
     gConsole.begin(d);                                 // from here on every line also lands in the log ring
     Serial.println();
     gConsole.printf("Uppity Spinner ALT v%s  phase 4  build %s", UPPITY_FW_VERSION, Console::buildId());

@@ -25,6 +25,8 @@ TEST(command_queue_jog_release_ends_the_lease_even_late_in_millis) {
     Ms late = 0xF0000000u;                                    // 46 days: 0 would read as live again here
     q.jogKeepalive(late); CHECK(q.jogLeaseLive(late + 10));
     q.jogRelease(late + 20); CHECK(!q.jogLeaseLive(late + 20)); CHECK(!q.jogLeaseLive(late + 1000));
+    CHECK(!q.jogLeaseLive(late + 20 + 0x80000000u));          // nor 24.9 days after the release (code review 2026-10)
+    NoLock l2; CommandQueue fresh(l2); CHECK(!fresh.jogLeaseLive(0x80000000u + 1000));   // nor a lease never taken
 }
 
 // ---------------------------------------------------------------- policy

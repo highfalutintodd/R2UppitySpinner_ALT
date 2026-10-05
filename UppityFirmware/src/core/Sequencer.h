@@ -22,17 +22,17 @@ inline bool buildRequest(const Command& c, Ticks travel, RandomSource& rng, Moti
     switch (c.verb) {
         case Verb::LiftTo: case Verb::LiftRandom: {
             int32_t pct = c.verb == Verb::LiftRandom ? rng.range(0, 100) : clampv<int32_t>(c.a, 0, 100);
-            int32_t speed = c.hasB ? (c.b == -2 ? rng.range(30, 100) : c.b) * 10 : 0;
+            int32_t speed = c.hasB ? (c.b == -2 ? rng.range(30, 100) : clampv<int32_t>(c.b, 0, 100)) * 10 : 0;   // typed nonsense must not overflow
             r.kind = JobKind::LifterSeek; r.a = pct * travel / 100; r.b = speed; r.c = (pct >= 100 || pct <= 0) ? 1 : 0;
             return true;
         }
-        case Verb::SafeLower: r.kind = JobKind::SafeLower; r.b = c.hasA ? c.a * 10 : 0; return true;
+        case Verb::SafeLower: r.kind = JobKind::SafeLower; r.b = c.hasA ? clampv<int32_t>(c.a, 0, 100) * 10 : 0; return true;
         case Verb::RotAbs: case Verb::RotAbsRandom: case Verb::RotRel: case Verb::RotRelRandom: {
             bool rel = c.verb == Verb::RotRel || c.verb == Verb::RotRelRandom;
             bool rnd = c.verb == Verb::RotAbsRandom || c.verb == Verb::RotRelRandom;
-            int32_t deg = rnd ? (rel ? rng.range(-180, 180) : rng.range(0, 359)) : c.a;
-            int32_t spd = c.hasB ? (c.b == -2 ? rng.range(40, 100) : c.b) * 10 : 0;
-            int32_t mx = c.hasC ? (c.c == -2 ? rng.range(40, 100) : c.c) * 10 : 0;
+            int32_t deg = rnd ? (rel ? rng.range(-180, 180) : rng.range(0, 359)) : (rel ? clampv<int32_t>(c.a, -36000, 36000) : c.a);   // 100 turns either way
+            int32_t spd = c.hasB ? (c.b == -2 ? rng.range(40, 100) : clampv<int32_t>(c.b, 0, 100)) * 10 : 0;
+            int32_t mx = c.hasC ? (c.c == -2 ? rng.range(40, 100) : clampv<int32_t>(c.c, 0, 100)) * 10 : 0;
             if (!rel && deg == 0) { r.kind = JobKind::RotaryHome; r.c = c.letter == 'S' ? 2 : 0; return true; }   // 'S': only if not already home (random director)
             r.kind = rel ? JobKind::RotaryRelative : JobKind::RotaryAbsolute; r.a = deg; r.b = spd; r.c = mx;
             return true;
@@ -81,7 +81,7 @@ class Sequencer {
             if (els[i].verb == Verb::Wait) timed = true;
         }
         if (!motion && !timed) {
-            for (int i = 0; i < n; ++i) immediate(els[i]);
+            for (int i = 0; i < n; ++i) immediate(els[i], src);
             return true;
         }
         if (motion && !fromDirector) l_->onRandomStop();
@@ -121,8 +121,13 @@ class Sequencer {
             case Verb::Wait: {
                 Ms ms;
                 if (c.b == 2) ms = static_cast<Ms>(c.a);                                                   // internal, milliseconds
-                else { int32_t sec = c.hasA ? c.a : 6; if (c.b == 1) sec = rng_->range(1, sec < 1 ? 1 : sec); if (sec < 1) sec = 1; ms = static_cast<Ms>(sec) * 1000u; }
-                if (ms > kWaitClampMs) { out_->printf("WAIT clamped from %lus to 60s", static_cast<unsigned long>(ms / 1000)); ms = kWaitClampMs; }
+                else {
+                    int32_t sec = c.hasA ? c.a : 6; if (c.b == 1) sec = rng_->range(1, sec < 1 ? 1 : sec); if (sec < 1) sec = 1;
+                    // compared in seconds: ":PW4294968" multiplied to milliseconds wrapped to 0.7 s
+                    if (static_cast<Ms>(sec) > kWaitClampMs / 1000u) { out_->printf("WAIT clamped from %lds to 60s", static_cast<long>(sec)); sec = static_cast<int32_t>(kWaitClampMs / 1000u); }
+                    ms = static_cast<Ms>(sec) * 1000u;
+                }
+                if (ms > kWaitClampMs) ms = kWaitClampMs;
                 waiting_ = true; waitStart_ = now; waitMs_ = ms;
                 return;
             }
@@ -131,12 +136,15 @@ class Sequencer {
                 char text[SequenceStore::kMaxLen + 1];
                 if (!store_->read(clampv<int32_t>(c.a, 0, SequenceStore::kCount - 1), text, sizeof text)) { out_->printf("SEQ %ld: not stored", static_cast<long>(c.a)); advance(); return; }
                 Command tmp[kMaxElements]; int m = parseChain(text, tmp, kMaxElements, nullptr);
+                // #PS only stores what parses; a slot that does not (flash damage, or a later grammar)
+                // is skipped, never spliced with a negative count
+                if (m < 0) { out_->printf("SEQ %ld: unreadable, skipped", static_cast<long>(c.a)); advance(); return; }
                 splice(idx_, tmp, m);
                 out_->printf("SEQ %ld: %d element%s", static_cast<long>(c.a), m, m == 1 ? "" : "s");
                 return;                                                     // the spliced elements start at idx_
             }
             case Verb::Light: case Verb::LightRandom: case Verb::Random: case Verb::RandomLevel:
-                immediate(c); advance(); return;
+                immediate(c, src_); advance(); return;
             case Verb::Estop: l_->onEstop(); n_ = 0; return;
             case Verb::SpinStop: q_->cancel(); advance(); return;
             default: {
@@ -172,14 +180,24 @@ class Sequencer {
     }
 
   private:
-    void immediate(const Command& c) {
+    void immediate(const Command& c, ReqSource src) {
         switch (c.verb) {
             case Verb::Light: l_->onLight(clampv<int32_t>(c.a, 0, 7)); break;
             case Verb::LightRandom: l_->onLight(-1); break;
-            case Verb::Random: case Verb::RandomLevel: l_->onRandom(c); break;
+            case Verb::Random: case Verb::RandomLevel:
+                if (!randomAllowedFrom(src)) { out_->printf("RANDOM=refused (commissioning in progress: only the page or the USB console starts it)"); break; }
+                l_->onRandom(c); break;
             case Verb::Estop: l_->onEstop(); break;
             default: break;
         }
+    }
+    // While commissioning has lifted the lock, random mode's moves are let through (step 7 runs it),
+    // so random mode itself may only be started by someone watching: a ":PM" from the dome's bus
+    // would move a board whose direction and travel are not yet known (code review 2026-10).
+    bool randomAllowedFrom(ReqSource src) const {
+        Snapshot s; if (!pub_->read(s)) return false;
+        if (!(s.commissioning && s.state == MotionState::Locked)) return true;
+        return src == ReqSource::SerialUsb || src == ReqSource::Web || src == ReqSource::Commission || src == ReqSource::Test;
     }
     void advance() {
         ++idx_;

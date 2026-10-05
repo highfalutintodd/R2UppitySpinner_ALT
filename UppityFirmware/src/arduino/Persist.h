@@ -54,6 +54,7 @@ class Persist {
     NvsSequenceStore seq_;
     Op ops_buf_[kPendingOps]; int ops_ = 0;
     bool settingsDirty_ = false, calDirty_ = false, deferredNoted_ = false;
+    bool failing_ = false; Ms retryAt_ = 0;     // a failed write is tried again after retryAt_
     uint32_t saves_ = 0;
 };
 

@@ -21,10 +21,10 @@ STEPS = ["not started", "profile", "wiring check", "lift test", "rotary", "calib
 PROFILES = ["Pololu 4757 (6.3:1, original)", "Pololu 4751 (19:1, high-torque)", "IA-Parts"]
 
 def todd():
-    return {"MOTOR": 1, "INVERT": 1, "TRAVEL": 1150, "SAFESPIN": 904, "ROTARYTPR": 11855, "HOMEOFFSET": 0, "HOMEPARK": 1, "WIGGLE": 2,
+    return {"MOTOR": 1, "INVERT": 1, "TRAVEL": 1137, "SAFESPIN": 878, "ROTARYTPR": 11850, "HOMEOFFSET": 0, "HOMEPARK": 1, "WIGGLE": 2,
             "MINUP": 50, "MINDOWN": 50, "APPROACH": 0, "EXPERT": 0, "DRIFT": 5, "ROTARYMIN": 40, "ROTARYOFF": 0, "DRIVESIGN": -1,
             "AGGRESSION": 1, "ID": 0, "BAUD": 9600, "DEDUP": 750, "DEBUG": 0, "CMDTX": 0, "LIFTERNC": 0, "ROTARYNC": 0, "WIFI": 1,
-            "APCHANNEL": 1, "THEME": 0, "RANDOMLIGHT": 7, "COMMISSIONED": 1}
+            "APCHANNEL": 1, "THEME": 0, "RANDOMLIGHT": 7, "COMMISSIONED": 2}
 RANGES = {"MOTOR": (0, 2), "INVERT": (0, 1), "TRAVEL": (0, 5000), "SAFESPIN": (0, 5000), "ROTARYTPR": (0, 50000), "HOMEOFFSET": (-600, 600),
           "HOMEPARK": (0, 2), "WIGGLE": (0, 20), "MINUP": (0, 100), "MINDOWN": (0, 100), "APPROACH": (0, 100), "EXPERT": (0, 1), "DRIFT": (0, 20),
           "ROTARYMIN": (10, 100), "ROTARYOFF": (0, 1), "DRIVESIGN": (-1, 1), "AGGRESSION": (0, 2), "ID": (0, 255), "BAUD": (1200, 921600),
@@ -386,7 +386,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/config": self.js(200, SIM.config()); return
         if u.path == "/api/log":
             since = q.get("since", ["tail"])[0]; total = len(SIM.log)
-            frm = max(0, total - 2048) if since == "tail" else min(int(since), total)
+            frm = max(0, total - 2048) if since == "tail" else min(int(since) if since.isdigit() else 0, total)   # as the firmware's strtoul
             to = min(total, frm + 3000)
             self.js(200, {"from": frm, "next": to, "text": SIM.log[frm:to]}); return
         if u.path == "/api/estop": self.estop(); return

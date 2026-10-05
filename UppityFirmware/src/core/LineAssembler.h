@@ -37,31 +37,48 @@ class EstopScanner {
     int idx_[kPatterns] = {0, 0, 0, 0};
 };
 
-// Single-producer / single-consumer byte ring (RX callback -> loop()).
+// A byte that never occurs on our lines (ASCII CAN): it marks where bytes were lost, so the line
+// they belonged to is dropped instead of splicing its head onto a later line's tail (code review
+// 2026-10, finding 11: "#PSAFESPIN878" + lost bytes + "0" from "#PDRIFT=0" read as "#PSAFESPIN870").
+constexpr char kLostBytes = 0x18;
+
+// Single-producer / single-consumer byte ring (RX callback -> loop()). When a byte cannot be
+// stored, the next byte that can is preceded by kLostBytes. markLost() does the same for bytes the
+// UART itself dropped before they reached this ring.
 template <int N>
 class SerialFifo {
   public:
-    bool push(uint8_t b) { uint32_t h = head_, t = tail_; if (h - t >= static_cast<uint32_t>(N)) { dropped_ = dropped_ + 1; return false; } buf_[h % N] = b; __sync_synchronize(); head_ = h + 1; return true; }
+    bool push(uint8_t b) {
+        uint32_t h = head_, t = tail_;
+        if (lost_) { if (h - t + 1 >= static_cast<uint32_t>(N)) { dropped_ = dropped_ + 1; return false; } buf_[h % N] = static_cast<uint8_t>(kLostBytes); ++h; lost_ = false; }
+        if (h - t >= static_cast<uint32_t>(N)) { dropped_ = dropped_ + 1; lost_ = true; return false; }
+        buf_[h % N] = b; __sync_synchronize(); head_ = h + 1; return true;
+    }
+    void markLost() { lost_ = true; }
     bool pop(uint8_t& b) { uint32_t t = tail_, h = head_; if (t == h) return false; b = buf_[t % N]; __sync_synchronize(); tail_ = t + 1; return true; }
     int available() const { return static_cast<int>(head_ - tail_); }
     uint32_t dropped() const { return dropped_; }
   private:
     uint8_t buf_[N];
     volatile uint32_t head_ = 0, tail_ = 0, dropped_ = 0;
+    bool lost_ = false;                 // producer side only
 };
 
 class LineAssembler {
   public:
-    static constexpr int kMax = 256;
+    // The longest line #PCONFIG prints is "#PS100:" plus a 254-character stored sequence; a line
+    // that does not fit is dropped whole, never cut short and run (code review 2026-10).
+    static constexpr int kMax = 272;
     enum class Kind : uint8_t { None, Command, Ecosystem, Dropped };
 
     // Feed a byte; returns Command/Ecosystem when a line for us just completed (take it with
     // line()), Dropped when a foreign line was discarded, None otherwise.
     Kind feed(char c) {
+        if (c == kLostBytes) { dropping_ = true; return Kind::None; }  // bytes were lost: this line is not what was sent
         if (c == '\r' || c == '\n') {
             if (len_ == 0 && !dropping_) return Kind::None;          // bare terminator (CRLF second half)
             Kind k = Kind::None;
-            if (dropping_) { k = Kind::Dropped; ++dropped_; }
+            if (dropping_ || overflow_) { k = Kind::Dropped; ++dropped_; }
             else { buf_[len_] = '\0'; ready_ = true; k = buf_[0] == '&' ? Kind::Ecosystem : Kind::Command; }
             dropping_ = false; len_ = 0; overflow_ = false;
             if (k == Kind::Dropped) ready_ = false;

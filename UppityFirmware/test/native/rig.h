@@ -23,13 +23,35 @@ struct Rig {
         if (gregFixture) { sim::LifterParams p; p.breakawayDuty = 0.45; p.travelTicks = 450; p.kv = 0.5; hal.lifter.setParams(p); }
         sup.setConfig(cfg);
     }
-    void boot() { sup.begin(hal.nowMs()); drain(); }
-    // Advance n ms: tick at time t, then let the mechanism respond for 1 ms.
-    void runMs(int n) {
-        for (int i = 0; i < n; ++i) { sup.tick(hal.nowMs()); hal.advance(1); drain(); }
+    // Ground-truth safety watch (code review 2026-10): with watchSafe set to the safe-spin height in
+    // the simulated mast's own ticks, every simulated millisecond counts a rotary drive while the
+    // mast is below it (top switch not made), and a descent below it with the head more than
+    // 10.6 degrees off the switch centre. It reads the mechanism, not the firmware's idea of it, so a
+    // test that only checks where things ended cannot miss a violation on the way. Off (< 0) by
+    // default; a test that uses the override covers only the moves the override does not.
+    double watchSafe = -1;
+    int rotaryBelowSafe = 0, turnedBelowSafe = 0;
+    double headOffDegReal() const {
+        const auto& rp = hal.rotary.params();
+        double a = std::fmod(hal.rotary.position() - rp.camCentreTicks, rp.ticksPerRev); if (a < 0) a += rp.ticksPerRev;
+        if (a > rp.ticksPerRev / 2) a -= rp.ticksPerRev;
+        return std::fabs(a) * 360.0 / rp.ticksPerRev;
     }
+    void boot() { sup.begin(hal.nowMs()); drain(); }
+    // Advance one ms: tick at time t, then let the mechanism respond for 1 ms.
+    void stepOnce() {
+        double before = hal.lifter.position();
+        sup.tick(hal.nowMs()); hal.advance(1); drain();
+        if (watchSafe >= 0) {
+            double now = hal.lifter.position();
+            BridgeCommand rc = hal.command(Axis::Rotary);
+            if (rc.mode == Bridge::Drive && rc.duty != 0 && now < watchSafe && !hal.lifter.topLimit()) ++rotaryBelowSafe;
+            if (now < before - 0.01 && now < watchSafe && headOffDegReal() > 10.6) ++turnedBelowSafe;
+        }
+    }
+    void runMs(int n) { for (int i = 0; i < n; ++i) stepOnce(); }
     void runUntilIdle(int maxMs) {
-        for (int i = 0; i < maxMs; ++i) { sup.tick(hal.nowMs()); hal.advance(1); drain(); if (sup.activeJob() == JobKind::None && queue.size() == 0) return; }
+        for (int i = 0; i < maxMs; ++i) { stepOnce(); if (sup.activeJob() == JobKind::None && queue.size() == 0) return; }
     }
     void drain() { Event e; while (events.pop(e)) log.push_back(e); }
     void clearRecordsAndLog() { hal.clearRecords(); log.clear(); }

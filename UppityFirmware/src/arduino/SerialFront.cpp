@@ -6,7 +6,16 @@ namespace uppity {
 
 void SerialFront::begin(HardwareSerial& port, EstopLatch& estop, EstopLatch::Source src) {
     port_ = &port; estop_ = &estop; src_ = src;
+    rehook();
+}
+
+void SerialFront::rehook() {
+    if (!port_) return;
+    scanner_.reset();
     port_->onReceive([this]() { onRx(); });
+    // Bytes the UART itself lost (its FIFO overflowed while the flash cache was off, say) spoil the
+    // line they belonged to, as bytes lost on a full software FIFO do (LineAssembler kLostBytes).
+    port_->onReceiveError([this](hardwareSerial_error_t e) { if (e == UART_BUFFER_FULL_ERROR || e == UART_FIFO_OVF_ERROR) fifo_.markLost(); });
 }
 
 // UART event task context: scan and copy, nothing else.

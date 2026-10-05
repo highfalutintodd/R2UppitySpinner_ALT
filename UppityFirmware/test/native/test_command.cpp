@@ -34,10 +34,12 @@ TEST(settings_blob_round_trip_and_prefix_migration) {
     // a shorter blob (an older schema that stopped before the reserve) keeps its prefix and defaults the rest
     Settings c; CHECK_EQ(migrateSettings(c, blob, 40), kSettingsSchema);
     CHECK_EQ(c.travelTicks, 1150); CHECK_EQ(c.safeSpinTicks, 904); CHECK_EQ(c.inverted, 1); CHECK_EQ(c.driftPct, 5);
-    // garbage: too short, or from a future schema
+    // garbage: too short
     Settings d; CHECK_EQ(migrateSettings(d, blob, 4), 0); CHECK_EQ(d.travelTicks, 0);
+    // a future schema (an older build flashed over a newer one) keeps the part this build knows
+    // (code review 2026-10, finding 12; it used to be thrown away and overwritten with defaults)
     Settings f = a; f.schema = kSettingsSchema + 1; std::memcpy(blob, &f, sizeof f);
-    CHECK_EQ(migrateSettings(d, blob, sizeof blob), 0);
+    CHECK_EQ(migrateSettings(d, blob, sizeof blob), kSettingsSchema + 1); CHECK_EQ(d.travelTicks, 1150); CHECK_EQ(d.inverted, 1);
     // a schema-1 blob (randomLight did not exist: its byte was reserve, zero) migrates to schema 2
     Settings e = a; e.schema = 1; e.randomLight = 0; std::memcpy(blob, &e, sizeof e);
     Settings g; CHECK_EQ(migrateSettings(g, blob, sizeof blob), 1); CHECK_EQ(g.schema, kSettingsSchema); CHECK_EQ(g.randomLight, 0); CHECK_EQ(g.travelTicks, 1150);
@@ -310,16 +312,14 @@ TEST(random_director_gentle_uses_only_its_three_actions_and_obeys_policy) {
     CmdRig r;
     r.line(":PMG");
     CHECK(r.dir.active()); CHECK(r.out.has("RANDOM=on level=0"));
+    r.g.watchSafe = 225;                                              // the mechanism itself, every simulated ms
     r.run(240000);                                                    // four minutes of gentle random
     CHECK(r.dir.actions() >= 5);
     for (auto& l : r.out.lines) if (l.rfind("RANDOM action=", 0) == 0) { int a = l[14] - '0'; CHECK(a == 1 || a == 3 || a == 4); }
-    // policy held: every rotary job started with the lifter above the safe height
-    Ticks lifter = 0; bool ok = true;
-    for (auto& e : r.g.log) {
-        if (e.code == Ev::JobStart && (e.a == (int)JobKind::RotaryAbsolute || e.a == (int)JobKind::RotaryHome || e.a == (int)JobKind::RotarySpin)) { if (lifter <= 225 && !r.g.hal.lifter.topLimit()) ok = false; }
-        if (e.code == Ev::LimitTop || e.code == Ev::LimitBottom || e.code == Ev::JobEnd) lifter = r.g.snap().lifterTicks;
-    }
-    CHECK(ok);
+    // policy held, as the mechanism saw it: the head never turned below the safe height, and never
+    // came down past it turned (before the code review of 2026-10 this read the final snapshot only)
+    CHECK_EQ(r.g.rotaryBelowSafe, 0);
+    CHECK_EQ(r.g.turnedBelowSafe, 0);
     r.line(":PP100");                                                 // any motion command ends random mode
     CHECK(!r.dir.active()); CHECK(r.out.has("RANDOM=off"));
     CHECK_EQ(r.randomStops, 1);
@@ -356,10 +356,10 @@ TEST(random_director_parameterised_and_aggressive) {
 
 TEST(supervisor_hold_intake_keeps_requests_queued) {
     Rig g(gregConfig()); g.boot();
-    g.sup.setHoldIntake(true);
+    g.sup.setHoldIntake(MotionSupervisor::kHoldPersist, true);
     g.seek(200, 700); g.runMs(50);
     CHECK(g.sup.activeJob() == JobKind::None); CHECK_EQ(g.queue.size(), 1);
-    g.sup.setHoldIntake(false); g.runMs(5);
+    g.sup.setHoldIntake(MotionSupervisor::kHoldPersist, false); g.runMs(5);
     CHECK(g.sup.activeJob() == JobKind::LifterSeek);
     g.runUntilIdle(20000);
     CHECK_EQ(g.snap().lastProgramId, 1u);

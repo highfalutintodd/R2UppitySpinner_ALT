@@ -47,7 +47,11 @@ bool Persist::begin(Settings& s, Calibration& c, TextSink& log) {
             p.getBytes("settings", buf, n);
             uint16_t from = migrateSettings(s, buf, n);
             if (from == 0) log_->printf("SETTINGS=unreadable (%u bytes), using defaults", static_cast<unsigned>(n));
-            else {
+            else if (from > kSettingsSchema) {
+                // an older build flashed over a newer one: use what this build knows, leave the blob alone
+                had = true;
+                log_->printf("SETTINGS=from a newer build (schema %u; this build knows %u): kept, not rewritten until a setting changes", from, kSettingsSchema);
+            } else {
                 had = true;
                 if (from != kSettingsSchema || n != sizeof(Settings)) {
                     log_->printf("SETTINGS=migrated from schema %u (%u bytes) to %u", from, static_cast<unsigned>(n), kSettingsSchema);
@@ -60,7 +64,8 @@ bool Persist::begin(Settings& s, Calibration& c, TextSink& log) {
             p.getBytes("cal", buf, n);
             uint16_t cfrom = migrateCalibration(c, buf, n);
             if (cfrom == 0) log_->line("CALIBRATION=unreadable, ignored");
-            else { log_->printf("CALIBRATION=%s travel=%u minUp=%u minDown=%u rest=%u (profile %u)", c.valid ? "loaded" : "loaded (invalid)", c.travel, c.minUp, c.minDown, c.bottomRest, c.motor); calMigrated = cfrom != kCalibrationSchema || n != sizeof(Calibration); }
+            else { log_->printf("CALIBRATION=%s travel=%u minUp=%u minDown=%u rest=%u (profile %u)%s", c.valid ? "loaded" : "loaded (invalid)", c.travel, c.minUp, c.minDown, c.bottomRest, c.motor, cfrom > kCalibrationSchema ? " from a newer build, not rewritten" : "");
+                   calMigrated = cfrom < kCalibrationSchema || (cfrom == kCalibrationSchema && n != sizeof(Calibration)); }
         } else { c = Calibration{}; }
         p.end();
     } else {
@@ -101,30 +106,35 @@ void Persist::update(const Snapshot& snap, MotionSupervisor& sup) {
     if (!s_) return;
     if (settingsDirty_ && std::memcmp(s_, &lastSaved_, sizeof(Settings)) == 0) settingsDirty_ = false;    // unchanged: nothing to write
     if (calDirty_ && std::memcmp(c_, &lastSavedCal_, sizeof(Calibration)) == 0) calDirty_ = false;
-    if (!pending()) { deferredNoted_ = false; return; }
+    if (!pending()) { deferredNoted_ = false; failing_ = false; return; }
+    // a write that failed (NVS full, namespace unavailable) is tried again every 10 s, not on every
+    // loop() pass with a log line each time (code review 2026-10)
+    if (failing_ && static_cast<int32_t>(snap.tMs - retryAt_) < 0) return;
     bool disarmed = !snap.enabled && snap.activeJob == JobKind::None;
     if (!disarmed) {
         if (!deferredNoted_) { deferredNoted_ = true; log_->line("PERSIST=deferred (motors armed); it will save when the board is idle"); }
         return;
     }
-    sup.setHoldIntake(true);
+    sup.setHoldIntake(MotionSupervisor::kHoldPersist, true);
     if (settingsDirty_) {
         s_->size = sizeof(Settings); s_->schema = kSettingsSchema;
         bool ok = writeBlob("settings", s_, sizeof(Settings));
         if (ok) { lastSaved_ = *s_; ++saves_; }
-        log_->printf("PERSIST=%s settings", ok ? "saved" : "WRITE FAILED");
+        if (ok || !failing_) log_->printf("PERSIST=%s settings", ok ? "saved" : "WRITE FAILED (trying again every 10 s)");
         settingsDirty_ = !ok;
+        if (!ok) { failing_ = true; retryAt_ = snap.tMs + 10000; }
     }
     if (calDirty_) {
         c_->size = sizeof(Calibration); c_->schema = kCalibrationSchema;
         bool ok = writeBlob("cal", c_, sizeof(Calibration));
         if (ok) { lastSavedCal_ = *c_; ++saves_; }
-        log_->printf("PERSIST=%s calibration", ok ? "saved" : "WRITE FAILED");
+        if (ok || !failing_) log_->printf("PERSIST=%s calibration", ok ? "saved" : "WRITE FAILED (trying again every 10 s)");
         calDirty_ = !ok;
+        if (!ok) { failing_ = true; retryAt_ = snap.tMs + 10000; }
     }
     for (int i = 0; i < ops_; ++i) applyOp(ops_buf_[i]);
     ops_ = 0;
-    sup.setHoldIntake(false);
+    sup.setHoldIntake(MotionSupervisor::kHoldPersist, false);
     deferredNoted_ = false;
 }
 

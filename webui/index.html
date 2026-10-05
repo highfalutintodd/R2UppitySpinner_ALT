@@ -397,7 +397,9 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
       this.busy = true; this.last = Date.now();
       try {
         const r = await fetch('/api/log?since=' + (this.next < 0 ? 'tail' : this.next), { cache: 'no-store', signal: withTimeout(3000) });
+        if (!r.ok) throw 0;
         const j = await r.json();
+        if (typeof j.next !== 'number' || typeof j.text !== 'string') throw 0;   // an error answer must not reset the log position
         const first = this.next < 0;
         if (!first && j.from > this.next) this.add('… (' + (j.from - this.next) + ' bytes of log missed) …', false);
         const parts = (this.partial + j.text).split('\n');
@@ -558,7 +560,10 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
     if (polling || uploading) return;
     polling = true;
     try {
-      const r = await fetch('/api/state', { cache: 'no-store', signal: withTimeout(2000) }); const s = await r.json();
+      const r = await fetch('/api/state', { cache: 'no-store', signal: withTimeout(2000) });
+      if (!r.ok) throw 0;
+      const s = await r.json();
+      if (!s || !s.state || !s.lifter) throw 0;                               // a "busy" answer is a missed poll, not a status
       misses = 0; S = s; stateAt = Date.now(); renderAll();
       if (!seededTheme) { seededTheme = true; if (!theme && s.theme === 1) applyTheme('dark'); }
     } catch (e) { if (++misses >= 3) { const pill = $('pill'); pill.textContent = 'NO LINK'; pill.className = 'pill NOLINK'; } }

@@ -14,6 +14,7 @@
 #include "I2cService.h"
 #include "Persist.h"
 #include "Esp32Hal.h"
+#include "SerialFront.h"
 #include "../core/TextRing.h"
 #include "../core/LineQueue.h"
 #include "../core/Commissioning.h"
@@ -33,6 +34,7 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
         I2cService* i2c = nullptr; Persist* persist = nullptr; Sequencer* seq = nullptr; Dispatcher* disp = nullptr;
         RandomDirector* dir = nullptr; Esp32Hal* hal = nullptr; HardwareSerial* usb = nullptr; HardwareSerial* cmd = nullptr;
         LogRing* log = nullptr; WebLineQueue* web = nullptr;
+        SerialFront* cmdFront = nullptr;          // re-registered after the command UART is reopened
     };
     class NetStatus { public: virtual ~NetStatus() = default; virtual void printStatus(TextSink&) = 0; virtual bool anyClient() const = 0; };
     void begin(const Deps& d);
@@ -68,7 +70,8 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     void onRescue(const Command& c, ReqSource src);
     void onCommission(const Command& c);
     void importV3Now(bool forced);
-    void pushOperatorJob(JobKind k, int32_t a, int32_t c = 0);
+    void pushOperatorJob(JobKind k, int32_t a, int32_t c, ReqSource src);
+    void requestRestart(uint8_t kind, const char* why);
     void stopRandom(const char* why);
     bool refuseWhileMoving(const char* what);
     RandomDirector::Limits limits() const;
@@ -77,7 +80,9 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     Settings s_; Calibration cal_;
     EspRandom rng_;
     TriggerInputs triggers_; uint32_t lastInputReads_ = 0;
-    bool restartPending_ = false; Ms restartAt_ = 0;
+    // A restart (1), or a factory reset then a restart (2), waits until nothing runs, the drivers are
+    // off and every save has landed (5 s at most); the factory erase itself runs then, disarmed.
+    uint8_t restartKind_ = 0; Ms restartAt_ = 0;
     NetStatus* net_ = nullptr;
     Ms bootMs_ = 0;
     CommissionFlow flow_;

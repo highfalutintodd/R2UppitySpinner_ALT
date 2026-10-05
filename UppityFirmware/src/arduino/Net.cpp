@@ -4,6 +4,7 @@
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
+#include <initializer_list>
 #include <strings.h>
 #include "Net.h"
 #include "Console.h"
@@ -164,10 +165,10 @@ void Net::serviceSta() {
 void Net::setupOta() {
     ArduinoOTA.setHostname(kHost);
     ArduinoOTA.setPassword(d_.settings->apPass);
-    ArduinoOTA.onStart([]() { Net* n = gNetSelf; n->d_.sup->setHoldIntake(true); n->server_.stop(); n->otaPct_.store(0); });
+    ArduinoOTA.onStart([]() { Net* n = gNetSelf; n->d_.sup->setHoldIntake(MotionSupervisor::kHoldOta, true); n->server_.stop(); n->otaPct_.store(0); });
     ArduinoOTA.onProgress([](unsigned int done, unsigned int total) { if (total) gNetSelf->otaPct_.store(static_cast<int>(done * 100 / total)); });
     ArduinoOTA.onEnd([]() { gNetSelf->otaPct_.store(100); });
-    ArduinoOTA.onError([](ota_error_t e) { Net* n = gNetSelf; n->otaPct_.store(-2 - static_cast<int>(e)); n->d_.sup->setHoldIntake(false); n->server_.begin(); });
+    ArduinoOTA.onError([](ota_error_t e) { Net* n = gNetSelf; n->otaPct_.store(-2 - static_cast<int>(e)); n->d_.sup->setHoldIntake(MotionSupervisor::kHoldOta, false); n->server_.begin(); });
     ArduinoOTA.begin();
 }
 
@@ -342,13 +343,18 @@ void Net::handleLog() {
     String since = server_.arg("since");
     uint32_t total = d_.log->total();
     uint32_t from = since == "tail" || since.length() == 0 ? (total > 2048 ? total - 2048 : 0) : static_cast<uint32_t>(strtoul(since.c_str(), nullptr, 10));
-    uint32_t actual = from;
-    size_t n = d_.log->read(from, logBuf_, 3000, &actual);        // leaves the JSON escaper headroom in logJson_, so a chunk can never overflow and strand the page
-    logBuf_[n] = '\0';
-    JsonWriter j(logJson_, sizeof logJson_);
-    j.beginObject(); j.kv("from", static_cast<unsigned long>(actual)); j.kv("next", static_cast<unsigned long>(actual + n)); j.kv("text", logBuf_); j.endObject();
-    if (j.overflowed()) { fail(500, "overflow"); return; }
-    sendJson(200, logJson_);
+    // 3000 bytes fit the 6 KB answer unless they are mostly control characters (6 bytes each once
+    // escaped: line noise on the command UART is echoed as INVALID=...); then a 1000-byte chunk, which
+    // always fits, so the page never gets stuck on a chunk it cannot read (code review 2026-10)
+    for (size_t chunk : { static_cast<size_t>(3000), static_cast<size_t>(1000) }) {
+        uint32_t actual = from;
+        size_t n = d_.log->read(from, logBuf_, chunk, &actual);
+        logBuf_[n] = '\0';
+        JsonWriter j(logJson_, sizeof logJson_);
+        j.beginObject(); j.kv("from", static_cast<unsigned long>(actual)); j.kv("next", static_cast<unsigned long>(actual + n)); j.kv("text", logBuf_); j.endObject();
+        if (!j.overflowed()) { sendJson(200, logJson_); return; }
+    }
+    fail(500, "overflow");
 }
 
 // ---------------------------------------------------------------- web OTA (POST /update, app .bin)
@@ -359,7 +365,7 @@ void Net::handleUpdateUpload() {
     if (up.status == UPLOAD_FILE_START) {
         otaRefused_ = !disarmed(); otaFailed_ = false;
         if (otaRefused_) return;
-        d_.sup->setHoldIntake(true);
+        d_.sup->setHoldIntake(MotionSupervisor::kHoldOta, true);
         otaPct_.store(0);
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { otaFailed_ = true; }
     } else if (up.status == UPLOAD_FILE_WRITE) {
@@ -370,13 +376,17 @@ void Net::handleUpdateUpload() {
         if (otaRefused_ || otaFailed_) { if (!otaRefused_) Update.abort(); return; }
         if (!Update.end(true)) otaFailed_ = true; else otaPct_.store(100);
     } else if (up.status == UPLOAD_FILE_ABORTED) {
-        Update.abort(); otaFailed_ = true;
+        // The client went away mid-upload (phone locked, WiFi dropped, tab closed). WebServer then
+        // skips handleUpdateDone, so the hold is released here, or nothing would move until the next
+        // settings save released it and the stale queued requests ran (code review 2026-10).
+        if (!otaRefused_) { Update.abort(); d_.sup->setHoldIntake(MotionSupervisor::kHoldOta, false); otaPct_.store(-2); }
+        otaFailed_ = true;
     }
 }
 
 void Net::handleUpdateDone() {
     if (otaRefused_) { fail(409, "armed", "update refused: a motor is enabled or a job is running"); return; }
-    if (otaFailed_ || Update.hasError()) { d_.sup->setHoldIntake(false); otaPct_.store(-2); fail(500, "update", "update failed; the old firmware is intact"); return; }
+    if (otaFailed_ || Update.hasError()) { d_.sup->setHoldIntake(MotionSupervisor::kHoldOta, false); otaPct_.store(-2); fail(500, "update", "update failed; the old firmware is intact"); return; }
     ok("Update written, restarting");
     delay(300);
     ESP.restart();

@@ -88,11 +88,15 @@ TEST(boot_mid_travel_permits_only_up_until_referenced) {
 }
 
 TEST(boot_with_both_limits_closed_is_a_fault) {
-    Rig g(gregConfig());
-    g.boot();                                   // sim can't hold both; inject via the model? use resolve directly
-    // Contradiction is tested at the resolver level; here we check the supervisor refuses motion with the fault set.
-    g.sup.requestClearFault();                  // no-op path
-    CHECK(g.snap().state == MotionState::Idle);
+    // A finger (or a short, or the wrong #PLIFTERNC) on the top switch with the mast at the bottom.
+    // (Before the code review of 2026-10 this test booted with neither switch made.)
+    Rig g(gregConfig()); g.hal.lifter.setPosition(0); g.hal.forceTop = true;
+    g.boot(); g.runMs(10);
+    CHECK(g.hal.lifter.bottomLimit());
+    CHECK(g.sup.faults().has(F_LimitContradiction));
+    CHECK(g.sup.lifter().confidence != LifterConfidence::Known);
+    g.seek(450, 650, true); g.runMs(500);
+    CHECK_EQ(g.hal.driveWrites(), 0u);
 }
 
 TEST(finger_on_top_switch_with_mast_down_does_not_move_the_reference) {
@@ -400,7 +404,7 @@ TEST(enable_wait_and_expander_fault) {
     g.runMs(10);
     CHECK(g.hal.driveWrites() > 0);
     Rig f(gregConfig()); f.hal.lifter.setPosition(0); f.hal.failEnable = true; f.boot();
-    f.seek(300, 650); f.runUntilIdle(200);
+    f.seek(300, 650); f.runUntilIdle(400);                     // the enable wait is 250 ms (code review 2026-10, finding 14)
     CHECK(f.snap().lastReason == static_cast<uint8_t>(Reason::ExpanderFault));
     CHECK(f.sup.faults().has(F_Expander));
 }
@@ -451,10 +455,9 @@ TEST(rotary_below_the_top_is_refused_until_safe_spin_is_set) {
     MotionConfig c = gregConfig(false); c.safeSpinTicks = 0;
     Rig g(c); g.hal.lifter.setPosition(0); g.hal.rotary.setPosition(g.hal.rotary.params().camCentreTicks); g.boot();
     g.seek(400, 0); g.runUntilIdle(20000);                                            // 89 %, not the top
-    Ms t0 = g.hal.nowMs();
+    g.watchSafe = 1e9;                                                                // only the top switch counts as clear
     g.req(JobKind::RotaryAbsolute, 90, 0, 0); g.runUntilIdle(30000);
-    bool rotaryDrove = false; for (int i = 0; i < g.hal.recordCount(); ++i) { const auto& r = g.hal.rec(i); if (r.t > t0 && r.a == Axis::Rotary && r.c.mode == Bridge::Drive && r.c.duty != 0 && !g.hal.lifter.topLimit()) rotaryDrove = true; }
-    CHECK(!rotaryDrove);                                                              // it raised to the top first
+    CHECK_EQ(g.rotaryBelowSafe, 0);                                                   // it raised to the top first (watched every ms)
     CHECK(g.hal.lifter.topLimit());
     CHECK(g.snap().lastResult == JobResult::DoneTarget);
 }

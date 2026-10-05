@@ -73,7 +73,8 @@ inline int formatEvent(const Event& e, char* buf, size_t n) {
             if (e.c & 0x10000) return std::snprintf(buf, n, "%sESTOP drivers off after %ld ms of braking, before the counts settled (lifter %+ld ticks, rotary %+ld since the latch)", head, (long)(e.c & 0xffff), (long)e.a, (long)e.b);
             if ((e.c & 0xffff) == 0 && e.a == 0 && e.b == 0) return std::snprintf(buf, n, "%sESTOP nothing was moving; drivers off", head);
             return std::snprintf(buf, n, "%sESTOP braked to a stop: lifter %+ld ticks, rotary %+ld since the latch; drivers off after %ld ms", head, (long)e.a, (long)e.b, (long)(e.c & 0xffff));
-        case Ev::Fault: return std::snprintf(buf, n, "%sFAULT mask=0x%lx %s%s", head, (unsigned long)e.a, e.b ? "set" : "cleared", e.c == 1 ? " (EN cycle)" : e.c == 2 ? " (persists after EN cycle)" : "");
+        case Ev::Fault: return std::snprintf(buf, n, "%sFAULT mask=0x%lx %s%s", head, (unsigned long)e.a, e.b ? "set" : "cleared", e.c == 1 ? " (EN cycle)" : e.c == 2 ? " (persists after EN cycle)" :
+                                         e.c == 3 ? (e.b ? " (home switch stuck closed while the head turned; no homes until it reads open)" : " (home switch reads open again)") : "");
         case Ev::Enable: return std::snprintf(buf, n, "%sDRIVERS %s", head, e.a ? "enable" : "disable");
         case Ev::Phase: return std::snprintf(buf, n, "%s%s phase %ld at %ld", head, jobName(e.a), (long)e.b, (long)e.c);
         case Ev::Measure:

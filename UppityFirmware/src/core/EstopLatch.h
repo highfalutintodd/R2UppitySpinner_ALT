@@ -15,9 +15,11 @@ class EstopLatch {
     void setPanic(PanicFn fn, void* ctx) { panicFn_ = fn; panicCtx_ = ctx; }
 
     // Idempotent. The first trip records the source and time; later trips only bump the count.
+    // The flag goes up before the panic hook runs, so a supervisor tick that re-reads it just
+    // before its PWM writes sees it once the outputs have been zeroed.
     void trip(Source s, Ms nowMs) {
-        if (panicFn_) panicFn_(panicCtx_);
         bool was = tripped_.exchange(true, std::memory_order_acq_rel);
+        if (panicFn_) panicFn_(panicCtx_);
         if (!was) {
             source_.store(static_cast<uint8_t>(s), std::memory_order_relaxed);
             at_.store(nowMs, std::memory_order_relaxed);

@@ -12,6 +12,9 @@ namespace uppity {
 class SerialFront {
   public:
     void begin(HardwareSerial& port, EstopLatch& estop, EstopLatch::Source src);
+    // HardwareSerial::end() drops the receive callbacks; after the console reopens the port
+    // (#PBAUD, #PCMDTX) they must be registered again, or the port, E-STOP scanner included, is deaf.
+    void rehook();
     // Returns a complete line for us (or nullptr). Call repeatedly from loop().
     const char* pollLine(LineAssembler::Kind& kind);
     uint32_t droppedBytes() const { return fifo_.dropped(); }
