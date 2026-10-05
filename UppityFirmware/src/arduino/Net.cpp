@@ -27,14 +27,20 @@ bool Net::begin(const Deps& d) {
     if (!d_.settings->wifiEnabled) { d_.console->line("WIFI=off (#PWIFI1 and #PRESTART to enable)"); return false; }
     uint8_t mac[6]; WiFi.macAddress(mac);
     std::snprintf(apSsid_, sizeof apSsid_, "R2Uppity-%02X%02X", mac[4], mac[5]);     // v3's hostname convention
-    std::snprintf(staSsid_, sizeof staSsid_, "%s", d_.settings->staSsid);
-    std::snprintf(staPass_, sizeof staPass_, "%s", d_.settings->staPass);
+    // With the mesh on, the WCB library owns the station side (and rewrites its MAC), and ESP-NOW
+    // rides the access point's channel: the AP goes on the mesh channel and no home network is joined.
+    meshOn_ = d_.settings->meshEnabled && meshMissing(*d_.settings) == nullptr;
+    if (!meshOn_) {
+        std::snprintf(staSsid_, sizeof staSsid_, "%s", d_.settings->staSsid);
+        std::snprintf(staPass_, sizeof staPass_, "%s", d_.settings->staPass);
+    }
     bool sta = staSsid_[0] != '\0';
+    uint8_t channel = meshOn_ ? d_.settings->meshChannel : d_.settings->apChannel;
     WiFi.persistent(false);
     WiFi.mode(sta ? WIFI_AP_STA : WIFI_AP);
     WiFi.setHostname(kHost);
     WiFi.setSleep(false);
-    WiFi.softAP(apSsid_, d_.settings->apPass, d_.settings->apChannel);
+    WiFi.softAP(apSsid_, d_.settings->apPass, channel);
     bool defaultPass = std::strcmp(d_.settings->apPass, "Astromech") == 0;
     d_.console->printf("WIFI AP \"%s\" password %s -> http://%s  (http://%s.local)", apSsid_, defaultPass ? "\"Astromech\" (the default; #PAPPASS=<yours> to change)" : "<yours>", WiFi.softAPIP().toString().c_str(), kHost);
     WiFi.onEvent([](WiFiEvent_t ev, WiFiEventInfo_t info) {
@@ -46,7 +52,10 @@ bool Net::begin(const Deps& d) {
             default: break;
         }
     });
-    if (sta) {
+    if (meshOn_) {
+        d_.console->printf("WIFI mesh mode: access point on the mesh channel %u, home network not joined%s. The page is at http://%s on \"%s\" (#PMESH0 and #PRESTART to go back)",
+                           channel, d_.settings->staSsid[0] ? " (it stays stored)" : "", WiFi.softAPIP().toString().c_str(), apSsid_);
+    } else if (sta) {
         WiFi.setAutoReconnect(false);             // our own schedule (Sabé): stock reconnect hammers a missing network and disturbs the AP
         staNextTryMs_ = millis();                 // first try at once
         d_.console->printf("WIFI home network \"%s\" stored; joining in the background", staSsid_);
@@ -268,7 +277,7 @@ void Net::writeWifiJson(JsonWriter& j) {
     j.beginObject();
     j.kv("ap", apSsid_); j.kv("clients", static_cast<int>(apClients_.load()));
     uint8_t st = staState_.load();
-    j.kv("sta", staSsid_[0] == '\0' ? "off" : st == 2 ? "up" : st == 1 ? "joining" : "down");
+    j.kv("sta", meshOn_ ? "mesh" : staSsid_[0] == '\0' ? "off" : st == 2 ? "up" : st == 1 ? "joining" : "down");
     j.kv("ssid", staSsid_);
     j.kv("estopPort", 81); j.kv("estopHits", static_cast<unsigned long>(estopHits_)); j.kv("webEstops", static_cast<unsigned long>(webEstops_)); j.kv("stalled", static_cast<unsigned long>(stalledDropped_));
     j.kv("ip", st == 2 ? WiFi.localIP().toString().c_str() : WiFi.softAPIP().toString().c_str());
@@ -281,7 +290,7 @@ void Net::printStatus(TextSink& out) {
     if (!up_) { out.line("WIFI=off"); return; }
     uint8_t st = staState_.load();
     out.printf("WIFI=ap \"%s\" %s clients=%u  home=%s%s%s  http://%s.local  estopPort=81 hits=%lu webEstops=%lu stalledDropped=%lu", apSsid_, WiFi.softAPIP().toString().c_str(), (unsigned)apClients_.load(),
-               staSsid_[0] ? staSsid_ : "(none)", st == 2 ? " up " : st == 1 ? " joining" : staSsid_[0] ? " down" : "",
+               meshOn_ ? "(not used: mesh on)" : staSsid_[0] ? staSsid_ : "(none)", st == 2 ? " up " : st == 1 ? " joining" : staSsid_[0] ? " down" : "",
                st == 2 ? WiFi.localIP().toString().c_str() : "", kHost, static_cast<unsigned long>(estopHits_), static_cast<unsigned long>(webEstops_), static_cast<unsigned long>(stalledDropped_));
 }
 

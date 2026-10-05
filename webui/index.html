@@ -197,6 +197,7 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
     <a href="#setup/tuning" data-sec="tuning">Tuning</a>
     <a href="#setup/serial" data-sec="serial">Serial</a>
     <a href="#setup/wifi" data-sec="wifi">WiFi</a>
+    <a href="#setup/mesh" data-sec="mesh">Mesh</a>
     <a href="#setup/firmware" data-sec="firmware">Firmware</a>
     <a href="#setup/theme" data-sec="theme">Theme</a>
   </div>
@@ -247,6 +248,15 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
     <div id="f-wifi"></div>
     <p class="note">WiFi changes take effect after a restart. The access point (the board's own network) is always there; if the home network does not work you can still reach the page on the access point at 192.168.4.1.</p>
     <div class="row"><button class="danger" id="wifiRestart">Restart to apply</button></div>
+  </div>
+
+  <div class="card setsec" data-sec="mesh">
+    <h2>Mesh (WCB)</h2>
+    <div class="grid" id="meshNow"></div>
+    <p class="note"><b>Off unless you turn it on.</b> With the mesh on, the periscope joins your WCBs' ESP-NOW network as its own board: it takes <code>:P</code> moves and E-STOPs from it and sends <code>&amp;PERI</code> heartbeats and positions. The mesh then owns the WiFi radio, so <b>the board leaves your home network</b>: after the restart this page is only at <b>http://192.168.4.1</b> on the board's own network (<span id="meshAp">R2Uppity-…</span>, same password). Turn the mesh off here or with <code>#PMESH0</code> to go back.</p>
+    <p class="note">Copy the values from a WCB (its serial console or the WCB config tool): <code>?WCBM</code> for the octets, <code>?WCBQ</code> for the quantity, <code>?WCBCH</code> for the channel. Type the mesh password here only: it is never shown again or printed in the log.</p>
+    <div id="f-mesh"></div>
+    <div class="row"><button class="danger" id="meshRestart">Restart to apply</button></div>
   </div>
 
   <div class="card setsec" data-sec="firmware">
@@ -624,6 +634,16 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
       { k: 'APCHANNEL', label: 'Own network channel', type: 'num', min: 1, max: 13 },
       { k: 'WIFI', label: 'WiFi radio', type: 'sel', opts: onOff, confirm: 'Off = no page at all after the restart (USB only)' },
     ],
+    mesh: [
+      { k: 'MESHMAC', label: 'Mesh MAC octets', type: 'text', max: 9, help: 'As the WCBs show it (?WCBM), for example 3C:4E.' },
+      { k: 'MESHPASS', label: 'Mesh password', type: 'secret', max: 39, help: 'The WCBs\' password (?WCBP), at most 39 characters.' },
+      { k: 'MESHQTY', label: 'How many WCBs', type: 'num', min: 1, max: 19, help: 'The WCBs\' quantity (?WCBQ).' },
+      { k: 'MESHID', label: 'This board\'s mesh number', type: 'num', min: 1, max: 19, help: 'Not used by any other board. 20 is the controller\'s (Sabé).' },
+      { k: 'MESHCHAN', label: 'Mesh channel', type: 'num', min: 1, max: 13, help: 'The WCBs\' channel (?WCBCH), usually 1. The board\'s own network moves to it.' },
+      { k: 'MESHCRC', label: 'Checksum', type: 'sel', opts: onOff, help: 'As set on the WCBs: on unless you changed it.' },
+      { k: 'MESHHB', label: 'Heartbeat every', type: 'num', min: 5, max: 300, unit: 's', help: '&PERI,HB on the mesh. Takes effect at once.' },
+      { k: 'MESH', label: 'Join the mesh', type: 'sel', opts: onOff, confirm: 'On = after the restart the board leaves your home network; the page is then at http://192.168.4.1 on its own WiFi' },
+    ],
   };
   function fieldValue(f) { if (!Cfg) return ''; const v = Cfg[f.k]; if (f.type === 'secret') return ''; if (f.scale) return v / f.scale; return v; }
   function renderFields() {
@@ -713,10 +733,27 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
     if (setupSec === 'wifi') setHtml('wifiNow', gridHtml([['Own network', s.wifi.ap + ' (' + s.wifi.clients + ' joined)'], ['Home network', s.wifi.ssid ? s.wifi.ssid + ': ' + s.wifi.sta : 'none stored'],
       ['Address', s.wifi.ip], ['Signal', s.wifi.sta === 'up' ? s.wifi.rssi + ' dBm' : '–']]));
     if (setupSec === 'firmware') renderFwNow();
+    if (setupSec === 'mesh') renderMeshNow(s);
+  }
+  function meshText(m) {
+    if (!m || !m.enabled) return 'off';
+    if (!m.on) return m.missing ? 'not started: needs ' + m.missing.replace(/ \(.*$/, '') : 'on after a restart';
+    const up = (m.wcbs || []).filter(Boolean).length;
+    return 'on as ' + m.id + ' · WCBs ' + up + '/' + m.qty + (m.controller ? ' · Sabé seen' : '');
+  }
+  function renderMeshNow(s) {
+    const m = s.mesh || {};
+    if (s.wifi) setText('meshAp', s.wifi.ap);
+    const rows = [['Mesh', meshText(m)]];
+    if (m.missing && m.enabled) rows.push(['Still needed', m.missing]);
+    if (m.on) rows.push(['WCBs online', (m.wcbs || []).map((v, i) => 'WCB' + (i + 1) + (v ? ' ✓' : ' –')).join(' · ')], ['Heard', m.rx + ' messages · ' + m.ours + ' for us · last ' + (m.lastRxS < 0 ? 'never' : m.lastRxS + ' s ago from ' + m.lastFrom)],
+      ['Heartbeats sent', m.hb + (m.lastHbS >= 0 ? ' · last ' + m.lastHbS + ' s ago' : '')], ['Neighbours', m.neighbours], ['Send failures', m.txFail]);
+    setHtml('meshNow', gridHtml(rows));
   }
   function renderFwNow() { if (S) setHtml('fwNow', gridHtml([['Version', S.fw], ['Build', S.build], ['Up', Math.floor(S.up / 60) + ' min ' + (S.up % 60) + ' s'], ['Settings', S.persist]])); }
   confirmTap($('wifiRestart'), 'Tap again: restart now', () => post('/api/restart'));
   confirmTap($('fwRestart'), 'Tap again: restart now', () => post('/api/restart'));
+  confirmTap($('meshRestart'), 'Tap again: restart now', () => post('/api/restart'));
   $('fwFactory').onclick = () => $('factoryBox').classList.remove('hidden');
   $('factoryCancel').onclick = () => $('factoryBox').classList.add('hidden');
   $('factoryGo').onclick = async () => { $('factoryBox').classList.add('hidden'); const l = await ask('#PFACTORY', /^FACTORY=/, 4000); if (l) toast(l, /refused/.test(l)); };
@@ -886,7 +923,7 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
       ['Override', s.override ? s.override + ' s' : 'off'], ['Alignment', s.alignment], ['E-STOP', s.estop ? 'latched (' + s.estopSource + ')' : 'clear'],
       ['Control tick', 'max ' + s.tick.maxUs + ' µs · late ' + s.tick.late], ['Random', s.random.on ? 'on (level ' + s.random.level + ')' : 'off'],
       ['Light kit', s.light], ['Trigger inputs', s.inputs], ['Settings', s.persist], ['Commissioned', s.commissioned],
-      ['WiFi', s.wifi.ap + ' · ' + s.wifi.clients + ' joined · home ' + s.wifi.sta], ['E-STOP arrivals', 'port 81: ' + s.wifi.estopHits + ' · web: ' + s.wifi.webEstops],
+      ['WiFi', s.wifi.ap + ' · ' + s.wifi.clients + ' joined · home ' + s.wifi.sta], ['Mesh', meshText(s.mesh)], ['E-STOP arrivals', 'port 81: ' + s.wifi.estopHits + ' · web: ' + s.wifi.webEstops],
       ['Stalled links dropped', s.wifi.stalled], ['Up', Math.floor(s.up / 60) + ' min'], ['Build', s.build]]));
     const rt = s.job === 'ROTARYTEST' ? 'Turning: switch passes ' + s.detail : s.program === 'ROTARYTEST' ? 'Getting ready (' + s.job.toLowerCase() + ')' : '';
     setText('rtProg', rt); $('rtRun').disabled = s.job !== 'NONE';

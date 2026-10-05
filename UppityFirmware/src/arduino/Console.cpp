@@ -3,6 +3,7 @@
 #include <esp_random.h>
 #include <esp_app_desc.h>
 #include "Console.h"
+#include "../core/MeshProtocol.h"
 #include "../core/EventFormat.h"
 #include "../../Version.h"
 #include "../../Board.h"
@@ -53,14 +54,20 @@ void Console::line(const char* text) {
 }
 
 void Console::handleWebLine(const char* l) {
-    if (std::strcmp(l, "!STOP") == 0) {           // the page's soft stop: end the show, drop the chain, cancel the job
-        stopRandom("web stop"); d_.seq->clear("web stop"); d_.q->cancelAll(); line("STOP=web");   // the running job and anything queued
-        return;
-    }
+    if (std::strcmp(l, "!STOP") == 0) { stopAll("web"); return; }   // the page's soft stop
     d_.disp->handleLine(l, ReqSource::Web, millis());
 }
 
+// End the show, drop the chain, cancel the running job and anything queued behind it (D2).
+void Console::stopAll(const char* why) {
+    char w[40]; std::snprintf(w, sizeof w, "%s stop", why);
+    stopRandom(w); d_.seq->clear(w); d_.q->cancelAll(); printf("STOP=%s", why);
+}
+
 void Console::writeStateJson(JsonWriter& j) {
+    j.key("mesh");
+    if (mesh_) mesh_->writeJson(j);
+    else { j.beginObject(); j.kv("enabled", s_.meshEnabled != 0); j.kv("on", false); j.kv("missing", meshMissing(s_) ? meshMissing(s_) : ""); j.endObject(); }
     j.key("random"); j.beginObject(); j.kv("on", d_.dir->active()); j.kv("level", static_cast<int>(s_.aggressiveness)); j.endObject();
     j.kv("seq", d_.seq->active());
     j.kv("light", static_cast<int>(d_.i2c->lightKit()));
@@ -334,7 +341,12 @@ void Console::pushOperatorJob(JobKind k, int32_t a, int32_t c, ReqSource src) {
 }
 
 void Console::onConfig(const Command& c, const char* raw, ReqSource src) {
-    (void)raw;
+    (void)raw;                                    // never printed: it may carry a password
+    // The mesh is unattended and over the air: motion, questions and #PRESUME only (MeshProtocol.h).
+    if (src == ReqSource::Mesh && !meshMayRunConfig(c.verb)) {
+        line("MESH=refused a #P command from the mesh: settings, commissioning, unlocking and restarts come from the USB console or the page");
+        return;
+    }
     switch (c.verb) {
         case Verb::Override: case Verb::Jog: case Verb::Nudge: case Verb::SetHome: onRescue(c, src); break;
         case Verb::Commission: case Verb::SafeSpinHere: onCommission(c); break;
@@ -407,14 +419,15 @@ void Console::setKey(const Command& c) {
     if (const StringKey* sk = findStringKey(c.key, std::strlen(c.key))) {
         if (!c.text) { if (sk->secret) printf("#P%s=%s  (%s)", sk->name, stringField(s_, *sk)[0] ? "(set)" : "(empty)", sk->help); else printf("#P%s=%s  (%s)", sk->name, stringField(s_, *sk), sk->help); return; }
         // a too-short access-point password used to become the published default and be saved
-        if (!acceptStringValue(*sk, c.text)) { printf("OUT_OF_RANGE=#P%s (WPA2 needs 8 or more characters; nothing changed)", sk->name); return; }
+        if (!acceptStringValue(*sk, c.text)) { printf("OUT_OF_RANGE=#P%s (%s; nothing changed)", sk->name, stringValueRule(*sk)); return; }
         Settings before = s_;
-        setStringField(s_, *sk, c.text);
+        { char v[80]; canonicalStringValue(*sk, c.text, v, sizeof v); setStringField(s_, *sk, v); }
         sanitize(s_);
         bool changed = std::memcmp(&before, &s_, sizeof s_) != 0;
         if (changed) d_.persist->requestSaveSettings();
         if (sk->secret) printf("#P%s=%s (%s; takes effect after #PRESTART)", sk->name, stringField(s_, *sk)[0] ? "(set)" : "(cleared)", changed ? "saved" : "unchanged");
         else printf("#P%s=%s (%s; takes effect after #PRESTART)", sk->name, stringField(s_, *sk), changed ? "saved" : "unchanged");
+        if (std::strncmp(sk->name, "MESH", 4) == 0 && s_.meshEnabled) noteMesh();
         return;
     }
     const SettingKey* k = findSettingKey(c.key, std::strlen(c.key));
@@ -439,10 +452,19 @@ void Console::setKey(const Command& c) {
     }
     else if (std::strcmp(k->name, "COMMISSIONED") == 0) note = s_.commissioned ? " (unlocked)" : " (LOCKED)";
     else if (std::strcmp(k->name, "WIFI") == 0 || std::strcmp(k->name, "APCHANNEL") == 0) note = " (takes effect after #PRESTART)";
+    else if (std::strncmp(k->name, "MESH", 4) == 0 && std::strcmp(k->name, "MESHHB") != 0) note = " (takes effect after #PRESTART)";
     applySettings(false);
     if (changed) d_.persist->requestSaveSettings();
     formatSetting(s_, *k, buf, sizeof buf);
     printf("%s%s%s", buf, changed ? " (saved)" : " (unchanged)", note);
+    if (std::strncmp(k->name, "MESH", 4) == 0 && s_.meshEnabled && changed) noteMesh();
+}
+
+// What turning the mesh on means, said before it happens (docs/PHASE5-BRIEF.md scope item 5).
+void Console::noteMesh() {
+    const char* ap = net_ ? net_->apSsid() : "R2Uppity-....";
+    printf("MESH note: after #PRESTART the board joins the WCB mesh and stays OFF your home network; the page is then only at http://192.168.4.1 on the \"%s\" WiFi (its password as before)", ap);
+    if (const char* m = meshMissing(s_)) printf("MESH note: it will not start until it has %s", m);
 }
 
 // ---------------------------------------------------------------- reports
@@ -463,9 +485,11 @@ void Console::printState() {
 void Console::printConfig() {
     printf("CONFIG=begin v%s schema=%u (every #P line below can be pasted back)", UPPITY_FW_VERSION, kSettingsSchema);
     char buf[64];
-    for (int i = 0; i < kSettingKeyCount; ++i) { formatSetting(s_, kSettingKeys[i], buf, sizeof buf); line(buf); }
+    for (int i = 0; i < kSettingKeyCount; ++i) { formatConfigLine(s_, kSettingKeys[i], buf, sizeof buf); line(buf); }
+    if (tprUnmeasured(s_)) printf("INFO=ROTARYTPR is %.1f but not a confident measurement (v3's figure, or a spread over 5 %%): written as 0, so a restore measures it again", s_.ticksPerRev);
     printf("#PSSID=%s", s_.staSsid);
-    printf("INFO=PASS %s, APPASS %s (passwords are never printed)", s_.staPass[0] ? "set" : "empty", std::strcmp(s_.apPass, "Astromech") == 0 ? "default" : "custom");
+    printf("#PMESHMAC=%s", s_.meshMac);
+    printf("INFO=PASS %s, APPASS %s, MESHPASS %s (passwords are never printed)", s_.staPass[0] ? "set" : "empty", std::strcmp(s_.apPass, "Astromech") == 0 ? "default" : "custom", s_.meshPass[0] ? "set" : "empty");
     printSequences();
     printf("CONFIG=end travel_in_use=%ld%s", static_cast<long>(effectiveTravel(s_, cal_)), s_.travelTicks ? " (#PTRAVEL)" : calibrationApplies(s_, cal_) ? " (calibrated)" : " (profile guess)");
 }
@@ -502,6 +526,7 @@ void Console::printStatus() {
     printf("SERIAL=usb+cmd@%lu id=%u dedup=%ums droppedForId=%lu duplicates=%lu cmdTx=%u", static_cast<unsigned long>(s_.cmdBaud), s_.marcId, s_.dedupMs, static_cast<unsigned long>(d_.disp->droppedForId()), static_cast<unsigned long>(d_.disp->droppedDuplicates()), s_.cmdTx);
     printf("EXPANDER=%s errors=%lu inputs=%u light=%u", d_.i2c->ok() ? "ok" : "FAILING", static_cast<unsigned long>(d_.i2c->errors()), d_.i2c->inputs(), d_.i2c->lightKit());
     if (net_) net_->printStatus(*this); else line("WIFI=off");
+    if (mesh_) mesh_->printStatus(*this); else line(s_.meshEnabled ? "MESH=not running" : "MESH=off");
 }
 
 void Console::printV3() {
@@ -518,6 +543,7 @@ void Console::printHelp() {
     line("CFG=#PRESUME #PSTATE #PSTATUS #PCONFIG #PCAL #PSC #PROTARYTEST[n] #PCLEARFAULT #PUNLOCK #PLOCK #PS<n>:<seq> #PL #PD<n> #PSEQNAME<n>=<name> #PZERO #PR #PNCL/#PNOL/#PNCR/#PNOR #PV3 #PV3IMPORT #PRESTART #PFACTORY #PHELP");
     line("WIFI=#PSSID=<home network> #PPASS=<its password> #PAPPASS=<access point password> #PWIFI0/1 #PAPCHANNEL<1-13> #PWIFIRESET (all after #PRESTART)");
     line("RESCUE=#POVERRIDE (60 s) #POVERRIDE0 #PJOGL+/- #PJOGR+/-[pct] (2 s) #PNUDGE<+-ticks> #PSETHOME");
+    line("MESH=#PMESHMAC=3C:4E #PMESHPASS=<?WCBP> #PMESHQTY<n> #PMESHID<1-19> #PMESHCHAN<1-13> #PMESHCRC0/1 #PMESHHB<5-300 s> #PMESH0/1 (after #PRESTART; mesh on = no home network)");
     line("SETUP=#PCOMMISSION (status) #PCOMMISSIONSTART #PCOMMISSIONRUN #PCOMMISSIONNEXT #PCOMMISSIONSTOP #PCOMMISSIONRESET #PCOMMISSIONBYPASS #PSAFESPINHERE (step 6)");
     String keys = "KEYS=";
     for (int i = 0; i < kSettingKeyCount; ++i) { keys += "#P"; keys += kSettingKeys[i].name; keys += ' '; }

@@ -50,14 +50,14 @@ TEST(parser_phase4_rescue_and_commissioning_verbs) {
 // ---------------------------------------------------------------- settings
 
 TEST(settings_schema4_carves_commission_step_from_the_reserve) {
-    static_assert(sizeof(Settings) == 224, "layout");
-    Settings s; CHECK_EQ(s.commissionStep, 0); CHECK_EQ(kSettingsSchema, 4);
+    static_assert(sizeof(Settings) >= 224, "layout");                // schema 5 (phase 5) appended the mesh fields
+    Settings s; CHECK_EQ(s.commissionStep, 0); CHECK(kSettingsSchema >= 4);
     // a schema-3 blob: the byte that is now commissionStep was reserve, i.e. zero
     Settings old; old.schema = 3; old.travelTicks = 1150; old.safeSpinTicks = 904; old.commissioned = 1; old.randomLight = 7; old.theme = 1;
     std::snprintf(old.staSsid, sizeof old.staSsid, "WordNet");
     uint8_t blob[sizeof(Settings)]; std::memcpy(blob, &old, sizeof old);
     Settings m; CHECK_EQ(migrateSettings(m, blob, sizeof blob), 3);
-    CHECK_EQ(m.schema, 4); CHECK_EQ(m.commissionStep, 0); CHECK_EQ(m.travelTicks, 1150); CHECK_EQ(m.safeSpinTicks, 904);
+    CHECK_EQ(m.schema, kSettingsSchema); CHECK_EQ(m.commissionStep, 0); CHECK_EQ(m.travelTicks, 1150); CHECK_EQ(m.safeSpinTicks, 904);
     CHECK_EQ(m.commissioned, 1); CHECK_EQ(m.randomLight, 7); CHECK_EQ(m.theme, 1); CHECK(std::string(m.staSsid) == "WordNet");
     s.commissionStep = 42; sanitize(s); CHECK_EQ(s.commissionStep, 0);
     s.commissionStep = 6; sanitize(s); CHECK_EQ(s.commissionStep, 6);

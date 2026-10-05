@@ -24,18 +24,20 @@ def todd():
     return {"MOTOR": 1, "INVERT": 1, "TRAVEL": 1137, "SAFESPIN": 878, "ROTARYTPR": 11850, "HOMEOFFSET": 0, "HOMEPARK": 1, "WIGGLE": 2,
             "MINUP": 50, "MINDOWN": 50, "APPROACH": 0, "EXPERT": 0, "DRIFT": 5, "ROTARYMIN": 40, "ROTARYOFF": 0, "DRIVESIGN": -1,
             "AGGRESSION": 1, "ID": 0, "BAUD": 9600, "DEDUP": 750, "DEBUG": 0, "CMDTX": 0, "LIFTERNC": 0, "ROTARYNC": 0, "WIFI": 1,
-            "APCHANNEL": 1, "THEME": 0, "RANDOMLIGHT": 7, "COMMISSIONED": 2}
+            "APCHANNEL": 1, "THEME": 0, "RANDOMLIGHT": 7, "COMMISSIONED": 2,
+            "MESHQTY": 0, "MESHID": 0, "MESHCHAN": 1, "MESHCRC": 1, "MESHHB": 10, "MESH": 0}
 RANGES = {"MOTOR": (0, 2), "INVERT": (0, 1), "TRAVEL": (0, 5000), "SAFESPIN": (0, 5000), "ROTARYTPR": (0, 50000), "HOMEOFFSET": (-600, 600),
           "HOMEPARK": (0, 2), "WIGGLE": (0, 20), "MINUP": (0, 100), "MINDOWN": (0, 100), "APPROACH": (0, 100), "EXPERT": (0, 1), "DRIFT": (0, 20),
           "ROTARYMIN": (10, 100), "ROTARYOFF": (0, 1), "DRIVESIGN": (-1, 1), "AGGRESSION": (0, 2), "ID": (0, 255), "BAUD": (1200, 921600),
           "DEDUP": (0, 5000), "DEBUG": (0, 1), "CMDTX": (0, 1), "LIFTERNC": (0, 1), "ROTARYNC": (0, 1), "WIFI": (0, 1), "APCHANNEL": (1, 13),
-          "THEME": (0, 1), "RANDOMLIGHT": (0, 8), "COMMISSIONED": (0, 2)}
+          "THEME": (0, 1), "RANDOMLIGHT": (0, 8), "COMMISSIONED": (0, 2),
+          "MESHQTY": (0, 19), "MESHID": (0, 19), "MESHCHAN": (1, 13), "MESHCRC": (0, 1), "MESHHB": (5, 300), "MESH": (0, 1)}
 
 class Sim:
     def __init__(self):
         self.lock = threading.Lock()
         self.t0 = time.time(); self.build = "%08x" % random.getrandbits(32)
-        self.cfg = todd(); self.strings = {"SSID": "WordNet", "PASS": "(set)", "APPASS": ""}
+        self.cfg = todd(); self.strings = {"SSID": "WordNet", "PASS": "(set)", "APPASS": "", "MESHMAC": "", "MESHPASS": ""}
         self.cal = {"valid": True, "applies": True, "travel": 1179, "minUp": 250, "minDown": 150, "motor": 1}
         self.lifter = 0.0; self.lifterKnown = True; self.target = None; self.liftSpeed = 700.0
         self.rot = 0.0; self.rotTarget = None; self.spin = 0.0; self.rotKnown = True; self.homeProv = "SWITCH"
@@ -210,11 +212,13 @@ class Sim:
                     "persist": "saved", "theme": self.cfg["THEME"], "build": self.build, "inputs": 0, "expander": True,
                     "commission": {"step": self.cm["step"], "name": STEPS[self.cm["step"]], "active": self.cm["active"], "run": self.cm["run"], "msg": self.cm["msg"], "detail": self.cm["detail"], "prevSafeSpin": self.cm["prevSafeSpin"]},
                     "log": len(self.log),
+                    "mesh": self.mesh_json(),
                     "wifi": {"ap": "R2Uppity-SIM0", "clients": 1, "sta": "up", "ssid": self.strings["SSID"], "ip": "127.0.0.1", "rssi": -61, "host": "uppity", "estopPort": 81, "estopHits": 0, "webEstops": 0, "stalled": 0}}
 
     def config(self):
         with self.lock:
-            c = dict(self.cfg); c.update({"SSID": self.strings["SSID"], "PASS": "(set)" if self.strings["PASS"] else "", "APPASS": "(set)" if self.strings["APPASS"] else "", "apSsid": "R2Uppity-SIM0"})
+            c = dict(self.cfg); c.update({"SSID": self.strings["SSID"], "PASS": "(set)" if self.strings["PASS"] else "", "APPASS": "(set)" if self.strings["APPASS"] else "", "apSsid": "R2Uppity-SIM0",
+                      "MESHMAC": self.strings["MESHMAC"], "MESHPASS": "(set)" if self.strings["MESHPASS"] else ""})
             m = self.cfg["MOTOR"]; cap = 75 if m == 1 and not self.cfg["EXPERT"] else 100; prof = [65, 45, 30][m]
             cal = self.cal["valid"] and self.cal["motor"] == m
             c["cal"] = dict(self.cal, applies=cal)
@@ -225,12 +229,33 @@ class Sim:
             return c
 
     # ---- commands (the console's answers)
+    def mesh_missing(self):
+        if not self.strings["MESHMAC"]: return "#PMESHMAC (the WCBs' MAC octets, ?WCBM)"
+        if not self.strings["MESHPASS"]: return "#PMESHPASS (the WCBs' password, ?WCBP; type it into the page)"
+        if not self.cfg["MESHQTY"]: return "#PMESHQTY (how many WCBs, ?WCBQ)"
+        if not self.cfg["MESHID"]: return "#PMESHID (this board's id, 1-19, not used by any other board)"
+        return ""
+
+    def mesh_json(self):
+        # the dev server pretends the mesh runs whenever it is switched on and complete (a real board needs #PRESTART)
+        on = bool(self.cfg["MESH"]) and not self.mesh_missing()
+        m = {"enabled": bool(self.cfg["MESH"]), "on": on, "missing": self.mesh_missing(), "id": self.cfg["MESHID"], "qty": self.cfg["MESHQTY"], "chan": self.cfg["MESHCHAN"]}
+        if on:
+            up = int(time.time() - self.t0)
+            m.update({"wcbs": [1] * self.cfg["MESHQTY"], "controller": True, "neighbours": self.cfg["MESHQTY"] + 1, "rx": up // 3, "ours": up // 30,
+                      "estops": 0, "hb": max(0, (up - 3) // self.cfg["MESHHB"]), "lastHbS": (up - 3) % self.cfg["MESHHB"], "lastRxS": up % 3, "lastFrom": 20, "txFail": 0})
+        return m
+
     def cmd(self, line, src="web"):
         with self.lock: self._cmd(line.strip(), src)
 
     def setkey(self, key, text):
         if key in self.strings:
-            if key in ("PASS", "APPASS"):
+            if key == "MESHMAC" and text:
+                m = re.match(r"^\s*(?:0x)?([0-9A-Fa-f]{1,2})[\s:-]*(?:0x)?([0-9A-Fa-f]{1,2})\s*$", text)
+                if not m: self.say("OUT_OF_RANGE=#PMESHMAC (two hex octets as ?WCBM shows them, e.g. 3C:4E; nothing changed)"); return
+                text = "%02X:%02X" % (int(m.group(1), 16), int(m.group(2), 16))
+            if key in ("PASS", "APPASS", "MESHPASS"):
                 if key == "APPASS" and 0 < len(text) < 8: self.say("#PAPPASS=(set) (unchanged; takes effect after #PRESTART)\nAPPASS note: WPA2 needs 8+ characters; kept the previous password"); return
                 self.strings[key] = "(set)" if text else ""; self.say("#P%s=%s (saved; takes effect after #PRESTART)" % (key, "(set)" if text else "(cleared)")); return
             changed = self.strings[key] != text; self.strings[key] = text; self.say("#P%s=%s (%s; takes effect after #PRESTART)" % (key, text, "saved" if changed else "unchanged")); return

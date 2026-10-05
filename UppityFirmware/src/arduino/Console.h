@@ -36,13 +36,17 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
         LogRing* log = nullptr; WebLineQueue* web = nullptr;
         SerialFront* cmdFront = nullptr;          // re-registered after the command UART is reopened
     };
-    class NetStatus { public: virtual ~NetStatus() = default; virtual void printStatus(TextSink&) = 0; virtual bool anyClient() const = 0; };
+    class NetStatus { public: virtual ~NetStatus() = default; virtual void printStatus(TextSink&) = 0; virtual bool anyClient() const = 0; virtual const char* apSsid() const = 0; };
+    // The mesh's view for #PSTATUS and the page (Mesh implements it).
+    class MeshStatus { public: virtual ~MeshStatus() = default; virtual void printStatus(TextSink&) = 0; virtual void writeJson(JsonWriter&) = 0; };
     void begin(const Deps& d);
     void boot();                                   // load settings, one-shot v3 import, apply; before the supervisor starts
     void update(Ms now);                           // every loop()
     void handleEcosystemLine(const char* line);
     void handleWebLine(const char* line);        // from the web line queue: "!STOP" or a :P/#P line
     void setNet(NetStatus* n) { net_ = n; }
+    void setMesh(MeshStatus* m) { mesh_ = m; }
+    void stopAll(const char* why);               // the page's Stop and the mesh's &DISABLE: end the show, the chain, the job and what is queued
     void writeStateJson(JsonWriter& j);          // the console's part of /api/state (any task; plain reads)
     void writePowersJson(JsonWriter& j);         // jog / floor / cap powers for the page's labels (any task; plain reads)
     void noteEstop(bool latched);
@@ -74,6 +78,7 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     void pushOperatorJob(JobKind k, int32_t a, int32_t c, ReqSource src);
     void requestRestart(uint8_t kind, const char* why);
     void stopRandom(const char* why);
+    void noteMesh();
     bool refuseWhileMoving(const char* what);
     RandomDirector::Limits limits() const;
     void beginCmdSerial();
@@ -85,6 +90,7 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     // off and every save has landed (5 s at most); the factory erase itself runs then, disarmed.
     uint8_t restartKind_ = 0; Ms restartAt_ = 0;
     NetStatus* net_ = nullptr;
+    MeshStatus* mesh_ = nullptr;
     Ms bootMs_ = 0;
     CommissionFlow flow_;
     FlowHost* host_ = nullptr;

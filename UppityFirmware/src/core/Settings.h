@@ -19,7 +19,7 @@
 //     their default when an older blob is loaded; nothing is ever moved or retyped.
 namespace uppity {
 
-constexpr uint16_t kSettingsSchema = 4;
+constexpr uint16_t kSettingsSchema = 5;
 
 struct Settings {
     // ---- 4-byte ----
@@ -67,8 +67,18 @@ struct Settings {
     uint8_t  apChannel = 1;          // 1..13; the mesh channel when mesh is on (phase 5)
     uint8_t  theme = 0;              // web UI: 0 paper (light, the default), 1 dark
     uint8_t  netReserved[10] = {};
+    // ---- schema 5 (phase 5, the WCB mesh): appended at 224 (even, so the 2-byte field has no padding) ----
+    uint16_t meshHbS = 10;           // &PERI,HB every this many seconds, 5-300
+    uint8_t  meshEnabled = 0;        // off by default; on = the access point moves to the mesh channel and the home network is not joined
+    uint8_t  meshQty = 0;            // the WCBs' ?WCBQ; 0 = not set
+    uint8_t  meshId = 0;             // this board's mesh id, 1-19 (20 is the controller slot, Sabé's); 0 = not set
+    uint8_t  meshChannel = 1;        // the WCBs' ?WCBCH
+    uint8_t  meshCrc = 1;            // the WCBs' checksum setting (CHKSM), on by default as on the WCBs
+    char     meshMac[6] = {};        // "3C:4E": the 2nd and 3rd MAC octets, as ?WCBM shows them; empty = not set
+    char     meshPass[40] = {};      // the WCBs' ?WCBP, at most 39 characters; never printed
+    uint8_t  meshReserved[11] = {};
 };
-static_assert(sizeof(Settings) == 224, "Settings layout changed: append at the end (1-byte types), keep the size a multiple of 4, bump kSettingsSchema");
+static_assert(sizeof(Settings) == 288, "Settings layout changed: append at the end (1-byte types), keep the size a multiple of 4, bump kSettingsSchema");
 constexpr size_t kSettingsSchema2Size = 80;   // what a schema 1/2 blob measures
 
 // Clamp every field into its legal range. Runs after every load and every set.
@@ -101,6 +111,44 @@ inline void sanitize(Settings& s) {
     s.wifiEnabled = s.wifiEnabled ? 1 : 0;
     if (s.apChannel < 1 || s.apChannel > 13) s.apChannel = 1;
     if (s.theme > 1) s.theme = 0;
+    if (s.meshHbS < 5 || s.meshHbS > 300) s.meshHbS = 10;
+    s.meshEnabled = s.meshEnabled ? 1 : 0; s.meshCrc = s.meshCrc ? 1 : 0;
+    if (s.meshId > 19) s.meshId = 0;
+    if (s.meshQty > 19) s.meshQty = 0;
+    if (s.meshChannel < 1 || s.meshChannel > 13) s.meshChannel = 1;
+    s.meshMac[sizeof s.meshMac - 1] = '\0'; s.meshPass[sizeof s.meshPass - 1] = '\0';
+}
+
+// "3C:4E" (or "3c:4e", "3C-4E", "3C 4E", "0x3C:0x4E") -> the two octets. False for anything else.
+inline bool parseMeshMac(const char* t, uint8_t& oct2, uint8_t& oct3) {
+    if (!t) return false;
+    int v[2] = {0, 0};
+    const char* p = t;
+    for (int k = 0; k < 2; ++k) {
+        while (*p == ' ' || (k == 1 && (*p == ':' || *p == '-'))) ++p;
+        if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+        int digits = 0;
+        for (;;) {
+            char c = *p; int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+            if (d < 0 || digits == 2) break;
+            v[k] = v[k] * 16 + d; ++digits; ++p;
+        }
+        if (digits == 0) return false;
+    }
+    while (*p == ' ') ++p;
+    if (*p != '\0') return false;
+    oct2 = static_cast<uint8_t>(v[0]); oct3 = static_cast<uint8_t>(v[1]);
+    return true;
+}
+
+// The mesh starts only with everything it needs; otherwise it says what is missing.
+inline const char* meshMissing(const Settings& s) {
+    uint8_t a, b;
+    if (!parseMeshMac(s.meshMac, a, b)) return "#PMESHMAC (the WCBs' MAC octets, ?WCBM)";
+    if (s.meshPass[0] == '\0') return "#PMESHPASS (the WCBs' password, ?WCBP; type it into the page)";
+    if (s.meshQty == 0) return "#PMESHQTY (how many WCBs, ?WCBQ)";
+    if (s.meshId == 0) return "#PMESHID (this board's id, 1-19, not used by any other board)";
+    return nullptr;
 }
 
 // Load `stored` bytes over defaults. Returns the schema the blob carried, 0 if it was unusable
@@ -120,6 +168,7 @@ inline uint16_t migrateSettings(Settings& out, const uint8_t* blob, size_t n) {
     if (tmp.schema < 2) tmp.randomLight = 0;
     // schema 3 appended the WiFi fields past the old end: a shorter blob leaves them at their defaults
     // schema 4 carved commissionStep from the reserve: an older blob reads 0 there, "not started"
+    // schema 5 appended the mesh fields past the old end: a shorter blob leaves them at their defaults (off)
     out = tmp;
     out.schema = kSettingsSchema;
     sanitize(out);
@@ -299,6 +348,12 @@ inline const SettingKey kSettingKeys[] = {
     { "THEME",      [](const Settings& s) { return (int32_t)s.theme; },           [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.theme = (uint8_t)v; return true; }, "web UI: 0 paper (light), 1 dark" },
     { "RANDOMLIGHT", [](const Settings& s) { return (int32_t)s.randomLight; },   [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 8)) return false; s.randomLight = (uint8_t)v; return true; }, "light kit in random mode: 0 leave alone, 1-7 that mode, 8 a new one each action; off when it ends" },
     { "COMMISSIONED", [](const Settings& s) { return (int32_t)s.commissioned; },  [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 2)) return false; s.commissioned = (uint8_t)v; return true; }, "0 locked, 1 bench unlock, 2 commissioned" },
+    { "MESHQTY",    [](const Settings& s) { return (int32_t)s.meshQty; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 19)) return false; s.meshQty = (uint8_t)v; return true; }, "how many WCBs (?WCBQ); after #PRESTART" },
+    { "MESHID",     [](const Settings& s) { return (int32_t)s.meshId; },          [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 19)) return false; s.meshId = (uint8_t)v; return true; }, "this board's mesh id 1-19, unused by any other board; after #PRESTART" },
+    { "MESHCHAN",   [](const Settings& s) { return (int32_t)s.meshChannel; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 1, 13)) return false; s.meshChannel = (uint8_t)v; return true; }, "the WCBs' WiFi channel (?WCBCH, usually 1); after #PRESTART" },
+    { "MESHCRC",    [](const Settings& s) { return (int32_t)s.meshCrc; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.meshCrc = (uint8_t)v; return true; }, "0/1 as the WCBs' checksum setting (on by default); after #PRESTART" },
+    { "MESHHB",     [](const Settings& s) { return (int32_t)s.meshHbS; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 5, 300)) return false; s.meshHbS = (uint16_t)v; return true; }, "seconds between &PERI,HB heartbeats, 5-300" },
+    { "MESH",       [](const Settings& s) { return (int32_t)s.meshEnabled; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.meshEnabled = (uint8_t)v; return true; }, "0/1 join the WCB mesh (the home network is then not joined); after #PRESTART" },
 };
 constexpr int kSettingKeyCount = static_cast<int>(sizeof(kSettingKeys) / sizeof(kSettingKeys[0]));
 
@@ -308,6 +363,8 @@ inline const StringKey kStringKeys[] = {
     { "SSID",   offsetof(Settings, staSsid), sizeof(Settings::staSsid), false, "home network name; empty = access point only; after #PRESTART" },
     { "PASS",   offsetof(Settings, staPass), sizeof(Settings::staPass), true,  "home network password; after #PRESTART" },
     { "APPASS", offsetof(Settings, apPass),  sizeof(Settings::apPass),  true,  "access point password, 8+ characters; after #PRESTART" },
+    { "MESHMAC",  offsetof(Settings, meshMac),  sizeof(Settings::meshMac),  false, "the WCBs' MAC octets 2 and 3 as ?WCBM shows them, e.g. 3C:4E; after #PRESTART" },
+    { "MESHPASS", offsetof(Settings, meshPass), sizeof(Settings::meshPass), true,  "the WCBs' mesh password (?WCBP), at most 39 characters; after #PRESTART" },
 };
 constexpr int kStringKeyCount = static_cast<int>(sizeof(kStringKeys) / sizeof(kStringKeys[0]));
 inline const StringKey* findStringKey(const char* name, size_t len) {
@@ -323,7 +380,23 @@ inline void setStringField(Settings& s, const StringKey& k, const char* v) { std
 // "Astromech" and save that). Empty clears the home network, which is fine.
 inline bool acceptStringValue(const StringKey& k, const char* v) {
     if (std::strcmp(k.name, "APPASS") == 0) return v && std::strlen(v) >= 8;
+    if (std::strcmp(k.name, "MESHMAC") == 0) { uint8_t a, b; return v && (v[0] == '\0' || parseMeshMac(v, a, b)); }
+    if (std::strcmp(k.name, "MESHPASS") == 0) return v && std::strlen(v) < sizeof(Settings::meshPass);
     return true;
+}
+// The form a text value is stored in: MAC octets always as "3C:4E" (the field holds 5 characters,
+// so "0x3C:0x4E" must not be cut short); everything else as typed.
+inline void canonicalStringValue(const StringKey& k, const char* v, char* out, size_t cap) {
+    uint8_t a, b;
+    if (std::strcmp(k.name, "MESHMAC") == 0 && v && v[0] && parseMeshMac(v, a, b)) { std::snprintf(out, cap, "%02X:%02X", a, b); return; }
+    std::snprintf(out, cap, "%s", v ? v : "");
+}
+// What an out-of-range text value is told (nothing was changed).
+inline const char* stringValueRule(const StringKey& k) {
+    if (std::strcmp(k.name, "APPASS") == 0) return "WPA2 needs 8 or more characters";
+    if (std::strcmp(k.name, "MESHMAC") == 0) return "two hex octets as ?WCBM shows them, e.g. 3C:4E";
+    if (std::strcmp(k.name, "MESHPASS") == 0) return "at most 39 characters";
+    return "not accepted";
 }
 inline const SettingKey* findSettingKey(const char* name, size_t len) {
     for (int i = 0; i < kSettingKeyCount; ++i) {
@@ -336,6 +409,14 @@ inline const SettingKey* findSettingKey(const char* name, size_t len) {
 // Formats one replayable line: "#PKEY=VALUE".
 inline int formatSetting(const Settings& s, const SettingKey& k, char* buf, size_t n) {
     return std::snprintf(buf, n, "#P%s=%ld", k.name, static_cast<long>(k.get(s)));
+}
+// The #PCONFIG line for a key. A ticks/rev that was never confidently measured (v3's figure, or a
+// spread over 5 %) is written as 0, so a restore measures it again instead of replaying it as
+// measured (#PROTARYTPR<n> marks it confident); the caller adds an INFO line (code review D8).
+inline bool tprUnmeasured(const Settings& s) { return s.ticksPerRev > 0.f && !s.tprConfident; }
+inline int formatConfigLine(const Settings& s, const SettingKey& k, char* buf, size_t n) {
+    if (std::strcmp(k.name, "ROTARYTPR") == 0 && tprUnmeasured(s)) return std::snprintf(buf, n, "#PROTARYTPR=0");
+    return formatSetting(s, k, buf, n);
 }
 
 // ---------------------------------------------------------------- v3 import

@@ -16,6 +16,8 @@
 #                               v3 → v4 upgrade needs one USB flash.
 #   FlashSize=4M                the Uppity Spinner PCB's WROOM-32 module.
 #   UploadSpeed=921600          fine on the CP2102/CH340 USB bridge; drop to 115200 if it fails.
+#   libs/WCB_Client             the WCB mesh client (Phase 5), vendored at a fixed commit: see
+#                               libs/WCB_Client/VENDORED.md.
 profiles:
   uppity:
     notes: Uppity Spinner PCB, ESP32-WROOM-32, standard (non-SD) board variant.
@@ -23,5 +25,7 @@ profiles:
     platforms:
       - platform: esp32:esp32 (3.3.4)
         platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+    libraries:
+      - dir: libs/WCB_Client
 
 default_profile: uppity

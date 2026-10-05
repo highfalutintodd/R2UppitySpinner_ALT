@@ -11,19 +11,25 @@
 namespace uppity {
 
 // Identical lines from different transports inside the window run once (a Sabé button that
-// arrives over both the mesh and the serial bus). The same transport repeating a line is
-// deliberate and always runs.
+// arrives over both the mesh and the serial bus: Todd keeps the ;W3;S4 wire while the mesh is on).
+// The same transport repeating a line is deliberate and always runs. The last kRecent lines are
+// remembered, so other traffic arriving between the two copies does not hide the duplicate.
 class LineDedup {
   public:
+    static constexpr int kRecent = 4;
     bool accept(const char* line, ReqSource src, Ms now, Ms windowMs) {
         uint32_t h = 2166136261u;
         for (const char* p = line; *p; ++p) { h ^= static_cast<uint8_t>(*p); h *= 16777619u; }
-        bool dup = windowMs > 0 && lastHash_ == h && lastSrc_ != src && lastSrc_ != ReqSource::None && elapsed(now, lastAt_) < windowMs;
-        if (!dup) { lastHash_ = h; lastSrc_ = src; lastAt_ = now; }
-        return !dup;
+        if (windowMs > 0)
+            for (const Seen& e : seen_)
+                if (e.src != ReqSource::None && e.hash == h && e.src != src && elapsed(now, e.at) < windowMs) return false;
+        seen_[next_] = Seen{h, src, now}; next_ = (next_ + 1) % kRecent;
+        return true;
     }
   private:
-    uint32_t lastHash_ = 0; ReqSource lastSrc_ = ReqSource::None; Ms lastAt_ = 0;
+    struct Seen { uint32_t hash = 0; ReqSource src = ReqSource::None; Ms at = 0; };
+    Seen seen_[kRecent];
+    int next_ = 0;
 };
 
 // The three expander inputs (A/B/C, grounded = active) as a 3-bit value; a debounced change to

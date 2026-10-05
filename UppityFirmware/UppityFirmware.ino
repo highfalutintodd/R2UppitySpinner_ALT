@@ -2,10 +2,10 @@
  * Uppity Spinner ALT v4 — clean-sheet firmware for the Uppity Spinner periscope PCB.
  * https://github.com/highfalutintodd/R2UppitySpinner_ALT
  *
- * Phase 4: motion core + command layer + settings in flash + networking (access point, optional
+ * Phase 5: motion core + command layer + settings in flash + networking (access point, optional
  * home network, JSON API, log tail, OTA) + the full web UI (Operate, Setup with commissioning,
- * Diagnostics, Rescue with the 60 s override and hold-to-jog). Read docs/REWRITE-PLAN.md and
- * docs/BENCH-PHASE4.md before changing anything here.
+ * Diagnostics, Rescue with the 60 s override and hold-to-jog) + the optional WCB mesh (&PERI).
+ * Read docs/REWRITE-PLAN.md and docs/BENCH-PHASE5.md before changing anything here.
  *
  * Licensed under the GNU Lesser General Public License v2.1 (see LICENSE).
  */
@@ -30,6 +30,7 @@
 #include "src/arduino/Console.h"
 #include "src/arduino/StatusLed.h"
 #include "src/arduino/Net.h"
+#include "src/arduino/Mesh.h"
 #include "src/core/TextRing.h"
 #include "src/core/LineQueue.h"
 
@@ -58,14 +59,17 @@ static RandomDirector    gDir;
 static Dispatcher        gDisp;
 static Console           gConsole;
 static StatusLed         gLed;
-static MuxLock           gLogLock, gWebLock;
+static MuxLock           gLogLock, gWebLock, gMeshLock;
 static LogRing           gLog(gLogLock);
 static WebLineQueue      gWebLines(gWebLock);
 static Net               gNet;
+static Mesh::Queue       gMeshLines(gMeshLock);
+static Mesh              gMesh;
 
 struct NetStatusAdapter final : Console::NetStatus {
     void printStatus(TextSink& out) override { gNet.printStatus(out); }
     bool anyClient() const override { return gNet.anyClient(); }
+    const char* apSsid() const override { return gNet.apSsid(); }
 } gNetStatus;
 
 static void panicHook(void*) { gHal.panicStop(); }
@@ -122,6 +126,10 @@ void setup() {
     Net::Deps nd; nd.console = &gConsole; nd.settings = &gConsole.settings(); nd.pub = &gSnapshot; nd.estop = &gEstop; nd.sup = &gSup; nd.lines = &gWebLines; nd.log = &gLog; nd.q = &gQueue;
     gNet.begin(nd);
     gConsole.setNet(&gNetStatus);
+    // The mesh after the access point (it must ride the AP's channel), before the control task.
+    Mesh::Deps md; md.console = &gConsole; md.settings = &gConsole.settings(); md.estop = &gEstop; md.disp = &gDisp; md.pub = &gSnapshot; md.lines = &gMeshLines;
+    gMesh.begin(md);
+    gConsole.setMesh(&gMesh);
     bool taskOk = gTask.start(gSup);
     gConsole.printf("CONTROL_TASK=%s", taskOk ? "running core1 prio10 1kHz" : "FAILED");
     gConsole.line("READY (type #PHELP)");
@@ -142,6 +150,7 @@ void loop() {
     pollSerial(gUsb, ReqSource::SerialUsb);
     pollSerial(gCmd, ReqSource::SerialCmd);
     { char l[256]; while (gWebLines.pop(l, sizeof l)) gConsole.handleWebLine(l); }
+    gMesh.loop(now);
     gNet.otaProgressToLog();
     gSeq.tick(now);
     gConsole.update(now);
