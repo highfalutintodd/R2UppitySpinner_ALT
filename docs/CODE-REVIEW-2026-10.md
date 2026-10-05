@@ -487,3 +487,70 @@ The log file `uppity-bench-review-log.txt` from your Desktop, and anything that 
 - D1, D3 and D4 are not in the bench check: each needs a stall or the head inside the dome to show,
   and none can be staged where a failure would be harmless. The simulator covers them.
 - Not run on the droid.
+
+---
+
+## Results 2026-10-04, bench check (build 7d93e1d8, installed from the page)
+
+Everything that ran passed. Two of the new behaviours were not exercised, both because of timing:
+the restart's wait, and Stop cancelling a queued move.
+
+- **Install and boot (step 1):** the page upload went through with the usual `TICK` lines while
+  flash was written. The boot lines show the same numbers as before: `CALIBRATION=loaded
+  travel=1137 minUp=250 minDown=150 rest=37`, and `CONFIG … travel=1137 (calibrated) safespin=878
+  tpr=1185.0 … commissioned=2`. The two `E (2xx) gpio: gpio_pullup_en` lines are the known ones
+  from Phase 1.
+- **Spins at the top (step 2):** four full-speed spins, two each way, of 5 to 13 turns, each stopped
+  with `:PR0`. There was no `home switch stuck closed` fault and no `HOME FRAME CORRECTED`. Flat
+  out, the log shows the switch closed for about 85 ticks a pass. That is the debounced reading; the
+  contact itself is about a third of that, and the stuck-switch watch allows about 125. After each
+  spin the home found the switch within 1 to 10 ticks of a whole number of turns (−7108 after 6,
+  11860 after 10, −15406 after 13). The rotary's trust label now goes back to SWITCH_LIVE 51 ms
+  after a home instead of straight away. That is finding 1's "head still for 50 ms", as designed.
+- **Ordinary running (step 3):** height and rotary presets, a −70 % spin ended with **Stop**, then
+  2½ minutes of random mode at medium (about 20 actions). Every descent below 878 began with the
+  head home: either a home in the chain, or the head already home. At 369.455 random mode cut a spin
+  off as the head reached the switch, the situation behind finding 1. This one started from the
+  parked state, so the board let the switch settle, moved the label to LATCHED, and took no zero
+  from the moving head. **Stop** ended random mode and cleared the chain; `:PH` homed, then lowered.
+- **E-STOP during a descent (step 4):** the first press landed 27 ms after the bottom switch had
+  closed, so there was nothing left to brake (−6 ticks). The second, mid-descent: `ESTOP braked to a
+  stop: lifter -51 ticks … drivers off after 248 ms`, with no `LIMIT BOTTOM` after it. That is the
+  same as on 2026-10-04 (−53 to −60). A press made while the latch was on was dropped (`SEQ cleared
+  … (ESTOP)`) and did not run after **Reset**.
+- **Restart (step 5):** the theme change waited for the drivers (`PERSIST=deferred`), saved 2 s
+  after the move, and was still set after the restart. `#PRESTART` went in after that save had
+  landed, so the new wait was not needed and `RESTART=in 300 ms` was the right answer. The wait
+  itself was not exercised.
+- **Stop with a queued move (step 6, D2):** the 90° turn did queue behind the home
+  (`QUEUED=ROT_ABS id=9` at 81.3). But the home finished at 82.224 and the turn had run by 82.556,
+  before the Stop arrived, so there was nothing left to cancel. Not exercised: a home from 180° takes
+  about 2 s, which is too short a window to hit by hand. The step needed a longer job to queue behind
+  (below).
+- **Interrupted upload (step 7, optional):** not run.
+
+Also in the log, not from this build:
+
+- The house WiFi dropped once during random mode (`reason 5` at 458.3) and rejoined 16 s later;
+  the access point stayed up. This is the same pattern as Phase 3 (the radio around lifter
+  activity), and the WiFi code was not changed.
+- Short seeks still stop short (284 asked, 301 reached; 22 asked, 41 reached). That is D5, open.
+
+### Optional re-test for D2 (about 2 minutes, everything at the top)
+
+The rotary test takes about 10 s, which gives plenty of time to queue a turn behind it and press
+**Stop**. The head stays at the top, where every angle is clear.
+
+1. Type:
+   ```
+   :PP100
+   ```
+2. When the mast is at the top, type:
+   ```
+   #PROTARYTEST
+   ```
+3. While the head is still turning slowly (the test makes about three turns), press **90°** on the
+   Operate page, then **Stop**.
+4. *Success:* the test stops (`ROTARYTEST ABORTED CANCEL`), the log shows `ROT_ABS REFUSED CANCEL`,
+   and the head does not go to 90°. Nothing is stored: a stopped test changes no setting. Then
+   press **Home the head**.
