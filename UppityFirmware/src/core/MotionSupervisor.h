@@ -236,6 +236,7 @@ class MotionSupervisor {
     std::atomic<bool> setHomeReq_{false};
     bool turnedSinceHome_ = false;        // the head was off home above the safe height (or turned below it) since its last home
     bool alignmentSuspect_ = false;       // turnedSinceHome_ while below the safe height (or clamp-held): what the page and the log show
+    bool jogByOverride_ = false;          // the running jog was allowed only because the override was on (D4)
     bool clampHold_ = false;              // a creep came to rest at the safe-spin height with the head turned (SafetyPolicy clampHeld)
     Ticks clampAt_ = 0, clampFloor_ = 0;
     uint8_t restReport_ = 0;              // 6 nudge / 7 clamped creep: log where it came to rest once the counts are still

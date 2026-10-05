@@ -6,8 +6,9 @@
 // The safety invariants, evaluated in exactly one place. Pure functions over a context snapshot.
 // Every step asks here when it starts; a running step is not asked again. That holds because the
 // lifter is held braked during a rotary job, settings wait until idle, and what a lifter job must
-// respect is fixed when it starts (a seek's clamped target, a creep's floor). (The header used to
-// say "re-asks on every tick"; code review 2026-10.)
+// respect is fixed when it starts (a seek's clamped target, a creep's floor). The one exception is
+// a jog that only the override allowed: the supervisor ends it the moment the override ends (code
+// review 2026-10, D4; the header used to say "re-asks on every tick").
 //
 //  1. The rotary may not turn unless the lifter is known to be above the safe-spin height (or
 //     the top limit is physically made). Rescue jog may override this.
@@ -90,9 +91,12 @@ inline bool alignedForDescent(const PolicyContext& c) {
     return rotaryIsHome(c) && !(c.rotaryDisabled && c.alignmentSuspect);
 }
 
+// Only a count that is KNOWN says the mast is above the safe height. A STALE one (the lifter stalled,
+// or ran against its encoder) may be far off: an encoder lead that drops out during a descent leaves
+// the count high while the mast falls on (code review 2026-10, D1). The top switch always counts.
 inline bool lifterAboveSafe(const PolicyContext& c) {
     if (c.topLimit) return true;
-    return c.lifter.confidence != LifterConfidence::Unknown && c.lifter.ticks > c.safeSpinTicks;
+    return c.lifter.confidence == LifterConfidence::Known && c.lifter.ticks > c.safeSpinTicks;
 }
 
 inline Decision gateCommon(const PolicyContext& c) {
@@ -111,6 +115,8 @@ inline Decision checkLifterSeek(const PolicyContext& c, Ticks current, Ticks tar
     if (target < current) {
         if (c.lifter.confidence == LifterConfidence::Unknown) { d.verdict = Verdict::Refuse; d.reason = Reason::LifterUnknown; return d; }
         if (alignedForDescent(c) || c.overrideLive) return d;
+        // the head may be turned and the count is not trusted: no floor can be placed (D1)
+        if (c.lifter.confidence == LifterConfidence::Stale) { d.verdict = Verdict::Refuse; d.reason = Reason::LifterUnknown; return d; }
         if (c.clampHeld) { d.verdict = Verdict::Refuse; d.reason = Reason::RotaryNotHome; return d; }
         // A head already at or below the safe-spin height is inside the dome opening and
         // therefore aligned (the rotary is refused down there); it may keep descending, unless
@@ -134,6 +140,7 @@ inline Decision checkLifterCreep(const PolicyContext& c, int dir) {
     if (dir < 0) {
         if (c.lifter.confidence == LifterConfidence::Unknown) { d.verdict = Verdict::Refuse; d.reason = Reason::LifterUnknown; return d; }
         if (alignedForDescent(c) || c.overrideLive) return d;
+        if (c.lifter.confidence == LifterConfidence::Stale) { d.verdict = Verdict::Refuse; d.reason = Reason::LifterUnknown; return d; }
         if (c.clampHeld) { d.verdict = Verdict::Refuse; d.reason = Reason::RotaryNotHome; return d; }
         bool crossing = c.lifter.ticks > c.safeSpinTicks || c.topLimit;
         if (!crossing && c.alignmentSuspect) { d.verdict = Verdict::Refuse; d.reason = Reason::RotaryNotHome; return d; }

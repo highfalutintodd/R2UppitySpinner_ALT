@@ -63,6 +63,7 @@ class Sequencer {
         virtual void onRandom(const Command& c) = 0;    // :PM / :PMG/M/A / :PM,a,b,c,d
         virtual void onRandomStop() = 0;                // a motion element from outside the director
         virtual void onEstop() = 0;                     // ":PX" met inside a stored sequence
+        virtual void onRandomStalled() { onRandomStop(); }   // a random-mode move stalled: the show ends (D3)
     };
 
     void begin(CommandQueue& q, SnapshotPublisher& pub, SequenceStore& store, RandomSource& rng, TextSink& out, Listener& l) {
@@ -110,6 +111,13 @@ class Sequencer {
             if (continuous_) { if ((s.activeJobId == waitingId_ && s.activeJob == JobKind::RotarySpin) || static_cast<int32_t>(s.lastProgramId - waitingId_) >= 0) { waitingId_ = 0; advance(); } }
             else if (static_cast<int32_t>(s.lastProgramId - waitingId_) >= 0) {
                 if (s.lastProgramId == waitingId_ && s.lastResult == JobResult::Refused) { out_->printf("SEQ abort step %d/%d: %s REFUSED %s", idx_ + 1, n_, jobName(static_cast<int>(s.lastJob)), reasonName(s.lastReason)); n_ = 0; waitingId_ = 0; return; }
+                // Random mode stops at the first stall or driver fault instead of driving into whatever
+                // caught the mast or head every second or two (code review 2026-10, D3). A refusal is
+                // not a stall: at power-up a descent is refused until the lifter is referenced.
+                if (src_ == ReqSource::Random && s.lastProgramId == waitingId_ && (s.lastResult == JobResult::Stalled || s.lastResult == JobResult::FaultExit)) {
+                    out_->printf("SEQ abort step %d/%d: %s %s %s", idx_ + 1, n_, jobName(static_cast<int>(s.lastJob)), s.lastResult == JobResult::Stalled ? "STALLED" : "FAULT", reasonName(s.lastReason));
+                    n_ = 0; waitingId_ = 0; l_->onRandomStalled(); return;
+                }
                 waitingId_ = 0; advance();
             }
             return;

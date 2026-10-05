@@ -216,7 +216,7 @@ void MotionSupervisor::updateKnowledge(const TickInputs& in, bool rotaryBusy) {
 // ---------------------------------------------------------------- programs
 
 bool MotionSupervisor::lifterAboveSafeNow(const TickInputs& in) const {
-    return in.topLimit || (lifter_.confidence != LifterConfidence::Unknown && in.lifterTicks > safeSpin());
+    return in.topLimit || (lifter_.confidence == LifterConfidence::Known && in.lifterTicks > safeSpin());   // a STALE count is not trusted (D1)
 }
 
 // A home switch that stays closed while the head turns well past its contact arc is stuck closed
@@ -317,7 +317,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
     PolicyContext c = policy(in);
     switch (s.kind) {
         case JobKind::LifterSeek: {
-            if ((s.c & 2) && lifter_.confidence != LifterConfidence::Unknown) return 0;   // skip: already referenced
+            if ((s.c & 2) && lifter_.confidence == LifterConfidence::Known) return 0;    // skip: already referenced (a STALE count is re-referenced at the top)
             Ticks target = clampv<Ticks>(s.a, 0, travel());
             if (programKind_ == JobKind::SafeLower && target == 0) emit(Ev::LightKit, 1, 0, 0, in.nowMs);   // lights off before lowering
             Decision d = checkLifterSeek(c, in.lifterTicks, target);
@@ -363,6 +363,8 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             if (step) p.stopAfter = clampv<Ticks>(absl(s.a), 1, kMaxStepTicks);
             p.floorTicks = d.value;
             p.brakeLeadMs = dir < 0 ? brakeLeadMs(cfg_.overshootDown, cfg_.velDown) : brakeLeadMs(cfg_.overshootUp, cfg_.velUp);
+            { PolicyContext without = c; without.overrideLive = false; Decision w = checkLifterCreep(without, dir);
+              jogByOverride_ = p.jog && c.overrideLive && (!w.ok() || w.value > d.value); }
             if (dir < 0 && c.overrideLive && !rotaryIsHome(c) && (!step || in.lifterTicks - p.stopAfter <= safeSpin())) markAlignmentSuspect(in.nowMs);
             creep_.start(p, in.lifterTicks, in.nowMs);
             job_ = JobKind::LifterCreep;
@@ -403,6 +405,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             bool jog = s.kind == JobKind::RotaryJog;
             Decision d = checkRotary(c, jog);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
+            jogByOverride_ = jog && !checkRotary(c, false).ok();      // turning below the safe height: only while the override lasts
             if (jog && !lifterAboveSafe(c)) markAlignmentSuspect(in.nowMs);    // turning inside the opening: only the override allowed it
             RotarySpinParams p;
             p.rc = &cfg_.rotary; p.jog = jog;
@@ -421,7 +424,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
             // (Bench 2026-09-19: after characterisation the frame was Latched but the head sat
             // ~70 ticks past the switch; skipping here left :PH clamped at safe height.)
             if ((s.c & 2) && (rotaryIsHome(c) || cfg_.rotaryDisabled)) return 0;
-            if ((s.c & 4) && !turnedSinceHome_ && lifter_.confidence != LifterConfidence::Unknown && in.lifterTicks <= safeSpin() && !in.topLimit) return 0;   // inside the opening, lined up: unless it may be turned
+            if ((s.c & 4) && !turnedSinceHome_ && lifter_.confidence == LifterConfidence::Known && in.lifterTicks <= safeSpin() && !in.topLimit) return 0;   // inside the opening, lined up: unless it may be turned
             Decision d = checkRotary(c, false);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
             if (faults_.has(F_HomeSwitchStuck)) { refuse(s, Reason::SwitchStuck, programId_, in); return -1; }   // its sweep would take the stuck reading as an edge
@@ -434,7 +437,7 @@ int MotionSupervisor::startStep(const Step& s, const TickInputs& in) {
         }
         case JobKind::RotaryCharacterise: {
             if ((s.c & 2) && (rotaryHomeKnown() || cfg_.rotaryDisabled)) return 0;
-            if ((s.c & 4) && !turnedSinceHome_ && lifter_.confidence != LifterConfidence::Unknown && in.lifterTicks <= safeSpin() && !in.topLimit) return 0;   // inside the opening, lined up: unless it may be turned
+            if ((s.c & 4) && !turnedSinceHome_ && lifter_.confidence == LifterConfidence::Known && in.lifterTicks <= safeSpin() && !in.topLimit) return 0;   // inside the opening, lined up: unless it may be turned
             Decision d = checkRotary(c, false);
             if (!d.ok()) { refuse(s, d.reason, programId_, in); return -1; }
             RotaryCharacterise::Params p;
@@ -685,6 +688,7 @@ void MotionSupervisor::tick(Ms now) {
     in.lifterDiag = faults_.has(F_LifterDiag); in.rotaryDiag = faults_.has(F_RotaryDiag);
     in.estop = estop_.tripped();
     in.cancel = queue_.takeCancel();
+    if (queue_.takeCancelAll()) refuseAll(Reason::Cancel, in);   // Stop: what was queued ends too (D2)
     in.enabled = enabled;
     in.jogLeaseLive = queue_.jogLeaseLive(now);
     lifter_.ticks = raw.lifterTicks; rotary_.ticks = raw.rotaryTicks;
@@ -792,6 +796,13 @@ void MotionSupervisor::tick(Ms now) {
             }
         }
     }
+
+    // ---- a jog the override allowed ends with the override (D4) ----
+    // The policy is asked when a step starts. A held jog is the one job that can outlast the
+    // reason it was allowed: Rescue's 60 s override running out, or "End now".
+    if (jogByOverride_ && (job_ == JobKind::RotaryJog || job_ == JobKind::LifterCreep) && !(queue_.overrideLive(now) && attendedSource(false)))
+        abortJob(JobResult::Aborted, Reason::PolicyChange, in);
+    if (job_ == JobKind::None) jogByOverride_ = false;
 
     // ---- job step ----
     if (job_ != JobKind::None) {

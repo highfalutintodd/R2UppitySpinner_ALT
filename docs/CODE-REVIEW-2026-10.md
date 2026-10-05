@@ -43,14 +43,18 @@ changed**, and nothing changes in ordinary running. What you might notice:
 - `#PAPPASS` with fewer than 8 characters is refused, with nothing changed.
 - Lines meant for other boards on the Marcduino bus (`:SE00`, `:OP01`…) are silent now, as in v3.
 
-**Four changes are waiting for your decision** (section "For you to decide"), because you would
-see them on the droid, if only after a fault: what happens after a lifter stall, what the page's
-Stop does to queued moves, random mode after a stall, and a held jog when the override ends. My
-recommendation is yes to all four.
+**Four more changes you approved on 2026-10-04 (D1-D4) are in a second commit.** You would only
+see them after a fault, in Rescue, or when pressing Stop with something queued:
 
-**What was tested:** host tests 195 pass (163 before, 32 new), and undefined behaviour now fails
+- after a lifter stall, the head goes up to the top switch before it turns;
+- the page's **Stop** (and commissioning's **Pause**) also cancels moves queued behind the running
+  one;
+- random mode turns itself off after a stall (`RANDOM=off (stalled)`);
+- in Rescue, a held jog stops when the override that allowed it ends.
+
+**What was tested:** host tests 202 pass (163 before, 39 new), and undefined behaviour now fails
 the test run instead of printing a warning. The ESP32 build is clean with every warning on:
-1,181,015 bytes (60 %), up 4,288 from 1,176,727. **Nothing here has run on the droid yet**; the
+1,181,615 bytes (60 %), up 4,888 from 1,176,727. **Nothing here has run on the droid yet**; the
 bench check at the end is short and keeps the head home or at the top.
 
 ### How the review was done, and how sure each finding is
@@ -255,40 +259,40 @@ is then dropped whole.
 
 ---
 
-## For you to decide
+## Your decisions
 
-These change what you would see on the droid, so they are not made. My recommendation is in each.
+### Done, as you approved on 2026-10-04 (second commit)
 
-**D1. A lifter count that stopped counting is still trusted** (high; proven on the simulator).
-`src/core/SafetyPolicy.h:93-96`, `src/core/MotionSupervisor.cpp:218-220`. After a lifter stall
-the count is marked STALE but the policy treats STALE as known. If the lifter encoder drops out
-during a descent (a loose lead), the mast falls on while the count stays high. The next rotation
-(random mode, say) can then turn the head below 878, and each further `:PP` down with the head
-turned drives blind for the stall time. *Change:* after a lifter stall, the next rotation first
-raises to the top switch (re-referencing the count), and a descent with the head not home is
-refused until then. *You would see:* only after a lifter stall: the head goes to the top before
-turning. **Recommend yes.**
+**D1. A lifter count that stopped counting was still trusted** (high; proven on the simulator)
+[reviewD1 ×3]. `src/core/SafetyPolicy.h:93-99, 116-118, 140-142`, `src/core/MotionSupervisor.cpp:218-220`.
+After a lifter stall the count is marked STALE, but the policy treated STALE as known. If the lifter
+encoder drops out during a descent (a loose lead), the mast falls on while the count stays high; the
+next rotation (random mode, say) could then turn the head below 878, and each further `:PP` down with
+the head turned drove blind for the stall time. *Now:* a STALE count is never "above the safe
+height", so the next rotation first raises to the top switch (which makes the count right again), and
+a descent with the head not home is refused until then. The first blind drop after the dropout cannot
+be prevented by any rule; the ones after it are. *You would see:* only after a lifter stall.
 
-**D2. The page's Stop, and commissioning's Pause, leave queued moves to run** (high; proven).
-`src/arduino/Console.cpp:57`, `:35`. Stop cancels the running job but not what is queued behind
-it. Press **Home** then a preset, then Stop during the home: the preset runs. Pause during
-commissioning step 5's home lets the whole calibration run. *Change:* Stop and Pause also empty the
-queue. *You would see:* Stop stops everything, which is what it says. **Recommend yes.**
+**D2. The page's Stop, and commissioning's Pause, left queued moves to run** (high; proven)
+[reviewD2]. `src/core/CommandQueue.h:52-57`, `src/core/MotionSupervisor.cpp:691`,
+`src/arduino/Console.cpp:35, 57`. Press **Home the head**, then a preset, then Stop during the home:
+the preset ran. Pause during commissioning step 5's home let the whole calibration run. *Now:* Stop
+and Pause end the running job and everything queued; each queued move is logged `REFUSED CANCEL`.
 
-**D3. Random mode keeps driving into a jam** (high; proven).
-`src/core/RandomDirector.h:51`, `src/core/Sequencer.h:110-113`. If the mast or head catches on
-something (a cable, a panel), random mode carries on: 74 lifter stalls in 2 minutes on the
-simulator, each pushing at show speed for 0.7 s. *Change:* random mode turns itself off after a
-stall (`RANDOM=off (stalled)`), not after a refusal (a refused move is normal at power-up). *You
-would see:* only after a stall: random mode stops. Your logs show no stalls in normal random
-running. **Recommend yes.**
+**D3. Random mode drove into a jam every second or two** (high; proven) [reviewD3].
+`src/core/Sequencer.h:113-120`, `src/arduino/Console.cpp:319`. 74 lifter stalls in 2 minutes on the
+simulator, each pushing at show speed for 0.7 s. *Now:* the first stall or driver fault in a random
+action ends random mode (`SEQ abort … STALLED`, then `RANDOM=off (stalled)`). A refusal does not:
+at power-up a descent is refused until the lifter is referenced, and random mode recovers from that.
 
-**D4. A held jog outlives the override** (medium; proven).
-`src/core/MotionSupervisor.cpp:484-508`. The policy is asked when a job starts, not while it runs.
-A rotary jog held inside the dome under the override keeps turning after the 60 s run out (or after
-**End now**), until you let go or it stalls. *Change:* a jog stops the moment the override that
-allowed it ends. *You would see:* in Rescue, a held jog stops when the countdown reaches 0.
-**Recommend yes.**
+**D4. A held jog outlived the override** (medium; proven) [reviewD4 ×2].
+`src/core/MotionSupervisor.cpp:362-368, 406-408, 799-805`. The policy is asked when a job starts.
+A rotary jog held inside the dome under the override kept turning after the 60 s ran out (or after
+**End now**); a Down jog with the head turned kept going below the safe-spin height. *Now:* a jog
+that only the override allowed stops the moment the override ends (the log says `… ABORTED POLICY`). A jog
+the rules allow anyway (above the safe height, or the head home) is not affected.
+
+### Still open
 
 **D5. Short seeks stop short, and a clamped seek has no margin** (known since Phase 1; needs a
 bench). `src/core/LifterAxis.h:81`, `src/core/MotionSupervisor.cpp:333`. A seek brakes at the
@@ -328,8 +332,9 @@ is the safe direction (the mirror image of the `bottomRest` fix).
 
 ## Tests
 
-- **32 new tests** in `test/native/test_review.cpp`, one per finding or variant, each failing on
-  the old code (the failing run is kept in the session notes) and passing now. Five guard tests
+- **39 new tests** in `test/native/test_review.cpp`, one per finding or variant (7 of them for
+  D1-D4), each failing on the old code (the failing runs are kept in the session notes) and passing
+  now. Five guard tests
   check that the fixes did not cost anything (a head resting on the switch is still trusted, the
   page and USB still get the override, a working switch never reads as stuck, a board without a
   rotary lowers freely, "set home here" on the switch is not a stuck switch).
@@ -353,7 +358,7 @@ is the safe direction (the mirror image of the `bottomRest` fix).
 ## Tidy-ups
 
 - `SafetyPolicy.h`'s header said the policy is re-checked every tick; it is checked when each step
-  starts. Corrected (D4 is the one place where that matters).
+  starts. Corrected; the one exception is now D4 (a jog only the override allowed is re-checked every tick).
 - Log and USB lines from the web task can interleave mid-line with `loop()`'s (cosmetic).
 - No stack high-water marks are reported; the port-81 E-STOP task (4 KB) and the UART event task
   (2 KB, runs the panic hook) have never been measured. Estimated well inside; worth a line in
@@ -382,7 +387,7 @@ port-81 E-STOP listener trips the latch before it answers anything. The 1 kHz ti
 ## Bench check for this build
 
 Nothing here can reach the frame even if a fix failed: rotations happen at the top only, and the
-head stays home for every descent. About 15 minutes.
+head stays home for every descent. About 20 minutes.
 
 ### Install
 
@@ -396,7 +401,7 @@ head stays home for every descent. About 15 minutes.
    ```
    arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
    ```
-   It ends with `Sketch uses 1181015 bytes (60%)`.
+   It ends with `Sketch uses 1181615 bytes (60%)`.
 2. In a second Terminal window, the monitor (leave it running for the whole check):
    ```
    arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-review-log.txt
@@ -452,7 +457,16 @@ head stays home for every descent. About 15 minutes.
    *Success:* `RESTART=waiting for PERSIST=saved first …`, then `PERSIST=saved settings` about 2 s
    after the move, then the board restarts, and the page comes back in the new theme. Change the
    theme back afterwards.
-6. **Optional: an interrupted upload.** **Setup → Firmware**, choose the same file, **Upload**, and
+6. **Stop also cancels what is queued (D2), all at the top.** Type:
+   ```
+   :PP100
+   ```
+   When the mast is at the top, press **180°** on the Operate page and let the head get there. Then,
+   quickly one after the other: **Home the head**, **90°**, **Stop**. *Success:* the head stops
+   where it is and does not turn to 90°; the log shows a line with `REFUSED CANCEL`. (Before this
+   build the 90° turn ran after the Stop. At the top every angle is clear, so this is harmless
+   either way.) Then press **Home the head** once more.
+7. **Optional: an interrupted upload.** **Setup → Firmware**, choose the same file, **Upload**, and
    reload the page when the progress passes about 30 %. Then **Operate → Up**. *Success:* the mast
    moves (before this build nothing moved until a setting was saved). The board keeps running the
    build you installed in step 3: an interrupted upload never replaces it.
@@ -465,9 +479,11 @@ The log file `uppity-bench-review-log.txt` from your Desktop, and anything that 
 
 ## Record
 
-- Host tests: `make -C UppityFirmware/test/native test` → `OK: 195 tests passed` (UBSan, failing on
+- Host tests: `make -C UppityFirmware/test/native test` → `OK: 202 tests passed` (UBSan, failing on
   any report).
-- ESP32: `arduino-cli compile --profile uppity UppityFirmware` → `Sketch uses 1181015 bytes (60%)`,
+- ESP32: `arduino-cli compile --profile uppity UppityFirmware` → `Sketch uses 1181615 bytes (60%)`,
   no warnings in the v4 sources with `--warnings all`. Web page rebuilt: 81,713 → 24,762 bytes
   gzipped.
+- D1, D3 and D4 are not in the bench check: each needs a stall or the head inside the dome to show,
+  and none can be staged where a failure would be harmless. The simulator covers them.
 - Not run on the droid.

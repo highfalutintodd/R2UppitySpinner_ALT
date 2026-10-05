@@ -57,6 +57,7 @@ class Console final : public TextSink, public Sequencer::Listener, public Dispat
     void onLight(int mode) override;
     void onRandom(const Command& c) override;
     void onRandomStop() override;
+    void onRandomStalled() override;
     void onEstop() override;
     // Dispatcher::ConfigHandler
     void onConfig(const Command& c, const char* line, ReqSource src) override;

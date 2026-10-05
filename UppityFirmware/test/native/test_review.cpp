@@ -545,3 +545,115 @@ TEST(review03_set_home_here_on_the_switch_is_not_a_stuck_switch) {
     g.req(JobKind::RotaryRelative, 90, 0, 0); g.runUntilIdle(30000);
     CHECK(!(g.snap().faults & F_HomeSwitchStuck));
 }
+
+// ================================================================ Todd's decisions D1-D4 (2026-10-04)
+
+// D1: a lifter count that stopped counting (STALE) is not trusted for the safety rules.
+TEST(reviewD1_a_stale_lifter_count_raises_to_the_top_before_the_head_turns) {
+    Rig g(gregConfig(false)); g.hal.lifter.setPosition(450); g.setRotaryAngleFromCentre(0); g.boot();
+    g.seek(300, 650); g.runUntilIdle(20000); g.runMs(300);
+    g.hal.lifter.setEncoderFrozen(true);                        // a loose encoder lead during a descent
+    g.seek(0, 650, true); g.runUntilIdle(20000); g.runMs(300);
+    CHECK(g.sup.lifter().confidence == LifterConfidence::Stale);
+    CHECK(g.hal.lifter.position() < 225);                       // the mast fell on below the safe-spin height
+    Ticks stuckAt = g.snap().lifterTicks;
+    g.hal.lifter.setEncoderFrozen(false); g.hal.advance(1);    // the lead makes contact again and the count
+    g.hal.setEncoder(Axis::Lifter, stuckAt);                    // carries on from where it stopped (the model would jump)
+    g.runMs(50);
+    CHECK(g.sup.lifter().confidence == LifterConfidence::Stale);
+    CHECK(g.snap().lifterTicks > 225);                          // reads above the safe-spin height; the mast is below it
+    g.watchSafe = 225;
+    g.req(JobKind::RotarySpin, 600); g.runMs(6000);
+    CHECK_EQ(g.rotaryBelowSafe, 0);                             // it went to the top switch first
+    CHECK(g.sup.lifter().confidence == LifterConfidence::Known);
+}
+
+TEST(reviewD1_a_stale_lifter_count_does_not_drive_a_turned_head_down_blind) {
+    Rig g(gregConfig(false)); turnedAtTheTop(g); g.runMs(600);
+    g.hal.lifter.setEncoderFrozen(true);
+    double lowest = 1e9;
+    for (int a = 0; a < 3; ++a) {
+        g.seek(0, 650);
+        for (int i = 0; i < 6000; ++i) { g.runMs(1); lowest = std::min(lowest, g.hal.lifter.position()); if (i > 20 && g.sup.activeJob() == JobKind::None && g.queue.size() == 0) break; }
+        g.runMs(300);
+    }
+    CHECK(lowest > 225);                                        // one blind drop (cannot be prevented), then refusals
+    int refused = 0; for (auto& e : g.log) if (e.code == Ev::Refused && e.b == static_cast<int32_t>(Reason::LifterUnknown)) ++refused;
+    CHECK(refused >= 2);
+}
+
+TEST(reviewD1_policy_rows_for_a_stale_lifter) {
+    PolicyContext c; c.safeSpinTicks = 225; c.ticksPerRev = 1185;
+    c.lifter.confidence = LifterConfidence::Stale; c.lifter.ticks = 400;
+    c.rotary.confidence = HomeConfidence::Latched; c.rotary.ticks = 300;   // head 90 degrees off
+    CHECK(checkRotary(c, false).verdict == Verdict::Refuse);              // not "above the safe height" on a stale count
+    CHECK(checkLifterSeek(c, 400, 0).verdict == Verdict::Refuse);         // turned head: no descent
+    CHECK(checkLifterSeek(c, 400, 450).ok());                             // up is fine
+    c.rotary.ticks = 0;
+    CHECK(checkLifterSeek(c, 400, 0).ok());                               // head home: a descent cannot hit anything
+    c.topLimit = true; c.rotary.ticks = 300;
+    CHECK(checkRotary(c, false).ok());                                    // the top switch itself still counts
+}
+
+// D2: the page's Stop (and commissioning's Pause) also cancel what is queued behind the running job.
+TEST(reviewD2_stop_cancels_what_is_queued_too) {
+    Rig g(gregConfig(false)); g.hal.lifter.setPosition(450); g.setRotaryAngleFromCentre(200); g.boot();
+    g.req(JobKind::RotaryHome);
+    uint32_t id = g.seek(300, 650);                             // a preset pressed while the head homes
+    g.runMs(200);
+    CHECK(g.sup.activeJob() == JobKind::RotaryHome);
+    g.queue.cancelAll();                                        // "!STOP" / commissioning Pause
+    g.runMs(3000);
+    CHECK_EQ(jobStarts(g, JobKind::LifterSeek), 0);
+    bool told = false; for (auto& e : g.log) if (e.code == Ev::Refused && e.c == static_cast<int32_t>(id) && e.b == static_cast<int32_t>(Reason::Cancel)) told = true;
+    CHECK(told);                                                // the queued request ends visibly
+}
+
+// D3: random mode turns itself off after a stall instead of driving into a jam every second or two.
+namespace {
+struct RandomRig : Sequencer::Listener {
+    Rig g; MemSequenceStore store; XorShiftRandom rng{777}; VecSink out; Sequencer seq; RandomDirector dir;
+    explicit RandomRig(MotionConfig cfg) : g(cfg) { seq.begin(g.queue, g.pub, store, rng, out, *this); dir.begin(rng, out); }
+    void onLight(int) override {}
+    void onRandom(const Command&) override {}
+    void onRandomStop() override { dir.stop("command"); }
+    void onRandomStalled() override { dir.stop("stalled"); }
+    void onEstop() override {}
+    RandomDirector::Limits lim() const { RandomDirector::Limits l; l.lifterMinPct = 65; l.lifterMaxPct = 100; l.rotaryMinPct = 40; return l; }
+    void step() { Ms now = g.hal.nowMs(); seq.tick(now); Command ch[Sequencer::kMaxElements]; int n = dir.next(now, !seq.active(), g.snap(), lim(), ch, Sequencer::kMaxElements); if (n > 0) seq.submit(ch, n, ReqSource::Random, true); g.runMs(1); }
+};
+}
+TEST(reviewD3_random_mode_ends_after_a_stall) {
+    RandomRig r(gregConfig(false)); r.g.hal.lifter.setPosition(450); r.g.setRotaryAngleFromCentre(0); r.g.boot();
+    r.dir.startLevel(2, r.g.hal.nowMs());
+    for (int i = 0; i < 5000; ++i) r.step();
+    CHECK(r.dir.active());
+    r.g.hal.lifter.setJammed(true);                             // the mast catches on something
+    for (int i = 0; i < 120000; ++i) r.step();
+    int stalls = 0; for (auto& e : r.g.log) if (e.code == Ev::JobEnd && e.a == (int)JobKind::LifterSeek && e.b == (int)JobResult::Stalled) ++stalls;
+    CHECK(stalls <= 1);
+    CHECK(!r.dir.active());
+    CHECK(r.out.count("RANDOM=off (stalled)") == 1);
+}
+
+// D4: a held jog stops the moment the override that allowed it ends.
+TEST(reviewD4_a_held_rotary_jog_stops_when_the_override_ends) {
+    Rig g(gregConfig(false)); g.hal.lifter.setPosition(0); g.setRotaryAngleFromCentre(0); g.boot();
+    g.queue.setOverride(g.hal.nowMs() + 1000);                  // 1 s left on the override
+    g.queue.jogKeepalive(g.hal.nowMs());
+    g.req(JobKind::RotaryJog, 300);
+    double at = 0;
+    for (int i = 0; i < 4000; ++i) { if (i % 500 == 0) g.queue.jogKeepalive(g.hal.nowMs()); g.runMs(1); if (i == 1100) at = g.hal.rotary.position(); }   // the finger stays on Turn
+    CHECK(g.sup.activeJob() != JobKind::RotaryJog);
+    CHECK(std::fabs(g.hal.rotary.position() - at) < 30);       // nothing more after the override ended
+}
+
+TEST(reviewD4_a_held_lifter_jog_stops_when_the_override_ends) {
+    Rig g(gregConfig(false)); turnedAtTheTop(g); g.runMs(600);
+    g.queue.setOverride(g.hal.nowMs() + 300);
+    g.queue.jogKeepalive(g.hal.nowMs());
+    g.creep(-1, 0, true);                                       // Down, held
+    double lowest = 1e9;
+    for (int i = 0; i < 6000; ++i) { if (i % 500 == 0) g.queue.jogKeepalive(g.hal.nowMs()); g.runMs(1); lowest = std::min(lowest, g.hal.lifter.position()); }
+    CHECK(lowest > 225);                                        // stopped above the safe-spin height with the head turned
+}

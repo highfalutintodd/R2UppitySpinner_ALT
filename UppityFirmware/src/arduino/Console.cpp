@@ -32,7 +32,7 @@ struct Console::FlowHost final : CommissionFlow::Host {
     uint32_t pushJob(const MotionRequest& r) override { c.stopRandom("commissioning"); c.d_.seq->clear("commissioning"); return c.d_.q->push(r); }
     bool runChain(const Command* els, int n) override { return c.d_.seq->submit(els, n, ReqSource::Commission, false); }
     bool chainActive() override { return c.d_.seq->active(); }
-    void cancelMotion() override { c.stopRandom("commissioning stopped"); c.d_.seq->clear("commissioning stopped"); c.d_.q->cancel(); }
+    void cancelMotion() override { c.stopRandom("commissioning stopped"); c.d_.seq->clear("commissioning stopped"); c.d_.q->cancelAll(); }
     void randomStart(int level) override { c.d_.dir->startLevel(level, millis()); }
     void randomStop() override { c.stopRandom("commissioning"); }
     uint32_t randomActions() override { return c.d_.dir->actions(); }
@@ -54,7 +54,7 @@ void Console::line(const char* text) {
 
 void Console::handleWebLine(const char* l) {
     if (std::strcmp(l, "!STOP") == 0) {           // the page's soft stop: end the show, drop the chain, cancel the job
-        stopRandom("web stop"); d_.seq->clear("web stop"); d_.q->cancel(); line("STOP=web");
+        stopRandom("web stop"); d_.seq->clear("web stop"); d_.q->cancelAll(); line("STOP=web");   // the running job and anything queued
         return;
     }
     d_.disp->handleLine(l, ReqSource::Web, millis());
@@ -316,6 +316,7 @@ void Console::onRandom(const Command& c) {
     else d_.dir->startLevel(s_.aggressiveness, now);
 }
 void Console::onRandomStop() { stopRandom("command"); }
+void Console::onRandomStalled() { stopRandom("stalled"); }
 void Console::onEstop() { bool was = d_.estop->tripped(); d_.estop->trip(EstopLatch::Source::Sequence, millis()); line(was ? "ESTOP=latched" : "ESTOP=latched (stored sequence)"); }
 
 // ---------------------------------------------------------------- configuration commands

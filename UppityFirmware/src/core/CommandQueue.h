@@ -50,6 +50,10 @@ class CommandQueue {
 
     // Out-of-band controls (atomics, any context).
     void cancel() { cancel_.store(true, std::memory_order_release); }
+    // The page's Stop and commissioning's Pause: the running job AND everything queued behind it,
+    // each queued request ending as REFUSED CANCEL (code review 2026-10, D2).
+    void cancelAll() { cancelAll_.store(true, std::memory_order_release); cancel(); }
+    bool takeCancelAll() { return cancelAll_.exchange(false, std::memory_order_acq_rel); }
     bool takeCancel() { return cancel_.exchange(false, std::memory_order_acq_rel); }
     // Both leases are a deadline, 0 = none. A deadline compared by signed difference reads as live
     // again once millis() is 2^31 ms (24.9 days) past it, so the supervisor's tick clears an expired
@@ -81,7 +85,7 @@ class CommandQueue {
     MotionRequest buf_[kDepth];
     int head_ = 0, count_ = 0;
     uint32_t nextId_ = 0;
-    std::atomic<bool> cancel_{false};
+    std::atomic<bool> cancel_{false}, cancelAll_{false};
     std::atomic<uint32_t> jogUntil_{0};
     std::atomic<uint32_t> overrideUntil_{0};
 };
