@@ -21,8 +21,7 @@ bool Mesh::begin(const Deps& d) {
     d_ = d;
     const Settings& s = *d_.settings;
     if (!s.meshEnabled) { d_.console->line("MESH=off (#PMESH1 and #PRESTART to join the WCB mesh; or Setup -> Mesh on the page)"); return false; }
-    missing_ = meshMissing(s);
-    if (missing_) { d_.console->printf("MESH=not started: it still needs %s", missing_); return false; }
+    if (const char* missing = meshMissing(s)) { d_.console->printf("MESH=not started: it still needs %s", missing); return false; }
     uint8_t oct2 = 0, oct3 = 0;
     parseMeshMac(s.meshMac, oct2, oct3);
     gMeshSelf = this; gMeshLines = d_.lines; gMeshEstop = d_.estop; gRx = &rx_;
@@ -36,7 +35,7 @@ bool Mesh::begin(const Deps& d) {
     WiFi.setSleep(false);                         // modem sleep misses ESP-NOW packets
     if (!ok) {
         d_.console->line("MESH=FAILED to start (WCB_Client::begin; its own line above says why). The board runs on without it.");
-        delete client_; client_ = nullptr; gMeshSelf = nullptr;
+        delete client_; client_ = nullptr; gMeshSelf = nullptr; failed_ = true;
         return false;
     }
     reporter_.start(millis(), s.meshHbS);
@@ -53,12 +52,13 @@ void Mesh::onCommand(uint8_t sender, const char* text) {
     if (!text) return;
     if (gRx) gRx->fetch_add(1);
     if (gMeshSelf) { gMeshSelf->lastRxMs_.store(millis()); gMeshSelf->lastFrom_.store(sender); }
-    MeshMsg m = classifyMesh(text);
-    if (meshWantsEstop(text)) {
+    if (meshWantsEstop(text)) {                    // first, on the raw text: an E-STOP inside anything still latches
         if (gMeshEstop) gMeshEstop->trip(EstopLatch::Source::Mesh, millis());
         if (gMeshSelf) gMeshSelf->estops_.fetch_add(1);
     }
-    if (gMeshLines && m != MeshMsg::Foreign) gMeshLines->push(text, sender);   // other boards' traffic is not even copied
+    char line[Mesh::kLineMax];
+    if (!meshCleanLine(text, line, sizeof line)) { if (gMeshSelf) gMeshSelf->dropped_.fetch_add(1); return; }   // too long, or more than one line
+    if (gMeshLines && classifyMesh(line) != MeshMsg::Foreign) gMeshLines->push(line, sender);   // other boards' traffic is not even copied
 }
 
 void Mesh::onStatus(uint8_t id, bool online) {
@@ -92,10 +92,10 @@ void Mesh::handle(const char* text, uint8_t sender, Ms now) {
     switch (m) {
         case MeshMsg::Line: {
             ++ours_;
-            const char* p = text; while (*p == ' ') ++p;
+            const char* p = text; while (*p == ' ') ++p;          // the dispatcher reads the first character
             bool forUs = p[0] && p[1] == 'P';                     // ":P…" / "#P…"; other boards' lines are not logged
             uint32_t dupsBefore = d_.disp->droppedDuplicates();
-            d_.disp->handleLine(text, ReqSource::Mesh, now);      // the same filter as every port: other boards' lines are silent, duplicates run once
+            d_.disp->handleLine(p, ReqSource::Mesh, now);         // the same filter as every port: other boards' lines are silent, duplicates run once
             bool dup = d_.disp->droppedDuplicates() != dupsBefore;
             // a "#P" line is logged without its text: it could carry a password
             if (forUs) d_.console->printf("MESH %s from %u%s", p[0] == ':' ? p : "#P line", sender, dup ? " (a duplicate of the same line on the serial bus: ran once)" : "");
@@ -142,6 +142,9 @@ bool Mesh::broadcast(const char* text) {
 
 bool Mesh::toController(const char* text, bool ensured) {
     if (!client_) return false;
+    // esp_now_send() accepts a packet for a registered peer whether or not it is on the air: an
+    // ensured message (a fault) for an absent Sabé must say so, so the caller broadcasts it instead
+    if (ensured && !client_->isSpecialPeerOnline()) return false;
     bool ok = client_->sendToSpecialPeer(text, ensured);
     if (!ok) ++txFail_;
     return ok;
@@ -152,16 +155,18 @@ bool Mesh::toController(const char* text, bool ensured) {
 void Mesh::printStatus(TextSink& out) {
     const Settings& s = *d_.settings;
     if (!client_) {
+        const char* missing = meshMissing(s);
         if (!s.meshEnabled) out.line("MESH=off");
-        else out.printf("MESH=not running (%s)", missing_ ? missing_ : "it failed to start, or #PRESTART is still needed");
+        else if (missing) out.printf("MESH=not running: it needs %s", missing);
+        else out.line(failed_ ? "MESH=not running: it failed to start (the boot log says why)" : "MESH=not running: #PRESTART starts it");
         return;
     }
     uint32_t on = online_.load(); int wcbs = 0;
     for (uint8_t id = 1; id <= s.meshQty; ++id) if (on & (1u << id)) ++wcbs;
     uint32_t lastRx = lastRxMs_.load();
-    out.printf("MESH=on id=%u wcbs=%d/%u online controller=%s neighbours=%u rx=%lu ours=%lu foreign=%lu estops=%lu hb=%lu lastHb=%lus ago lastRx=%s txFail=%lu",
+    out.printf("MESH=on id=%u wcbs=%d/%u online controller=%s neighbours=%u rx=%lu ours=%lu foreign=%lu dropped=%lu estops=%lu hb=%lu lastHb=%lus ago lastRx=%s txFail=%lu",
                s.meshId, wcbs, s.meshQty, on & (1u << kMeshControllerId) ? "online" : "not seen", client_->neighborCount(),
-               static_cast<unsigned long>(rx_.load()), static_cast<unsigned long>(ours_), static_cast<unsigned long>(foreign_), static_cast<unsigned long>(estops_.load()),
+               static_cast<unsigned long>(rx_.load()), static_cast<unsigned long>(ours_), static_cast<unsigned long>(foreign_), static_cast<unsigned long>(dropped_.load()), static_cast<unsigned long>(estops_.load()),
                static_cast<unsigned long>(reporter_.heartbeatsSent()), static_cast<unsigned long>(elapsed(millis(), reporter_.lastHeartbeatMs()) / 1000),
                lastRx ? (String(elapsed(millis(), lastRx) / 1000) + "s ago from " + String(lastFrom_.load())).c_str() : "never", static_cast<unsigned long>(txFail_));
 }
@@ -171,7 +176,9 @@ void Mesh::writeJson(JsonWriter& j) {
     j.beginObject();
     j.kv("enabled", s.meshEnabled != 0);
     j.kv("on", client_ != nullptr);
-    j.kv("missing", missing_ ? missing_ : "");
+    { const char* missing = meshMissing(s); j.kv("missing", missing ? missing : ""); }
+    j.kv("failed", failed_);
+    j.kv("dropped", static_cast<unsigned long>(dropped_.load()));
     j.kv("id", static_cast<int>(s.meshId)); j.kv("qty", static_cast<int>(s.meshQty)); j.kv("chan", static_cast<int>(s.meshChannel));
     if (client_) {
         uint32_t on = online_.load();

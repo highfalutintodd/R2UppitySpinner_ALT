@@ -31,7 +31,7 @@ RANGES = {"MOTOR": (0, 2), "INVERT": (0, 1), "TRAVEL": (0, 5000), "SAFESPIN": (0
           "ROTARYMIN": (10, 100), "ROTARYOFF": (0, 1), "DRIVESIGN": (-1, 1), "AGGRESSION": (0, 2), "ID": (0, 255), "BAUD": (1200, 921600),
           "DEDUP": (0, 5000), "DEBUG": (0, 1), "CMDTX": (0, 1), "LIFTERNC": (0, 1), "ROTARYNC": (0, 1), "WIFI": (0, 1), "APCHANNEL": (1, 13),
           "THEME": (0, 1), "RANDOMLIGHT": (0, 8), "COMMISSIONED": (0, 2),
-          "MESHQTY": (0, 19), "MESHID": (0, 19), "MESHCHAN": (1, 13), "MESHCRC": (0, 1), "MESHHB": (5, 300), "MESH": (0, 1)}
+          "MESHQTY": (0, 19), "MESHID": (0, 19), "MESHCHAN": (1, 11), "MESHCRC": (0, 1), "MESHHB": (5, 300), "MESH": (0, 1)}
 
 class Sim:
     def __init__(self):
@@ -239,7 +239,7 @@ class Sim:
     def mesh_json(self):
         # the dev server pretends the mesh runs whenever it is switched on and complete (a real board needs #PRESTART)
         on = bool(self.cfg["MESH"]) and not self.mesh_missing()
-        m = {"enabled": bool(self.cfg["MESH"]), "on": on, "missing": self.mesh_missing(), "id": self.cfg["MESHID"], "qty": self.cfg["MESHQTY"], "chan": self.cfg["MESHCHAN"]}
+        m = {"enabled": bool(self.cfg["MESH"]), "on": on, "missing": self.mesh_missing(), "failed": False, "dropped": 0, "id": self.cfg["MESHID"], "qty": self.cfg["MESHQTY"], "chan": self.cfg["MESHCHAN"]}
         if on:
             up = int(time.time() - self.t0)
             m.update({"wcbs": [1] * self.cfg["MESHQTY"], "controller": True, "neighbours": self.cfg["MESHQTY"] + 1, "rx": up // 3, "ours": up // 30,

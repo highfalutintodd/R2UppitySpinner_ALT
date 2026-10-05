@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 #include "Hal.h"
 // Command lines from another task (the web server, later the mesh) to loop(), where the
 // dispatcher runs. Fixed slots, copied in and out under the Lock; a full queue says so.
@@ -10,7 +11,10 @@ template <int Slots, int Len>
 class LineQueue {
   public:
     explicit LineQueue(Lock& lock) : lock_(lock) {}
+    // A line that does not fit is refused whole (counted as dropped), never cut short: a cut line
+    // could still run ("…:PP100" read as "…:PP10").
     bool push(const char* line, uint8_t tag = 0) {
+        if (!line || std::strlen(line) >= static_cast<size_t>(Len)) { lock_.lock(); ++dropped_; lock_.unlock(); return false; }
         lock_.lock();
         bool ok = count_ < Slots;
         if (ok) { int i = (head_ + count_) % Slots; std::snprintf(buf_[i], Len, "%s", line); tag_[i] = tag; ++count_; }

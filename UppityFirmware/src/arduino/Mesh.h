@@ -27,7 +27,8 @@ namespace uppity {
 
 class Mesh final : public MeshReporter::Out, public Console::MeshStatus {
   public:
-    using Queue = LineQueue<16, 208>;            // WCB_Client delivers at most ~200 characters per command
+    static constexpr int kLineMax = 208;          // a longer message is dropped whole (WCB_Client reassembles up to ~2.8 KB)
+    using Queue = LineQueue<16, kLineMax>;
     struct Deps {
         Console* console = nullptr; const Settings* settings = nullptr; EstopLatch* estop = nullptr;
         Dispatcher* disp = nullptr; SnapshotPublisher* pub = nullptr; Queue* lines = nullptr;
@@ -50,8 +51,8 @@ class Mesh final : public MeshReporter::Out, public Console::MeshStatus {
     Deps d_;
     WCB_Client* client_ = nullptr;
     MeshReporter reporter_;
-    const char* missing_ = nullptr;              // why it did not start ("" = it did, or it is off)
-    std::atomic<uint32_t> rx_{0}, estops_{0}, online_{0};
+    bool failed_ = false;                         // WCB_Client::begin failed at boot
+    std::atomic<uint32_t> rx_{0}, estops_{0}, online_{0}, dropped_{0};
     std::atomic<uint32_t> lastRxMs_{0};
     std::atomic<uint8_t> lastFrom_{0};
     uint32_t loggedOnline_ = 0, txFail_ = 0, ours_ = 0, foreign_ = 0, refused_ = 0;

@@ -71,14 +71,30 @@ inline bool meshWantsEstop(const char* text) {
     return trip || m == MeshMsg::Estop || m == MeshMsg::StopAll;
 }
 
+// One mesh message is one line (the brief: the serial ports' rules). Copies it without the trailing
+// CR/LF/spaces; false (drop it whole) when it does not fit `cap` or holds any other control
+// character: WCB_Client reassembles unicasts of up to ~2.8 KB, and a cut line would still run
+// (":PP100" read as ":PP10"), while a line break inside one would reach the serial bus as a second
+// line when the log is echoed there (review of the mesh, 2026-10-05).
+inline bool meshCleanLine(const char* in, char* out, size_t cap) {
+    if (!in || cap == 0) return false;
+    size_t n = std::strlen(in);
+    while (n > 0 && (in[n - 1] == '\r' || in[n - 1] == '\n' || in[n - 1] == ' ')) --n;
+    if (n == 0 || n >= cap) return false;
+    for (size_t i = 0; i < n; ++i) { unsigned char c = static_cast<unsigned char>(in[i]); if (c < 0x20 || c == 0x7f) return false; }
+    std::memcpy(out, in, n); out[n] = '\0';
+    return true;
+}
+
 // The mesh is unattended and over the air: it may move the periscope (":P", through the same
 // policy as every source, never with the rescue override or the commissioning unlock), ask for
 // state, and release an E-STOP (#PRESUME, the same as &ESTOP,RESET). Settings, commissioning,
 // unlocking, stored sequences, restarts and factory resets come from the USB console or the page.
+// The questions that read flash (#PCONFIG lists the stored sequences, #PL, #PV3) are not taken
+// from it either: only Persist touches NVS, and never while a motor may be running (hard rule 5).
 inline bool meshMayRunConfig(Verb v) {
     switch (v) {
-        case Verb::State: case Verb::Status: case Verb::Config: case Verb::Cal: case Verb::Help:
-        case Verb::ListSeq: case Verb::V3Dump: case Verb::Resume:
+        case Verb::State: case Verb::Status: case Verb::Cal: case Verb::Help: case Verb::Resume:
             return true;
         default:
             return false;

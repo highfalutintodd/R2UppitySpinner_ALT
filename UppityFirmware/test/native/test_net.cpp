@@ -41,7 +41,8 @@ TEST(line_queue_round_trip_and_full) {
     char out[16]; uint8_t tag = 0;
     CHECK(q.pop(out, sizeof out, &tag)); CHECK(std::string(out) == ":PP100"); CHECK_EQ(tag, 7);
     CHECK(q.pop(out, sizeof out)); CHECK(std::string(out) == "#PSTATE"); CHECK(!q.pop(out, sizeof out));
-    CHECK(q.push("a very long line that will be cut")); CHECK(q.pop(out, sizeof out)); CHECK_EQ(std::strlen(out), 15u);
+    CHECK(!q.push("a very long line, refused whole")); CHECK(!q.pop(out, sizeof out));   // never cut short and run (review of the mesh, 2026-10-05)
+    CHECK_EQ(q.dropped(), 2u);
 }
 
 TEST(settings_schema3_wifi_fields_and_migration) {

@@ -5,6 +5,7 @@
 #include "../../src/core/Settings.h"
 #include "../../src/core/Sequencer.h"
 #include "../../src/core/Dispatcher.h"
+#include "../../src/core/LineQueue.h"
 #include <string>
 #include <vector>
 using namespace uppity;
@@ -102,9 +103,10 @@ TEST(mesh_estop_patterns_are_the_serial_ports_own) {
 TEST(mesh_may_move_and_ask_but_not_configure) {
     CHECK(meshMayRunConfig(cmdOf("#PSTATE").verb));
     CHECK(meshMayRunConfig(cmdOf("#PSTATUS").verb));
-    CHECK(meshMayRunConfig(cmdOf("#PCONFIG").verb));
+    CHECK(meshMayRunConfig(cmdOf("#PCAL").verb));
     CHECK(meshMayRunConfig(cmdOf("#PRESUME").verb));
-    for (const char* l : { "#PUNLOCK", "#PCOMMISSIONBYPASS", "#PCOMMISSIONRUN", "#POVERRIDE", "#PSETHOME", "#PFACTORY", "#PRESTART",
+    for (const char* l : { "#PCONFIG", "#PL", "#PV3",                    // they read flash (hard rule 5): not from an unattended source
+                           "#PUNLOCK", "#PCOMMISSIONBYPASS", "#PCOMMISSIONRUN", "#POVERRIDE", "#PSETHOME", "#PFACTORY", "#PRESTART",
                            "#PSAFESPIN0", "#PMESH0", "#PMESHPASS=x", "#PS1::PP100", "#PSC", "#PNUDGE-20", "#PJOGL-", "#PWIFIRESET", "#PV3IMPORT" })
         if (meshMayRunConfig(cmdOf(l).verb)) { std::printf("  allowed from the mesh: %s\n", l); CHECK(false); }
 }
@@ -274,6 +276,7 @@ TEST(mesh_lines_drive_through_the_dispatcher_and_foreign_lines_are_silent) {
     CHECK(!r.line("#DPCONFIG", ReqSource::Mesh));                        // Roam-A-Dome's: nothing
     CHECK(!r.out.has("INVALID"));
     CHECK(r.line("#PSTATE", ReqSource::Mesh)); CHECK_EQ(r.configs.size(), 1u);
+    r.line("#PCONFIG", ReqSource::Mesh); CHECK_EQ(r.configs.size(), 1u);
     r.line("#PUNLOCK", ReqSource::Mesh); r.line("#PSAFESPIN0", ReqSource::Mesh); r.line("#POVERRIDE", ReqSource::Mesh);
     CHECK_EQ(r.configs.size(), 1u); CHECK(r.out.has("MESH=refused"));
 }
@@ -310,4 +313,32 @@ TEST(mesh_estop_lands_on_the_latch_and_brakes_a_descent) {
     CHECK(!r.line(":PP100", ReqSource::Mesh) || (r.run(500), !r.g.anyDriveAfter(t)));   // refused while latched
     r.g.estop.release(r.g.hal.nowMs());                                  // &ESTOP,RESET: released, nothing resumes by itself
     r.run(500); CHECK(!r.g.anyDriveAfter(t));
+}
+
+// ---------------------------------------------------------------- review of the mesh (2026-10-05)
+
+// A long message is dropped whole, never cut short and run: WCB_Client reassembles unicasts of up to
+// ~2.8 KB, and a 208-character chain ending ":PP100" used to come out as ":PP10".
+TEST(mesh_long_or_multi_line_messages_are_dropped_whole) {
+    char out[208];
+    CHECK(meshCleanLine(":PP100\r\n", out, sizeof out)); CHECK(std::string(out) == ":PP100");
+    CHECK(meshCleanLine("#PSTATE", out, sizeof out));
+    std::string chain; while (chain.size() < 202) chain += ":PW1"; chain += ":PP100";
+    CHECK(chain.size() >= 208);
+    CHECK(!meshCleanLine(chain.c_str(), out, sizeof out));
+    CHECK(!meshCleanLine(":PP100\r\n#PUNLOCK", out, sizeof out));    // a second line would reach the bus when the log is echoed there
+    CHECK(!meshCleanLine(":PP1\x00" "00", out, sizeof out) || std::string(out) == ":PP1");
+    CHECK(!meshCleanLine("\r\n", out, sizeof out));
+    CHECK(!meshCleanLine(":PP10\x1b", out, sizeof out));
+    CHECK(meshWantsEstop("&ESTOP\r\n:PP100"));                           // the latch still reads the raw message first
+    NoLock lock; LineQueue<4, 16> q(lock);                                // and the queue itself never cuts a line
+    CHECK(q.push("short")); CHECK(!q.push("a line of sixteen")); CHECK_EQ(q.dropped(), 1u);
+    char b[32]; CHECK(q.pop(b, sizeof b)); CHECK(std::string(b) == "short"); CHECK(!q.pop(b, sizeof b));
+}
+
+TEST(mesh_channel_is_the_librarys_1_to_11) {
+    const SettingKey* k = findSettingKey("MESHCHAN", 8); CHECK(k != nullptr);
+    if (!k) return;
+    Settings s; CHECK(k->set(s, 11)); CHECK(!k->set(s, 12)); CHECK(!k->set(s, 13)); CHECK_EQ(s.meshChannel, 11);
+    s.meshChannel = 13; sanitize(s); CHECK_EQ(s.meshChannel, 1);
 }

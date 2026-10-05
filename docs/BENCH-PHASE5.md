@@ -74,7 +74,7 @@ held: every move is a fixed target.
    ```
    arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
    ```
-   It ends with `Sketch uses 1224987 bytes (62%)` (a few bytes either way is fine; the mesh code
+   It ends with `Sketch uses 1225487 bytes (62%)` (a few bytes either way is fine; the mesh code
    makes it about 41 KB bigger than the last build, and it stays off until Part B).
 3. In a second Terminal window, the monitor (leave it running for the whole of Part A):
    ```
@@ -195,8 +195,8 @@ sounded different (a move that should have moved and did not, a stop that looked
 
 **What it is.** With the mesh on, the periscope joins your WCBs' ESP-NOW network as its own
 board, number 5. From the mesh it takes `:P` moves (through the same safety rules as every other
-source, and never with the rescue override or the commissioning unlock), `#PSTATE`/`#PSTATUS`/
-`#PCONFIG` questions, `#PRESUME`, and the DroidNet verbs `&ESTOP`, `&ESTOP,RESET`, `&DISABLE`,
+source, and never with the rescue override or the commissioning unlock), the `#PSTATE`,
+`#PSTATUS` and `#PCAL` questions, `#PRESUME`, and the DroidNet verbs `&ESTOP`, `&ESTOP,RESET`, `&DISABLE`,
 `&STATUS`, `&HELLO`; `?STOP`, `&ESTOP` and `:PX` latch the E-STOP the moment they arrive, like on
 the serial ports. Settings, commissioning, unlocking and restarts are refused from the mesh
 (`MESH=refused …`). It sends `&PERI,HB,<version>,<uptime>,<state>,<height %>,<angle>,<homed>`
@@ -209,11 +209,16 @@ the board does not join WordNet.** The page is then only on the board's own netw
 phone or laptop to `R2Uppity-FB3F` (its password as before) and open `http://192.168.4.1`. The
 WordNet details stay stored; turning the mesh off brings everything back after a restart.
 
-**What was tested.** On the Mac: 232 host tests (16 for the mesh: the message types, the E-STOP
+**What was tested.** On the Mac: 234 host tests (18 for the mesh: the message types, the E-STOP
 patterns, the `#P` lines the mesh may and may not run, the `&PERI` lines and their timing, the
 settings, the duplicate filter, a mesh `:PP0` with a turned head and the override on (it stops at
-the safe-spin height), and a mesh E-STOP during a descent braking like every other E-STOP). The
-page's Mesh section was driven in the browser against the simulated board. **Nothing has run on a
+the safe-spin height), and a mesh E-STOP during a descent braking like every other E-STOP). A
+second, independent review of the mesh code found six things, all fixed and tested: a message too
+long for one line could be cut short and its last move still run; a line break inside a message
+could reach the serial bus as a second line; a fault report had no way to tell that Sabé was off
+the air; the page's mesh status could go stale; channels 12-13 were accepted though the library
+ignores them; and a `#P` line with a leading space read as INVALID. The page's Mesh section was
+driven in the browser against the simulated board. **Nothing has run on a
 real mesh.** The library is Greg's newest, 1.17.1 (commit 534a6c9 from 2026-10-04, not yet tagged;
 `UppityFirmware/libs/WCB_Client/VENDORED.md`).
 

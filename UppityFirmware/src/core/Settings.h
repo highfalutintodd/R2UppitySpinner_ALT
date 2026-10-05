@@ -72,7 +72,7 @@ struct Settings {
     uint8_t  meshEnabled = 0;        // off by default; on = the access point moves to the mesh channel and the home network is not joined
     uint8_t  meshQty = 0;            // the WCBs' ?WCBQ; 0 = not set
     uint8_t  meshId = 0;             // this board's mesh id, 1-19 (20 is the controller slot, Sabé's); 0 = not set
-    uint8_t  meshChannel = 1;        // the WCBs' ?WCBCH
+    uint8_t  meshChannel = 1;        // the WCBs' ?WCBCH, 1-11 (the library's range)
     uint8_t  meshCrc = 1;            // the WCBs' checksum setting (CHKSM), on by default as on the WCBs
     char     meshMac[6] = {};        // "3C:4E": the 2nd and 3rd MAC octets, as ?WCBM shows them; empty = not set
     char     meshPass[40] = {};      // the WCBs' ?WCBP, at most 39 characters; never printed
@@ -115,7 +115,7 @@ inline void sanitize(Settings& s) {
     s.meshEnabled = s.meshEnabled ? 1 : 0; s.meshCrc = s.meshCrc ? 1 : 0;
     if (s.meshId > 19) s.meshId = 0;
     if (s.meshQty > 19) s.meshQty = 0;
-    if (s.meshChannel < 1 || s.meshChannel > 13) s.meshChannel = 1;
+    if (s.meshChannel < 1 || s.meshChannel > 11) s.meshChannel = 1;     // WCB_Client::setMeshChannel takes 1-11
     s.meshMac[sizeof s.meshMac - 1] = '\0'; s.meshPass[sizeof s.meshPass - 1] = '\0';
 }
 
@@ -350,7 +350,7 @@ inline const SettingKey kSettingKeys[] = {
     { "COMMISSIONED", [](const Settings& s) { return (int32_t)s.commissioned; },  [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 2)) return false; s.commissioned = (uint8_t)v; return true; }, "0 locked, 1 bench unlock, 2 commissioned" },
     { "MESHQTY",    [](const Settings& s) { return (int32_t)s.meshQty; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 19)) return false; s.meshQty = (uint8_t)v; return true; }, "how many WCBs (?WCBQ); after #PRESTART" },
     { "MESHID",     [](const Settings& s) { return (int32_t)s.meshId; },          [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 19)) return false; s.meshId = (uint8_t)v; return true; }, "this board's mesh id 1-19, unused by any other board; after #PRESTART" },
-    { "MESHCHAN",   [](const Settings& s) { return (int32_t)s.meshChannel; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 1, 13)) return false; s.meshChannel = (uint8_t)v; return true; }, "the WCBs' WiFi channel (?WCBCH, usually 1); after #PRESTART" },
+    { "MESHCHAN",   [](const Settings& s) { return (int32_t)s.meshChannel; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 1, 11)) return false; s.meshChannel = (uint8_t)v; return true; }, "the WCBs' WiFi channel 1-11 (?WCBCH, usually 1); after #PRESTART" },
     { "MESHCRC",    [](const Settings& s) { return (int32_t)s.meshCrc; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.meshCrc = (uint8_t)v; return true; }, "0/1 as the WCBs' checksum setting (on by default); after #PRESTART" },
     { "MESHHB",     [](const Settings& s) { return (int32_t)s.meshHbS; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 5, 300)) return false; s.meshHbS = (uint16_t)v; return true; }, "seconds between &PERI,HB heartbeats, 5-300" },
     { "MESH",       [](const Settings& s) { return (int32_t)s.meshEnabled; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.meshEnabled = (uint8_t)v; return true; }, "0/1 join the WCB mesh (the home network is then not joined); after #PRESTART" },

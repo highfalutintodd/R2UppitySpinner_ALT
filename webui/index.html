@@ -639,7 +639,7 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
       { k: 'MESHPASS', label: 'Mesh password', type: 'secret', max: 39, help: 'The WCBs\' password (?WCBP), at most 39 characters.' },
       { k: 'MESHQTY', label: 'How many WCBs', type: 'num', min: 1, max: 19, help: 'The WCBs\' quantity (?WCBQ).' },
       { k: 'MESHID', label: 'This board\'s mesh number', type: 'num', min: 1, max: 19, help: 'Not used by any other board. 20 is the controller\'s (Sabé).' },
-      { k: 'MESHCHAN', label: 'Mesh channel', type: 'num', min: 1, max: 13, help: 'The WCBs\' channel (?WCBCH), usually 1. The board\'s own network moves to it.' },
+      { k: 'MESHCHAN', label: 'Mesh channel', type: 'num', min: 1, max: 11, help: 'The WCBs\' channel (?WCBCH), usually 1. The board\'s own network moves to it.' },
       { k: 'MESHCRC', label: 'Checksum', type: 'sel', opts: onOff, help: 'As set on the WCBs: on unless you changed it.' },
       { k: 'MESHHB', label: 'Heartbeat every', type: 'num', min: 5, max: 300, unit: 's', help: '&PERI,HB on the mesh. Takes effect at once.' },
       { k: 'MESH', label: 'Join the mesh', type: 'sel', opts: onOff, confirm: 'On = after the restart the board leaves your home network; the page is then at http://192.168.4.1 on its own WiFi' },
@@ -737,7 +737,7 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
   }
   function meshText(m) {
     if (!m || !m.enabled) return 'off';
-    if (!m.on) return m.missing ? 'not started: needs ' + m.missing.replace(/ \(.*$/, '') : 'on after a restart';
+    if (!m.on) return m.missing ? 'not started: needs ' + m.missing.replace(/ \(.*$/, '') : m.failed ? 'failed to start (see the log)' : 'on after a restart';
     const up = (m.wcbs || []).filter(Boolean).length;
     return 'on as ' + m.id + ' · WCBs ' + up + '/' + m.qty + (m.controller ? ' · Sabé seen' : '');
   }
