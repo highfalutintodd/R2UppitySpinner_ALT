@@ -119,6 +119,12 @@ one there.
   from a factory reset).
 - Not yet tested from earlier phases: two phones on the page at once, the command UART (Sabé bus,
   9600), the trigger inputs.
+- **Short seeks stop short** (since Phase 1; `LifterSeek` brakes at `target ± stopComp` from the
+  start, and `stopComp` is the calibrated run-on for the seek's *full* speed, 56 ticks down on
+  Todd's lifter): a `:PP` step shorter than that does not move, longer short moves stop up to that
+  much early. Fix by braking on the run-on at the speed actually reached (the creeps' `ahead`
+  approach, from the same calibration table); it changes every seek, so bench it. Seen 2026-10-04
+  (942 → 909 did not move). For the code review.
 - Backlog: nudges land a few ticks short going up (+9 for +12): the braking lead uses the median
   of the calibration table, and slow upward creeps stop quicker than that; a speed-matched lead
   from the same table would fix it. A device PIN for mutating web routes. The `TICK` lines during

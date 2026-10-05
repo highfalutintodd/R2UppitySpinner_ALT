@@ -663,9 +663,9 @@ Two things this run showed:
    lower than 878 means, roughly 845 on the true count. That is still above the 829 where you saw
    it clear, but with about 16 ticks of margin instead of 34. The next build fixes it: the
    calibration records the deepest the mast settles below the closing point, and power-up on that
-   switch starts the count there. After an ordinary Down the mast rests a little higher (about 22
-   below), so after power-up the count may read up to about 11 low, never high. Low is the safe
-   direction. The calibration you have predates this, so it needs one
+   switch starts the count there. After an ordinary Down the mast rests a little higher (about 21
+   below; the deepest the calibration saw was 37), so after power-up the count may read up to
+   about 16 low until the mast reaches the top switch, never high. Low is the safe direction. The calibration you have predates this, so it needs one
    recalibration to measure it (re-test 4).
 2. **`#PTRAVEL0` is now right for you.** The calibrated 1137 agrees with both switches. With 1150
    the count jumps about 15 at every pass of the top switch. One consequence: 878 was measured
@@ -771,3 +771,20 @@ behave as before.
    It ends with `Sketch uses 1176727 bytes (59%)`.
 2. **Setup → Firmware → Choose File**, `UppityFirmware.ino.bin` in the `uppity-build` folder on
    your Desktop, **Upload**.
+
+## Results 2026-10-04, after installing build bad7e34f
+
+The install check passed: random mode, Comlink chains, a `:PH` cutting into a running seek, and a
+`:PH` after a spin (it homed first, then lowered) all ran normally. Two notes:
+- After power-up the first trip to the top closed the switch at 1117, 20 below 1137, with the
+  bottom switch releasing at 13. The mast had come down by an ordinary Down (resting about 21
+  below the closing point), while the board starts from the calibration's deepest rest (37). It
+  reads low until the top switch, which is the safe direction. The number I gave in re-test 4
+  ("up to about 11 low") was too small.
+- **Short seeks stop short (since Phase 1).** At 29.916 a random move from 942 to 909 ended
+  without moving, and earlier short moves stopped about 20 ticks above their targets. A seek starts
+  braking when it is within the calibrated stopping distance for its full speed (56 ticks going
+  down and about 30 going up on your lifter), even when it has not reached that speed. A move
+  shorter than that does not move at all. Stopping short is the safe direction. The fix is to
+  brake by the speed actually reached, as jogs and nudges now do. That changes every seek, so it
+  is listed for the code review and needs a bench check of its own.
