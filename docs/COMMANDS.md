@@ -297,6 +297,8 @@ Text settings take `=` and the text: `#PSSID=My Network`. `#PSSID=` clears it.
 whether they are set, so a pasted `#PCONFIG` does not restore them. Set them on the web page
 (Setup), not by typing into a serial monitor: a monitor's log keeps every line you type. (The
 board itself never prints a password back, and logs a `#P` line from the mesh without its text.)
+The access point's default password, `Astromech`, is published: anyone nearby who knows it can join
+and drive the periscope, so set your own.
 
 ---
 

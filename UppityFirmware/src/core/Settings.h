@@ -352,7 +352,7 @@ inline const SettingKey kSettingKeys[] = {
     { "MESHID",     [](const Settings& s) { return (int32_t)s.meshId; },          [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 19)) return false; s.meshId = (uint8_t)v; return true; }, "this board's mesh id 1-19, unused by any other board; after #PRESTART" },
     { "MESHCHAN",   [](const Settings& s) { return (int32_t)s.meshChannel; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 1, 11)) return false; s.meshChannel = (uint8_t)v; return true; }, "the WCBs' WiFi channel 1-11 (?WCBCH in a WCB's ?BACKUP, usually 1); after #PRESTART" },
     { "MESHCRC",    [](const Settings& s) { return (int32_t)s.meshCrc; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.meshCrc = (uint8_t)v; return true; }, "0/1 as the WCBs' checksum setting (on by default); after #PRESTART" },
-    { "MESHHB",     [](const Settings& s) { return (int32_t)s.meshHbS; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 5, 300)) return false; s.meshHbS = (uint16_t)v; return true; }, "seconds between &PERI,HB heartbeats, 5-300" },
+    { "MESHHB",     [](const Settings& s) { return (int32_t)s.meshHbS; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 5, 300)) return false; s.meshHbS = (uint16_t)v; return true; }, "seconds between &PERI,HB heartbeats, 5-300; after #PRESTART" },
     { "MESH",       [](const Settings& s) { return (int32_t)s.meshEnabled; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.meshEnabled = (uint8_t)v; return true; }, "0/1 join the WCB mesh (the home network is then not joined); after #PRESTART" },
 };
 constexpr int kSettingKeyCount = static_cast<int>(sizeof(kSettingKeys) / sizeof(kSettingKeys[0]));

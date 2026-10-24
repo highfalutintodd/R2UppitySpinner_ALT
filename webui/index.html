@@ -642,7 +642,7 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
       { k: 'MESHID', label: 'This board\'s mesh number', type: 'num', min: 1, max: 19, help: 'Not used by any other board. 20 is the controller\'s (Sabé).' },
       { k: 'MESHCHAN', label: 'Mesh channel', type: 'num', min: 1, max: 11, help: 'The WCBs\' channel (the ?WCBCH line of a WCB\'s ?BACKUP), usually 1. The board\'s own network moves to it.' },
       { k: 'MESHCRC', label: 'Checksum', type: 'sel', opts: onOff, help: 'As set on the WCBs: on unless you changed it.' },
-      { k: 'MESHHB', label: 'Heartbeat every', type: 'num', min: 5, max: 300, unit: 's', help: '&PERI,HB on the mesh. Takes effect at once.' },
+      { k: 'MESHHB', label: 'Heartbeat every', type: 'num', min: 5, max: 300, unit: 's', help: '&PERI,HB on the mesh. Takes effect after a restart.' },
       { k: 'MESH', label: 'Join the mesh', type: 'sel', opts: onOff, confirm: 'On = after the restart the board leaves your home network; the page is then at http://192.168.4.1 on its own WiFi' },
     ],
   };

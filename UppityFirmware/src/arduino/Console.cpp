@@ -452,7 +452,7 @@ void Console::setKey(const Command& c) {
     }
     else if (std::strcmp(k->name, "COMMISSIONED") == 0) note = s_.commissioned ? " (unlocked)" : " (LOCKED)";
     else if (std::strcmp(k->name, "WIFI") == 0 || std::strcmp(k->name, "APCHANNEL") == 0) note = " (takes effect after #PRESTART)";
-    else if (std::strncmp(k->name, "MESH", 4) == 0 && std::strcmp(k->name, "MESHHB") != 0) note = " (takes effect after #PRESTART)";
+    else if (std::strncmp(k->name, "MESH", 4) == 0) note = " (takes effect after #PRESTART)";   // MESHHB too: read when the mesh starts
     applySettings(false);
     if (changed) d_.persist->requestSaveSettings();
     formatSetting(s_, *k, buf, sizeof buf);
