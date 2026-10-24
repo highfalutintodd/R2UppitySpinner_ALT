@@ -393,4 +393,4 @@ control character inside, is dropped whole (an E-STOP pattern in it still latche
 - **E-STOP from a WCB on 7.0.1.** A `?STOP` typed on a WCB stops only that WCB's own timed sequence
   and is not passed on. Use `;W5&ESTOP`, or the page's E-STOP button.
 - **The serial wire and the mesh together.** A command that reaches the periscope over both the
-  mesh and the WCB serial wire (for example `;W3;S4`) within 750 ms runs once.
+  mesh and the WCB serial wire (for example `;W2;S2` when it is on WCB2's port 2) within 750 ms runs once.

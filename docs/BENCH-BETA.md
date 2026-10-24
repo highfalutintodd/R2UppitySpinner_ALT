@@ -57,15 +57,16 @@ the iPhone for the page, except in step 3, where the laptop joins `R2Uppity-1390
    first if needed). Wait for it to stop.
 8. **The command wire on its own: a question.** On WCB1's console:
    ```
-   ;W3;S4#PSTATE
+   ;W2;S2#PSTATE
    ```
-   (WCB3 writes `#PSTATE` out of its serial port 4, into the periscope's command port.) *Success:*
+   (WCB2 writes `#PSTATE` out of its serial port 2, into the periscope's command port. The wire is
+   on WCB2 port 2, found 2026-10-24; not WCB3 port 4, and not WCB2 port 4, the inner rim.) *Success:*
    the periscope's `STATE=…` lines in the monitor. This is the first time v4's command port has
    been driven by another board. If nothing arrives, stop here and tell me.
 9. **The same move over the wire and the mesh at once (step 19 of Phase 5).** On WCB1's console,
    one line:
    ```
-   ;W3;S4:PP100^;W5:PP100
+   ;W2;S2:PP100^;W5:PP100
    ```
    *Success:* the mast rises to the top **once** (one `SEEK START`). If the wire's copy came first,
    the monitor's `MESH :PP100 from 1` line ends `(a duplicate of the same line on the serial bus:
@@ -73,11 +74,12 @@ the iPhone for the page, except in step 3, where the laptop joins `R2Uppity-1390
    ```
    #PSTATUS
    ```
-   and its `SERIAL=` line shows `duplicates=1` in that case. Up is always allowed, so even two runs
+   and its `SERIAL=` line shows `duplicates=` one higher than before (it was 2 after Comlink's
+   two broadcasts on 2026-10-24). Up is always allowed, so even two runs
    would be harmless.
 10. **Down over the wire.** On WCB1's console:
     ```
-    ;W3;S4:PH
+    ;W2;S2:PH
     ```
     *Success:* the head homes if it needs to, and the mast lowers to the bottom.
 11. **A mesh E-STOP while the lifter moves.** The head is home. Raise the mast first, from the
