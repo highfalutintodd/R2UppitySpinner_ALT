@@ -110,25 +110,9 @@ the iPhone for the page, except in step 3, where the laptop joins `R2Uppity-1390
     *Success:* each time, WCB1 shows all three: `&PERI,HB,…`, `&PERI,STATE,IDLE` and
     `&PERI,ACK,STATUS`. Paste me that part of WCB1's console.
 
-## Part 3 — your own WiFi password (needed before the droid goes out anyway)
+## Part 3 — a long run
 
-14. On the iPhone page: **Setup → WiFi**, the board's own network password: type a new one (8 to
-    32 characters; write it down somewhere safe), **Save**, then **Restart to apply** (tap twice).
-    Rejoin the iPhone to `R2Uppity-1390` with the **new** password and open `http://192.168.4.1`.
-    *Success:* no warning banner, and in the monitor the boot shows `password <yours>` and no
-    `WIFI WARNING` line. **Never type the new password into the monitor:** it would land in the
-    log file. If you cannot get back in, type this into the monitor to put the published default
-    back (it is no secret), then try again:
-    ```
-    #PAPPASS=Astromech
-    ```
-    ```
-    #PRESTART
-    ```
-
-## Part 4 — a long run
-
-15. **Random medium for 30 minutes.** On the page: **Operate → Random medium**. Let it run; watch
+14. **Random medium for 30 minutes.** On the page: **Operate → Random medium**. Let it run; watch
     now and then. Then **Stop**, and in the monitor:
     ```
     #PSTATUS
@@ -136,21 +120,118 @@ the iPhone for the page, except in step 3, where the laptop joins `R2Uppity-1390
     *Success:* no `FAULT` lines in the log, every turn at the top or above 878, every descent below
     878 after a home, and in `#PSTATUS` the `MESH=` line still `wcbs=3/3`, `txFail=0`.
 
-## Part 5 — a fresh install from the full image (what every tester does first)
+## Part 4 — a fresh install from the full image, on the droid (what every tester does first)
 
-Two ways; tell me which you can do.
+This erases everything stored on the board: your settings, the calibration, the mesh settings,
+WordNet's details, and even v3's old values (so nothing is imported). The board then boots as a
+brand-new one would: LOCKED, on its own network with the default password. Commissioning measures
+everything again with the dome on, as on 2026-10-04, and Part 5 puts back what commissioning does
+not measure. About an hour in all. Nothing here moves until commissioning step 3, and every
+commissioning step says what it will do before it moves.
 
-- **A. On a spare ESP32 board**, if you have one (any ESP32-WROOM-32 dev board will do for this
-  part): flash `uppity-spinner-alt-4.0.0-beta.1-full.bin` at `0x0` from
-  [espressif.github.io/esptool-js](https://espressif.github.io/esptool-js/) in Chrome, then join its
-  `R2Uppity-XXXX` network and open the page. *Success:* the board boots `LOCKED`, the page shows
-  the commissioning card and the default-password banner. Nothing can move on a bare board.
-- **B. On the droid**, which erases everything stored on it (your settings, the calibration, the
-  mesh settings and WordNet's details) and then runs commissioning from step 1 with the dome on,
-  as on 2026-10-04. About 45 minutes. I would write that procedure separately, starting with saving
-  your `#PCONFIG` so nothing is lost. Only if A is not possible.
+**Your measured numbers, for comparison and as the guard in step 6** (2026-10-04, dome on):
+travel 1137 between the switches, rest 37, rotary about 1185 ticks per turn, safe-spin 878: the
+turned head was stopped at **844**, plus a 34-tick margin. That day it had been down to about 800
+without touching, but **844 is the lowest a turned head goes in this procedure.**
+
+15. **Save what is on the board now.** Head home, mast at the bottom (**Operate → Down** on the
+    page). In the monitor, one at a time (the answers land in the log file, which is your backup):
+    ```
+    #PCONFIG
+    ```
+    ```
+    #PCAL
+    ```
+16. **Close the monitor:** click its Terminal window and press **Control-C**. The USB port must be
+    free for the flash.
+17. **Flash the full image.** In **Chrome** (or Edge; Safari cannot do this), open
+    [https://espressif.github.io/esptool-js/](https://espressif.github.io/esptool-js/). Set
+    Baudrate to `460800`, press **Connect**, and pick the board's port in the list (it mentions
+    `wchusbserial` or `USB Serial`). Under **Program**: Flash Address `0x0`, and for the file, in the
+    `uppity-spinner-alt-4.0.0-beta.1` folder on your Desktop,
+    `uppity-spinner-alt-4.0.0-beta.1-full.bin`. Press **Program** and wait for 100 %. Then press
+    **Disconnect** and close the tab. (Do not press **Erase Flash**; it is not needed.)
+    If the page will not connect, use this one line in the Terminal app instead; it does the same:
+    ```
+    ~/Library/Arduino15/packages/esp32/tools/esptool_py/5.1.0/esptool --chip esp32 --port /dev/cu.wchusbserial110 --baud 460800 write-flash 0x0 ~/Desktop/uppity-spinner-alt-4.0.0-beta.1/uppity-spinner-alt-4.0.0-beta.1-full.bin
+    ```
+    *Success:* it writes 4 MB, verifies, and resets the board (`Hash of data verified`).
+18. **The monitor again**, with a new log file:
+    ```
+    arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-beta-fresh-log.txt
+    ```
+    *Success (the boot):* `SETTINGS=none (first boot of v4)`, `V3 import: no v3 settings in flash
+    (nothing to take)`, a `CONFIG` line with `commissioned=0`, `WIFI AP "R2Uppity-1390" password "Astromech" (the
+    default…)`, the `WIFI WARNING` line, and `MESH=off`. Nothing moves.
+19. **Join the iPhone** to `R2Uppity-1390` with the password `Astromech` (the phone remembers your
+    new one from earlier, if you set it; choose "Forget This Network" and join again) and open
+    `http://192.168.4.1`. *Success:* the LOCKED banner and the default-password banner. **Leave the
+    password for now** (Part 5).
+20. **Setup → Commissioning → Start.** The steps, with what is different on a blank board:
+    - **1 · Profile:** check that **Pololu 4751 (19:1)** is selected (it is the default). Tick the
+      boxes, **Next step**.
+    - **2 · Wiring check:** nothing moves. **Press Flip so "Runs backwards" reads yes** (a blank
+      board does not know your lifter is inverted). With the mast down the bottom lamp is lit. Tick
+      the box, **Next step**. (If you forget the flip, step 3 pushes on the bottom stop for under a
+      second, stops, and tells you to flip it; flip it and run step 3 again.)
+    - **3 · Lift test:** **Run the lift test**: a slow creep up to the top switch.
+    - **4 · Rotary:** **Measure the rotary**: three turns at the top, then home. Expect about 1185.
+    - **5 · Calibration:** **Calibrate the lifter**: about six minutes. Expect travel about 1137
+      and `rest` about 37.
+    - **6 · Safe-spin height:** the one that needs your eyes, exactly as on 2026-10-04.
+      **a.** **Raise and turn the head** (top, 90°). **b.** **Override on (60 s)**, and press it again
+      whenever the countdown gets low. **c.** **Lower 3 %** (about 35 ticks a press) until the
+      Height line reads about 900, then **Lower 1 %** (about 12) only. After every press, look at
+      the lowest part of the head against the dome edge **and every part of the frame it would
+      pass over if it turned**. **Stop at about 850, and never below 844**, or sooner if anything
+      looks close. **d.** **Use this height…**, then **Tap again: store it**. Expect about 878-885.
+      **e.** **Raise and home the head**, then **End the override**.
+    - **7 · Acceptance:** **Run the acceptance** (home, 0 %, 50 %, 100 %, home, one gentle random
+      action), then **Finish: mark commissioned**. *Success:* `COMMISSIONED=2`, seven green ticks.
+
+    If a step fails, its box turns red and says why; tell me before running it again unless it is
+    the flip in step 3.
+
+## Part 5 — put back what commissioning does not measure, and your own password
+
+21. **Your tuned numbers.** In the monitor, one at a time (each answers `(saved)`):
+    ```
+    #PMINUP50
+    ```
+    ```
+    #PMINDOWN50
+    ```
+    ```
+    #PRANDOMLIGHT7
+    ```
+    (Your v3 floor of 50 % was what every bench since Phase 2 ran on; the calibration alone would
+    use about 25 % up and 15 % down.)
+22. **The mesh**, on the iPhone page: **Setup → Mesh**, the same eight fields as Phase 5 step 8:
+    octets `3C:4E`, the mesh password (on the page only), WCBs `3`, mesh number `5`, channel `1`,
+    checksum On, heartbeat `10`, Join the mesh On.
+23. **Your own password for the board's network**: **Setup → WiFi**, the board's own network
+    password, 8 to 32 characters (write it down somewhere safe), **Save**. (Optional: your WordNet
+    name and password too, for whenever the mesh is off.) **Never type a password into the
+    monitor:** it would land in the log file.
+24. **Restart to apply** (tap twice). Rejoin the iPhone to `R2Uppity-1390` with the **new** password
+    and open `http://192.168.4.1`. *Success:* no banners; in the monitor `password <yours>`, no
+    `WIFI WARNING`, `MESH=joined as id 5 …`, and then `MESH WCB1 online`, `WCB2`, `WCB3`,
+    `controller 20`. If you cannot get back in, type these two lines into the monitor to put the
+    published default back (it is no secret), and try again:
+    ```
+    #PAPPASS=Astromech
+    ```
+    ```
+    #PRESTART
+    ```
+25. **Compare.** In the monitor:
+    ```
+    #PCONFIG
+    ```
+    I compare it with the one from step 15.
 
 ## Send back
 
-The log `uppity-bench-beta-log.txt` from your Desktop, WCB1's console for steps 9, 11 and 13, and
-which way Part 5 can go.
+The two log files from your Desktop (`uppity-bench-beta-log.txt` and
+`uppity-bench-beta-fresh-log.txt`), WCB1's console for steps 9, 11 and 13, and anything that looked
+or sounded different.
