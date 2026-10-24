@@ -255,6 +255,8 @@ home WiFi. With the mesh on, the board is never on your home WiFi.
 `COMTYPE = 0` (ABC mode) in `PeriscopeLightsCode.ino`. The board drives the light kit over the
 parallel A/B/C pins only.
 
+**The head brushes the dome opening on the way down.** The board only lowers a head it has just homed, but "home" is where the home switch closes, and most rotary gearboxes allow a couple of degrees of slop. If your opening leaves very little room, centre home in it: with the periscope down, look at the gap on each side of the lens, then shift home a few ticks at a time with `#PHOMEOFFSET` (about 3 ticks per degree on a 1,185-tick rotary). After each change, home the head at the top and look before you lower it.
+
 **Erratic readings with a metal dome.** Twist the encoder and switch wires and keep them away from
 the dome. Good wiring is the foundation; the software's checks are a second layer.
 

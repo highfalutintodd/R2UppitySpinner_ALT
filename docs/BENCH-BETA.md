@@ -237,3 +237,64 @@ without touching, but **844 is the lowest a turned head goes in this procedure.*
 The two log files from your Desktop (`uppity-bench-beta-log.txt` and
 `uppity-bench-beta-fresh-log.txt`), WCB1's console for steps 9, 11 and 13, and anything that looked
 or sounded different.
+
+## Results 2026-10-24, Parts 1-3 (build 6bf45839; the dome on from step 6)
+
+Parts 1 to 3 passed. Parts 4 and 5 have not run yet. The log is `uppity-bench-beta-log.txt` on
+Todd's Desktop; WCB1's console (debug on) was pasted into the session. The page ran on Todd's
+iPhone.
+
+**Part 1, install.** `tools/release.sh` made the folder on the Desktop (all six checksums good).
+`…-update.bin` went up from the page over `R2Uppity-1390`, as a tester would do it. Boot:
+`Uppity Spinner ALT v4.0.0-beta.1  build 6bf45839`, settings and calibration unchanged (travel
+1137, rest 37, safe-spin 878, 1185.3 ticks/rev, commissioned), the new `WIFI WARNING` line and the
+page banner, `MESH=joined as id 5`.
+
+**Part 2, the wire, the mesh and E-STOP.**
+- **6:** `wcbs=3/3 online controller=online` once the dome was powered; `txFail=0 txDropped=0`.
+- **8, the wire is on WCB2 serial port 2.** `;W3;S4…` (from old notes) and `;W2;S4…` reached
+  nothing: WCB2's port 4 is the inner rim, where the hologram lifter's own Uppity Spinner board
+  lives. Todd traced the periscope's cable to **WCB2 port 2**. `;W2;S2#PSTATE` then answered with
+  the full state: the first command deliberately sent to v4 over the wire. The doc's steps 8 to 10
+  now use `;W2;S2`.
+- **Broadcasts reach it both ways.** Comlink's `:PL7:PP100` and `:PH` (typed into WCB1, which
+  broadcasts them) arrived over the mesh (`MESH :PL7:PP100 from 1`) and over the wire (WCB2 passes
+  broadcasts out port 2). Each ran once; `#PSTATUS`: `duplicates=2`.
+- **9:** `;W2;S2:PP100^;W5:PP100`: the wire's copy ran, the mesh's was dropped (`MESH :PP100 from
+  1 (a duplicate of the same line on the serial bus: ran once)`), `duplicates=3`. With Comlink's
+  mesh-first pair, both orders have now been seen on the droid: step 19 of Phase 5 passes.
+- **10:** `;W2;S2:PH`: a safe lower over the wire.
+- **11:** `;W5:PP0^;T400,;W5&ESTOP`: the E-STOP latched 394 ms into the descent (`ESTOP LATCHED
+  (source 4)`), `lifter -56 ticks … drivers off after 211 ms`, the same as from the page (−59/−62).
+- **12:** Sabé's E-STOP during a `:PR40` spin at the top arrived over the mesh as `?STOP` from 20:
+  latched (source 4), `rotary -12 … drivers off after 198 ms`. Sabé sends no release that v4
+  understands yet (the Sabé-side `&ESTOP,RESET`), so `#PRESUME` released it. Roam-A-Dome latched
+  as well and needs its own release.
+- **13, the `&STATUS` fix:** three sends, each answered with all three lines (`&PERI,HB`,
+  `&PERI,STATE,IDLE`, `&PERI,ACK,STATUS`). Before the fix the middle one was lost.
+- The iPhone could not rejoin `R2Uppity-1390` at one point. `#PRESUME`, `:PA0` and `#PRESTART`
+  from the monitor brought the board back cleanly (at the top, head home, all boards online).
+
+**Part 3, the long run.** Random medium for about 22 minutes (stopped early, with plenty logged):
+125 descents into the dome, each right after a home that parked on the switch with rest contact;
+202 turns, spins and homes, every one at or above 878; 265 seeks to a height, each at rest −8 to +9
+from its target; no fault, refusal or clamp; `#PSTATUS` afterwards `wcbs=3/3`, `txFail=0`,
+`txDropped=0`.
+
+**One light scrape, about 8 minutes in:** on a descent the head was "ever so slightly off
+center" and the front lens brushed the dome's pie-panel opening. Todd nudged the head back while
+it moved; it did not happen again in the remaining ~14 minutes. What the firmware saw and does:
+- Every descent followed a confirmed home; no rule was broken.
+- The home switch stays closed over 35-40 ticks (about 11-12°), and the board always parks at the
+  same edge of it, approached from the same side.
+- Both drivers share one enable line, so the rotary motor is braked whenever the lifter moves: the
+  head can shift only within its gearbox's own slop, which Todd puts at 2-3° (no looseness in the
+  coupler or screws; it has always been there).
+- The opening leaves very little room for the lens, so the remaining lever is where home sits in
+  it: `#PHOMEOFFSET` (about 3.3 ticks per degree on this rotary), chosen by looking at the gap on
+  each side of the lens with the periscope down, then checked at the top before any descent. Not
+  done yet; not a blocker for the beta. The README now has this under Troubleshooting.
+
+**Not run yet:** Part 4 (the fresh install from the full image, then commissioning from scratch)
+and Part 5 (putting back the tuned numbers and the mesh, and the board's own WiFi password). Until
+Part 5 the board runs the mesh with the published default access-point password.
