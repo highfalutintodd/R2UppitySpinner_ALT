@@ -189,6 +189,85 @@ sounded different (a move that should have moved and did not, a stop that looked
   `#PSAFESPIN878`, and send the log. At 966 at the very worst the head is still 88 ticks above the
   height you measured with the dome on.
 
+### Results 2026-10-24, Part A (build 055c60e5, installed from the page)
+
+Every check passed. The log is `uppity-bench-phase5a-log.txt` on Todd's Desktop.
+
+- **Install and boot (check 1):** the page upload went through, with the usual `TICK` lines while
+  flash was written. Boot: `phase 5  build 055c60e5`, `SETTINGS=migrated from schema 4 (224
+  bytes) to 5` and `PERSIST=saved settings` once, `CALIBRATION=loaded travel=1137 minUp=250
+  minDown=150 rest=37`, `CONFIG … travel=1137 (calibrated) safespin=878 tpr=1185.3 …
+  commissioned=2` (the same as the old build printed minutes before), `MESH=off`. WordNet joined on
+  the third try (reasons 2 and 4, then joined), at 192.168.86.91 (DHCP; it was .69 on 2026-10-04).
+- **Up and home (check 2):** the top switch closed at a count of 1117 for 1137. Power-up starts the
+  count at −37, the deepest rest, and after an ordinary Down the mast rests higher than that: the
+  known safe-side case (the board thinks the mast is lower than it is), put right at the top switch.
+- **Presets, head home (check 3):** every one within 4 ticks.
+
+  | Preset | Target | Came to rest | Off by |
+  |---|---|---|---|
+  | 75 % | 852 | 848 | −4 |
+  | 50 % | 568 | 571 | +3 |
+  | 25 % | 284 | 286 | +2 |
+  | 50 % | 568 | 566 | −2 |
+  | 75 % | 852 | 851 | −1 |
+
+- **Short typed steps, head home (check 4):** every one moved (on the old build the 34- and 23-tick
+  steps down did not), every one within 8.
+
+  | Step | Target | Came to rest | Off by |
+  |---|---|---|---|
+  | `:PP80` up | 909 | 910 | +1 |
+  | `:PP77` 34 down | 875 | 867 | −8 |
+  | `:PP80` up | 909 | 909 | 0 |
+  | `:PP78` 23 down | 886 | 883 | −3 |
+  | `:PP80` up | 909 | 908 | −1 |
+  | `:PP79` 11 down | 898 | 892 | −6 |
+  | `:PP80` up | 909 | 908 | −1 |
+
+  Down runs 3 to 8 past, up lands within 1: the screw back-drives going down, so the brake takes
+  longer that way. All within the goal; no change needed.
+- **Random medium (check 5):** about 85 s, 31 seeks to a height, each at rest between −7 and +5 of
+  its target; every turn at the top, every descent below 878 after a home or with the head already
+  home; no fault, refusal or clamp. **Stop** cut a descent short (`SEEK ABORTED CANCEL`) and
+  cleared the chain.
+- **E-STOP during a descent (check 5):** from the page (**Down**, then **E-STOP**; typing `:PP0`
+  in the monitor and switching to the browser is slower than a sub-second descent). Twice:
+  `lifter -59 ticks … drivers off after 255 ms` and `-62 … 248 ms` (2026-10-04: −51 to −60).
+  The second latch stayed on until a second **Reset**; the page showed the banner all along, so the
+  page and the board agreed.
+- **The clamp, safe-spin borrowed at 1100 (check 6):** the head turned 296 ticks (90°) at the top.
+  `:PP85` → `SEEK CLAMPED 966 -> 1100 reason=ROTARY_NOT_HOME`, `CREEP START` (the mast rested
+  about 40 above 1100), `CREEP CLAMPED`, `ALIGNMENT suspect …`, `CLAMP came to rest at 1105, +5
+  from the safe-spin height 1100`. The second `:PP85`: `SEEK REFUSED ROTARY_NOT_HOME`, nothing
+  moved. **Not exercised on the droid:** the *seek* path against the floor (a turned head more than
+  60 above it), because the top is only about 40 above 1100. It rests on its host tests; an optional
+  re-run with a lower borrowed height is below.
+- **Restore (check 7):** **Home the head** parked on the switch at about 1105, `ALIGNMENT ok again`;
+  `#PSAFESPIN=878 (saved)`; `#PCONFIG` shows schema 5, `#PSAFESPIN=878`, the mesh keys at their
+  defaults (`#PMESH=0`, `#PMESHQTY=0`, `#PMESHID=0`) and `MESHPASS empty`.
+
+Also in the log, not from this build:
+
+- **The access point's name is not stable.** It printed `R2Uppity-FC3F` today, on the old build
+  and the new, and `R2Uppity-FB3F` on every boot through 2026-10-04. `Net::begin` builds the name
+  from `WiFi.macAddress()` before `WiFi.mode()`; on core 3.3.4 that call returns without writing
+  when the station interface does not exist yet (`NetworkInterface::macAddress`, `_esp_netif ==
+  NULL`), so the two hex pairs come from an uninitialised buffer. In since Phase 3 (`67e6587`). It
+  matters for Part B, where the page is only on this network. Fixed the same day: the name now comes
+  from the factory address (`esp_read_mac(mac, ESP_MAC_WIFI_STA)`, which works before WiFi starts
+  and is not changed by the mesh library). Todd's board's factory address ends `13:90` (as
+  WordNet's router sees it), so the network is **`R2Uppity-1390`** from that build on.
+- The two `E (2xx) gpio: gpio_pullup_en` lines at boot: the known ones from Phase 1.
+
+**Optional, the seek path of the floor margin** (not needed before Part B). The same staging with
+a borrowed height of 1050 instead of 1100: the mast rests about 90 above it at the top, so the
+board seeks instead of creeping. Even if the margin failed completely, a seek clamped to 1050 could
+overshoot by at most the full-speed run-on (about 56 on this lifter), to about 994; and if the clamp itself
+failed, the target is 966. Both are well above 878. `#PSAFESPIN1050`, `:PP100`, head **90°** at the
+top, `:PP85`; expect `SEEK CLAMPED 966 -> 1050`, `SEEK START`, `CLAMP came to rest at 10NN, +N`
+with N zero or positive; then **Home the head** and `#PSAFESPIN878`.
+
 ---
 
 ## Part B — the WCB mesh
@@ -206,7 +285,7 @@ does not answer). Anything else on the mesh gets no answer.
 
 **What it costs you.** The mesh library takes over the WiFi station, so **while the mesh is on
 the board does not join WordNet.** The page is then only on the board's own network: join your
-phone or laptop to `R2Uppity-FB3F` (its password as before) and open `http://192.168.4.1`. The
+phone or laptop to `R2Uppity-1390` (its password as before) and open `http://192.168.4.1`. The
 WordNet details stay stored; turning the mesh off brings everything back after a restart.
 
 **What was tested.** On the Mac: 234 host tests (18 for the mesh: the message types, the E-STOP
@@ -236,6 +315,39 @@ is clear and you have all the time you need to press Enter.
 You need: the WCB config tool or a serial console on one WCB (the DroidNet console works too:
 anything that lets you type a WCB command), and Sabé powered as usual.
 
+### First: install the build with the fixed network name
+
+Part A ran on build 055c60e5, which names the board's own network from leftover memory (see the
+Part A results). This build names it from the chip's factory address, so it is **`R2Uppity-1390`**
+from now on and stays that way. Nothing else changed; your settings stay as they are.
+
+1. In the Terminal app, bring the fix into your checkout:
+   ```
+   git -C "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3" merge --ff-only claude/phase5-mesh
+   ```
+   Success looks like `Fast-forward` and three files (`CLAUDE.md`, `docs/BENCH-PHASE5.md`,
+   `UppityFirmware/src/arduino/Net.cpp`).
+2. Build, one line at a time:
+   ```
+   cd "/Users/toddword/Library/Mobile Documents/com~apple~CloudDocs/PROJECTS/R2-D2 Astromech Droid/Arduino/Claude Code/R2UppitySpinnerV3"
+   ```
+   ```
+   arduino-cli compile --profile uppity --output-dir ~/Desktop/uppity-build UppityFirmware
+   ```
+   It ends with `Sketch uses 1225495 bytes (62%)`.
+3. In a second Terminal window, the monitor for all of Part B (a new log file):
+   ```
+   arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-phase5b-log.txt
+   ```
+4. On the laptop's browser, open the page at the address in the monitor's `WIFI joined` line
+   (`http://192.168.86.91` on 2026-10-24). With the periscope idle: **Setup → Firmware → Choose
+   File**, `UppityFirmware.ino.bin` in the `uppity-build` folder on your Desktop, **Upload**.
+   *Success:* `Written. The board is restarting…`, and the page reloads.
+5. *Success in the monitor:* `phase 5  build …` with a new id, `SETTINGS=loaded schema 5` (no
+   migration this time), the same `CALIBRATION` and `CONFIG` numbers as in Part A, `MESH=off`, and
+   **`WIFI AP "R2Uppity-1390"`**. If your phone or laptop remembers `R2Uppity-FB3F` or
+   `R2Uppity-FC3F`, you can forget those networks; they will not come back.
+
 ### Turn it on
 
 8. On the page (still at the WordNet address): **Setup → Mesh**. Fill in, pressing **Save** after
@@ -255,7 +367,7 @@ anything that lets you type a WCB command), and Sabé powered as usual.
    The monitor shows each line, for example `#PMESHID=5 (saved) (takes effect after #PRESTART)`,
    and `MESH note: after #PRESTART the board joins the WCB mesh and stays OFF your home network…`.
 9. Tap **Restart to apply** (tap twice). The board restarts; the page loses it, as expected.
-10. Join the laptop or phone to the WiFi network `R2Uppity-FB3F` and open `http://192.168.4.1`.
+10. Join the laptop or phone to the WiFi network `R2Uppity-1390` and open `http://192.168.4.1`.
     In the monitor, the boot now shows:
     - `WIFI mesh mode: access point on the mesh channel 1, home network not joined (it stays stored).`
     - a few lines starting `[WCB_Client]` from Greg's library, including a WARNING that device 5 is

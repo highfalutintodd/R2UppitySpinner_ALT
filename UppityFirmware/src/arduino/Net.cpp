@@ -4,6 +4,7 @@
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
+#include <esp_mac.h>
 #include <initializer_list>
 #include <strings.h>
 #include "Net.h"
@@ -25,7 +26,10 @@ bool Net::begin(const Deps& d) {
     d_ = d;
     gNetSelf = this;
     if (!d_.settings->wifiEnabled) { d_.console->line("WIFI=off (#PWIFI1 and #PRESTART to enable)"); return false; }
-    uint8_t mac[6]; WiFi.macAddress(mac);
+    // The factory station address, read from eFuse: WiFi.macAddress() writes nothing before
+    // WiFi.mode() on core 3.x, and the mesh library later replaces the live station address.
+    uint8_t mac[6] = {};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
     std::snprintf(apSsid_, sizeof apSsid_, "R2Uppity-%02X%02X", mac[4], mac[5]);     // v3's hostname convention
     // With the mesh on, the WCB library owns the station side (and rewrites its MAC), and ESP-NOW
     // rides the access point's channel: the AP goes on the mesh channel and no home network is joined.
