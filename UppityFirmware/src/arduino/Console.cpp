@@ -543,7 +543,7 @@ void Console::printHelp() {
     line("CFG=#PRESUME #PSTATE #PSTATUS #PCONFIG #PCAL #PSC #PROTARYTEST[n] #PCLEARFAULT #PUNLOCK #PLOCK #PS<n>:<seq> #PL #PD<n> #PSEQNAME<n>=<name> #PZERO #PR #PNCL/#PNOL/#PNCR/#PNOR #PV3 #PV3IMPORT #PRESTART #PFACTORY #PHELP");
     line("WIFI=#PSSID=<home network> #PPASS=<its password> #PAPPASS=<access point password> #PWIFI0/1 #PAPCHANNEL<1-13> #PWIFIRESET (all after #PRESTART)");
     line("RESCUE=#POVERRIDE (60 s) #POVERRIDE0 #PJOGL+/- #PJOGR+/-[pct] (2 s) #PNUDGE<+-ticks> #PSETHOME");
-    line("MESH=#PMESHMAC=3C:4E #PMESHPASS=<?WCBP> #PMESHQTY<n> #PMESHID<1-19> #PMESHCHAN<1-13> #PMESHCRC0/1 #PMESHHB<5-300 s> #PMESH0/1 (after #PRESTART; mesh on = no home network)");
+    line("MESH=#PMESHMAC=3C:4E #PMESHPASS=<the WCBs' password> #PMESHQTY<n> #PMESHID<1-19> #PMESHCHAN<1-11> #PMESHCRC0/1 #PMESHHB<5-300 s> #PMESH0/1 (after #PRESTART; mesh on = no home network; read the values from a WCB's ?BACKUP)");
     line("SETUP=#PCOMMISSION (status) #PCOMMISSIONSTART #PCOMMISSIONRUN #PCOMMISSIONNEXT #PCOMMISSIONSTOP #PCOMMISSIONRESET #PCOMMISSIONBYPASS #PSAFESPINHERE (step 6)");
     String keys = "KEYS=";
     for (int i = 0; i < kSettingKeyCount; ++i) { keys += "#P"; keys += kSettingKeys[i].name; keys += ' '; }

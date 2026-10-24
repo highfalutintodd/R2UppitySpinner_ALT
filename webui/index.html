@@ -254,7 +254,7 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
     <h2>Mesh (WCB)</h2>
     <div class="grid" id="meshNow"></div>
     <p class="note"><b>Off unless you turn it on.</b> With the mesh on, the periscope joins your WCBs' ESP-NOW network as its own board: it takes <code>:P</code> moves and E-STOPs from it and sends <code>&amp;PERI</code> heartbeats and positions. The mesh then owns the WiFi radio, so <b>the board leaves your home network</b>: after the restart this page is only at <b>http://192.168.4.1</b> on the board's own network (<span id="meshAp">R2Uppity-…</span>, same password). Turn the mesh off here or with <code>#PMESH0</code> to go back.</p>
-    <p class="note">Copy the values from a WCB (its serial console or the WCB config tool): <code>?WCBM</code> for the octets, <code>?WCBQ</code> for the quantity, <code>?WCBCH</code> for the channel. Type the mesh password here only: it is never shown again or printed in the log.</p>
+    <p class="note">Copy the values from a WCB's <code>?BACKUP</code> listing (its serial console or the WCB config tool): the <code>?MAC,2</code> and <code>?MAC,3</code> lines for the octets, <code>?EPASS</code> for the password, <code>?WCBQ</code> for the quantity, <code>?WCBCH</code> for the channel. <b>Do not type those commands on a WCB to look a value up: they change it.</b> Type the mesh password here only: it is never shown again or printed in the log.</p>
     <div id="f-mesh"></div>
     <div class="row"><button class="danger" id="meshRestart">Restart to apply</button></div>
   </div>
@@ -635,11 +635,11 @@ details summary { cursor:pointer; min-height:44px; display:flex; align-items:cen
       { k: 'WIFI', label: 'WiFi radio', type: 'sel', opts: onOff, confirm: 'Off = no page at all after the restart (USB only)' },
     ],
     mesh: [
-      { k: 'MESHMAC', label: 'Mesh MAC octets', type: 'text', max: 9, help: 'As the WCBs show it (?WCBM), for example 3C:4E.' },
-      { k: 'MESHPASS', label: 'Mesh password', type: 'secret', max: 39, help: 'The WCBs\' password (?WCBP), at most 39 characters.' },
-      { k: 'MESHQTY', label: 'How many WCBs', type: 'num', min: 1, max: 19, help: 'The WCBs\' quantity (?WCBQ).' },
+      { k: 'MESHMAC', label: 'Mesh MAC octets', type: 'text', max: 9, help: 'Octets 2 and 3, from the ?MAC,2 and ?MAC,3 lines of a WCB\'s ?BACKUP, for example 3C:4E.' },
+      { k: 'MESHPASS', label: 'Mesh password', type: 'secret', max: 39, help: 'The WCBs\' mesh password (the ?EPASS line of a WCB\'s ?BACKUP), at most 39 characters.' },
+      { k: 'MESHQTY', label: 'How many WCBs', type: 'num', min: 1, max: 19, help: 'How many WCBs (the ?WCBQ line of a WCB\'s ?BACKUP).' },
       { k: 'MESHID', label: 'This board\'s mesh number', type: 'num', min: 1, max: 19, help: 'Not used by any other board. 20 is the controller\'s (Sabé).' },
-      { k: 'MESHCHAN', label: 'Mesh channel', type: 'num', min: 1, max: 11, help: 'The WCBs\' channel (?WCBCH), usually 1. The board\'s own network moves to it.' },
+      { k: 'MESHCHAN', label: 'Mesh channel', type: 'num', min: 1, max: 11, help: 'The WCBs\' channel (the ?WCBCH line of a WCB\'s ?BACKUP), usually 1. The board\'s own network moves to it.' },
       { k: 'MESHCRC', label: 'Checksum', type: 'sel', opts: onOff, help: 'As set on the WCBs: on unless you changed it.' },
       { k: 'MESHHB', label: 'Heartbeat every', type: 'num', min: 5, max: 300, unit: 's', help: '&PERI,HB on the mesh. Takes effect at once.' },
       { k: 'MESH', label: 'Join the mesh', type: 'sel', opts: onOff, confirm: 'On = after the restart the board leaves your home network; the page is then at http://192.168.4.1 on its own WiFi' },

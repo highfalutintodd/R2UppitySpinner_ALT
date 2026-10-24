@@ -84,6 +84,7 @@ void Mesh::loop(Ms now) {
     }
     Snapshot s;
     if (d_.pub->read(s)) reporter_.tick(s, now, now / 1000, UPPITY_FW_VERSION, *this);
+    sendPaced(now);
 }
 
 void Mesh::handle(const char* text, uint8_t sender, Ms now) {
@@ -133,11 +134,18 @@ void Mesh::handle(const char* text, uint8_t sender, Ms now) {
 
 void Mesh::reply(const char* text) { broadcast(text); }
 
+// Queued and spaced (MeshTxPacer): a lone line still leaves at once.
 bool Mesh::broadcast(const char* text) {
     if (!client_) return false;
-    bool ok = client_->broadcast(text, false);    // telemetry: the next one supersedes a lost one
-    if (!ok) ++txFail_;
-    return ok;
+    bool queued = txPacer_.push(text);
+    sendPaced(millis());
+    return queued;
+}
+
+void Mesh::sendPaced(Ms now) {
+    txPacer_.service(now, [this](const char* t) {
+        if (!client_->broadcast(t, false)) ++txFail_;   // telemetry: the next one supersedes a lost one
+    });
 }
 
 bool Mesh::toController(const char* text, bool ensured) {
@@ -164,11 +172,11 @@ void Mesh::printStatus(TextSink& out) {
     uint32_t on = online_.load(); int wcbs = 0;
     for (uint8_t id = 1; id <= s.meshQty; ++id) if (on & (1u << id)) ++wcbs;
     uint32_t lastRx = lastRxMs_.load();
-    out.printf("MESH=on id=%u wcbs=%d/%u online controller=%s neighbours=%u rx=%lu ours=%lu foreign=%lu dropped=%lu estops=%lu hb=%lu lastHb=%lus ago lastRx=%s txFail=%lu",
+    out.printf("MESH=on id=%u wcbs=%d/%u online controller=%s neighbours=%u rx=%lu ours=%lu foreign=%lu dropped=%lu estops=%lu hb=%lu lastHb=%lus ago lastRx=%s txFail=%lu txDropped=%lu",
                s.meshId, wcbs, s.meshQty, on & (1u << kMeshControllerId) ? "online" : "not seen", client_->neighborCount(),
                static_cast<unsigned long>(rx_.load()), static_cast<unsigned long>(ours_), static_cast<unsigned long>(foreign_), static_cast<unsigned long>(dropped_.load()), static_cast<unsigned long>(estops_.load()),
                static_cast<unsigned long>(reporter_.heartbeatsSent()), static_cast<unsigned long>(elapsed(millis(), reporter_.lastHeartbeatMs()) / 1000),
-               lastRx ? (String(elapsed(millis(), lastRx) / 1000) + "s ago from " + String(lastFrom_.load())).c_str() : "never", static_cast<unsigned long>(txFail_));
+               lastRx ? (String(elapsed(millis(), lastRx) / 1000) + "s ago from " + String(lastFrom_.load())).c_str() : "never", static_cast<unsigned long>(txFail_), static_cast<unsigned long>(txPacer_.dropped()));
 }
 
 void Mesh::writeJson(JsonWriter& j) {

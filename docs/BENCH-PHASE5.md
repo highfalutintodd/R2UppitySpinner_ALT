@@ -301,10 +301,17 @@ driven in the browser against the simulated board. **Nothing has run on a
 real mesh.** The library is Greg's newest, 1.17.1 (commit 534a6c9 from 2026-10-04, not yet tagged;
 `UppityFirmware/libs/WCB_Client/VENDORED.md`).
 
+**Your WCBs are on 7.0.1 now** (Todd updated them before Part B, 2026-10-24). Greg's 7.0 release
+notes keep every WCB setting and name WCB_Client 1.18.1 for NaviCore; 1.18.1 differs from the
+periscope's 1.17.1 only by an optional transmit watchdog (off unless a program turns it on) and a
+fix to a configuration relay the periscope does not use, so 1.17.1 is expected to work. Step 13 is
+the test. On 7.0.1 a `?STOP` typed on a WCB stops only that WCB's own timed sequence and is not
+passed on, so step 16 sends the E-STOP to board 5 directly.
+
 **One thing I could not check from here.** Your WCBs' quantity is 3 and the periscope is 5. The
 WCBs reach a board above their quantity once they have learned it from its announcements, which
-the periscope sends; whether firmware 6.2.0 already does that is what step 13 finds out, with a
-harmless question. If it does not, nothing is unsafe: the periscope still hears broadcasts and
+the periscope sends; 7.0.1 keeps such a board as a temporary peer while it keeps announcing, and
+step 13 confirms it with a harmless question. If it does not, nothing is unsafe: the periscope still hears broadcasts and
 sends its heartbeats, and step 13 says what the choices are.
 
 **Rule for Part B:** the head is home (or the mast is at the top) for everything that moves, as
@@ -353,8 +360,11 @@ from now on and stays that way. Nothing else changed; your settings stay as they
 8. On the page (still at the WordNet address): **Setup → Mesh**. Fill in, pressing **Save** after
    each and waiting for `Saved` under it:
    - **Mesh MAC octets:** `3C:4E`
-   - **Mesh password:** your WCBs' mesh password (what `?WCBP` shows on a WCB). Type it **here
-     only**: never into the Terminal monitor, which writes every typed line into the log file.
+   - **Mesh password:** your WCBs' mesh password, exactly as set on them (capitals count). If you
+     need to look it up, a WCB's `?BACKUP` listing shows it in its `?EPASS,…` line. **Never type
+     `?EPASS` (or the page hints' `?WCBP`, `?WCBM`, `?WCBQ`, `?WCBCH`) on a WCB to look a value
+     up:** on WCB firmware 6.2 and 7.0 those *set* the value. Type the password **here only**: never into
+     the Terminal monitor, which writes every typed line into the log file.
      After saving, the box shows `(set — type to change)`; the password is never shown or printed.
    - **How many WCBs:** `3`
    - **This board's mesh number:** `5`
@@ -397,9 +407,10 @@ from now on and stays that way. Nothing else changed; your settings stay as they
     N` followed by the usual `STATE=…`, `LIMITS=…`, `JOB=…`, `SEQ=…` lines. **If nothing arrives
     within a few seconds,** try once more after a minute (the WCBs learn board 5 from its
     announcements, which repeat about once a minute). If it still does not arrive, stop Part B here
-    and tell me: the WCBs on 6.2.0 then do not learn a board above their quantity, and the choices
-    are a WCB firmware update (6.2.1 is Greg's latest release), raising the WCBs' quantity, or
-    broadcasts only. I would not change the WCBs without talking it through.
+    and tell me: then either the WCBs do not learn a board above their quantity, or the
+    periscope's library (1.17.1) does not talk to 7.0.1 the way 1.18.1 does. The choices are
+    updating the periscope's library to 1.18.1, raising the WCBs' quantity, or broadcasts only. I
+    would not change the WCBs without talking it through.
 14. **A refusal, harmless by design.** On the WCB console:
     ```
     ;W5#PSAFESPIN0
@@ -418,12 +429,16 @@ from now on and stays that way. Nothing else changed; your settings stay as they
     ```
     :PR40
     ```
-    The head spins slowly. On the WCB console type `?STOP` and press Enter while it spins.
-    *Success:* the spin stops at once, `MESH ?STOP from N: E-STOP latched` in the monitor, the
+    The head spins slowly. On the WCB console, while it spins:
+    ```
+    ;W5&ESTOP
+    ```
+    *Success:* the spin stops at once, `MESH &ESTOP from N: E-STOP latched …` in the monitor, the
     page shows the red E-STOP banner, and nothing moves until it is released. **If the head keeps
-    spinning,** press **E-STOP** on the page (that always works), note it, and try the DroidNet verb
-    instead once it is released and spinning again: `;W5&ESTOP` (then the WCB does not pass `?STOP`
-    on to a client board). Then release it from the mesh, on the WCB console:
+    spinning,** press **E-STOP** on the page (that always works) and note it. (A plain `?STOP` typed
+    on a WCB does not reach the periscope on 7.0.1: the WCB keeps it for its own timed sequences.
+    `;W5?STOP` would reach it and latch the same way.) Then release it from the mesh, on the WCB
+    console:
     ```
     ;W5&ESTOP,RESET
     ```
@@ -474,3 +489,54 @@ step 13 did, and a few `&PERI` lines as DroidNet showed them.
 - **The DroidNet Command Library entry for 4.0** is ready in `tools/droidnet/` (validated with the
   library's own checker). Sending it to Travis is a pull request on his repository: a public step
   I will not take without your OK.
+
+### Results 2026-10-24, Part B (build 285d30a7, WCBs on 7.0.1, the dome off)
+
+Steps 8 to 18 passed; step 19 was not run (it needs WCB3, which has no power with the dome off).
+The periscope's monitor log is `uppity-bench-phase5b-log.txt` on Todd's Desktop; WCB1's console
+(debug on) was pasted into the session. The page ran on Todd's iPhone throughout.
+
+- **Install of the network-name fix:** `WIFI AP "R2Uppity-1390"`, as predicted from the factory
+  address; settings, calibration and `MESH=off` unchanged.
+- **The WCBs:** Todd updated all three to **7.0.1** (`7.0.1_160101ROCT2026`, WcbCmd 0.9.2) before
+  Part B. The periscope's WCB_Client is still 1.17.1; it worked with 7.0.1 in every step below.
+- **Settings and restart (8-10):** each key saved (`#PMESHPASS=(set)`, never the value);
+  `WIFI mesh mode: access point on the mesh channel 1 …`, the library's warning that 5 is above the
+  quantity 3, `MESH=joined as id 5 (3 WCBs, octets 3C:4E, channel 1, checksum on)`. The iPhone joined
+  `R2Uppity-1390` and opened `http://192.168.4.1`; Up and Down from it ran normally.
+- **Online (11):** `MESH WCB2 online`, `WCB1 online`, `controller 20 online` within the first minute.
+  `#PSTATUS`: `wcbs=2/3 online controller=online neighbours=4 rx=25 … hb=19` at 187 s, `txFail=0`.
+  WCB3 was off (dome off). The fourth neighbour is Roam-A-Dome (board 4, `&RAD,HB`).
+- **Heartbeat (12):** WCB1 shows `Processing ETM input from WCB5: &PERI,HB,4.0.0-dev,313,IDLE,0,0,1`
+  every 10 s and passes it out S2-S5, as it does `&SABE,HB` and `&RAD,HB`.
+- **Board 5 above the quantity (the open question):** answered on WCB1 without any change to it:
+  `[WDP] learned WCB5 Uppity Spinner`, `[PEER] WCB5 registered (live, learned)`, `[ETM] WCB5 came
+  ONLINE (boot)`. A 7.0.1 WCB learns the board and keeps it (learned, not temporary).
+- **A question (13):** `;W5#PSTATE` from WCB1 (`Sending Unicast ESP-NOW message to WCB5`); the
+  periscope answered with its `STATE`/`LIMITS`/`JOB`/`SEQ` lines and `MESH #P line from 1`.
+- **A refusal (14):** `;W5#PSAFESPIN0` → `MESH=refused a #P command from the mesh: settings,
+  commissioning, unlocking and restarts come from the USB console or the page`; `#PSAFESPIN=878`.
+- **Up (15):** `;W5:PP100` → `MESH :PP100 from 1`, the mast to the top switch.
+- **E-STOP (16):** a `:PR40` spin at the top, then `;W5&ESTOP` → `MESH &ESTOP from 1: E-STOP
+  latched`, `SPIN ABORTED ESTOP`, `ESTOP LATCHED (source 4)`, `ESTOP braked to a stop: … rotary -13
+  … drivers off after 200 ms`; the banner on the page. `;W5&ESTOP,RESET` → `ESTOP=released (mesh
+  &ESTOP,RESET from 1)`; nothing moved until **Home** 18 s later.
+- **Verbs (17):** `;W5&DISABLE` during a spin → `STOP=mesh &DISABLE`, `SPIN ABORTED CANCEL`, no latch.
+  `;W5&STATUS` → a heartbeat and `&PERI,ACK,STATUS` on WCB1, but **not the `&PERI,STATE,IDLE` sent
+  between them**: the three broadcasts left in one millisecond, and broadcasts are not acknowledged
+  on the air (the client numbers each one, so it is not the WCB's duplicate filter). Fixed in the
+  next commit: the board's own broadcasts leave in order, 40 ms apart (`MeshTxPacer`, host test
+  `mesh_broadcasts_leave_in_order_and_spaced`); not yet on the droid. `;W5&HELLO` →
+  `&PERI,HELLO,4.0.0-dev,1`.
+- **Lower (18):** `;W5:PH` → `MESH :PH from 1`, `SAFE_LOWER` to the bottom switch.
+
+Found along the way, about the WCBs rather than the periscope:
+
+- **On 7.0.1 a `?STOP` typed on a WCB stops only that WCB's own timed sequence** and is not passed
+  to other boards. Step 16 sends `;W5&ESTOP` instead (written into the step before it ran).
+- **`?EPASS`, `?MAC`, `?WCBQ` and `?WCBCH` set values on a WCB; `?BACKUP` and `?CONFIG` read them.**
+  The page's Mesh hints named the setting commands as look-ups (`?WCBM`, `?WCBP`, …), and so did
+  `#PHELP` and the settings' help text. All now point at `?BACKUP`; fixed in the next commit.
+
+Not run: step 19 (the same command over the wire and the mesh: needs WCB3), a mesh E-STOP during a
+lifter move (only during a spin), and Sabé's own E-STOP over the mesh.

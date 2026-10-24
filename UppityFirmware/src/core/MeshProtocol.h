@@ -225,4 +225,37 @@ class MeshReporter {
     uint32_t lastFaults_ = 0, hbSent_ = 0;
 };
 
+// Broadcasts are not acknowledged on the air: the three lines of a &STATUS answer, sent in the same
+// millisecond, reached a WCB on 7.0.1 as two (bench 2026-10-24, the middle one lost). The board's
+// own broadcasts leave in order and at least kMeshTxGapMs apart; a full queue drops the newest
+// (telemetry: the next heartbeat or state line supersedes it). Unicasts to Sabé are acknowledged
+// and retried by the radio, so they do not wait here.
+constexpr Ms kMeshTxGapMs = 40;
+class MeshTxPacer {
+  public:
+    static constexpr int kSlots = 6;
+    bool push(const char* text) {
+        if (!text || count_ == kSlots) { ++dropped_; return false; }
+        std::snprintf(slot_[(head_ + count_) % kSlots], kMeshPacketMax + 1, "%s", text);
+        ++count_;
+        return true;
+    }
+    // Sends the oldest line once the gap since the last one has passed; at most one per call.
+    template <class Send> void service(Ms now, Send&& send) {
+        if (count_ == 0) return;
+        if (sentAny_ && elapsed(now, lastMs_) < kMeshTxGapMs) return;
+        send(static_cast<const char*>(slot_[head_]));
+        head_ = (head_ + 1) % kSlots; --count_;
+        lastMs_ = now; sentAny_ = true;
+    }
+    int pending() const { return count_; }
+    uint32_t dropped() const { return dropped_; }
+  private:
+    char slot_[kSlots][kMeshPacketMax + 1] = {};
+    int head_ = 0, count_ = 0;
+    Ms lastMs_ = 0;
+    bool sentAny_ = false;
+    uint32_t dropped_ = 0;
+};
+
 } // namespace uppity

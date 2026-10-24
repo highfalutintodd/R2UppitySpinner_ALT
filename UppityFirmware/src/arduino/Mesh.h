@@ -47,10 +47,12 @@ class Mesh final : public MeshReporter::Out, public Console::MeshStatus {
     static void onStatus(uint8_t id, bool online);              // radio task
     void handle(const char* text, uint8_t sender, Ms now);
     void reply(const char* text);
+    void sendPaced(Ms now);
 
     Deps d_;
     WCB_Client* client_ = nullptr;
     MeshReporter reporter_;
+    MeshTxPacer txPacer_;                         // the board's own broadcasts, in order and spaced
     bool failed_ = false;                         // WCB_Client::begin failed at boot
     std::atomic<uint32_t> rx_{0}, estops_{0}, online_{0}, dropped_{0};
     std::atomic<uint32_t> lastRxMs_{0};

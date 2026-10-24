@@ -230,9 +230,9 @@ class Sim:
 
     # ---- commands (the console's answers)
     def mesh_missing(self):
-        if not self.strings["MESHMAC"]: return "#PMESHMAC (the WCBs' MAC octets, ?WCBM)"
-        if not self.strings["MESHPASS"]: return "#PMESHPASS (the WCBs' password, ?WCBP; type it into the page)"
-        if not self.cfg["MESHQTY"]: return "#PMESHQTY (how many WCBs, ?WCBQ)"
+        if not self.strings["MESHMAC"]: return "#PMESHMAC (the WCBs' MAC octets 2 and 3, from a WCB's ?BACKUP)"
+        if not self.strings["MESHPASS"]: return "#PMESHPASS (the WCBs' mesh password; type it into the page)"
+        if not self.cfg["MESHQTY"]: return "#PMESHQTY (how many WCBs)"
         if not self.cfg["MESHID"]: return "#PMESHID (this board's id, 1-19, not used by any other board)"
         return ""
 
@@ -253,7 +253,7 @@ class Sim:
         if key in self.strings:
             if key == "MESHMAC" and text:
                 m = re.match(r"^\s*(?:0x)?([0-9A-Fa-f]{1,2})[\s:-]*(?:0x)?([0-9A-Fa-f]{1,2})\s*$", text)
-                if not m: self.say("OUT_OF_RANGE=#PMESHMAC (two hex octets as ?WCBM shows them, e.g. 3C:4E; nothing changed)"); return
+                if not m: self.say("OUT_OF_RANGE=#PMESHMAC (two hex octets, e.g. 3C:4E; nothing changed)"); return
                 text = "%02X:%02X" % (int(m.group(1), 16), int(m.group(2), 16))
             if key in ("PASS", "APPASS", "MESHPASS"):
                 if key == "APPASS" and 0 < len(text) < 8: self.say("#PAPPASS=(set) (unchanged; takes effect after #PRESTART)\nAPPASS note: WPA2 needs 8+ characters; kept the previous password"); return

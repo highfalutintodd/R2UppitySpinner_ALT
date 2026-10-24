@@ -70,12 +70,12 @@ struct Settings {
     // ---- schema 5 (phase 5, the WCB mesh): appended at 224 (even, so the 2-byte field has no padding) ----
     uint16_t meshHbS = 10;           // &PERI,HB every this many seconds, 5-300
     uint8_t  meshEnabled = 0;        // off by default; on = the access point moves to the mesh channel and the home network is not joined
-    uint8_t  meshQty = 0;            // the WCBs' ?WCBQ; 0 = not set
+    uint8_t  meshQty = 0;            // how many WCBs (?WCBQ in a WCB's ?BACKUP); 0 = not set
     uint8_t  meshId = 0;             // this board's mesh id, 1-19 (20 is the controller slot, Sabé's); 0 = not set
-    uint8_t  meshChannel = 1;        // the WCBs' ?WCBCH, 1-11 (the library's range)
+    uint8_t  meshChannel = 1;        // the WCBs' channel (?WCBCH in ?BACKUP), 1-11 (the library's range)
     uint8_t  meshCrc = 1;            // the WCBs' checksum setting (CHKSM), on by default as on the WCBs
-    char     meshMac[6] = {};        // "3C:4E": the 2nd and 3rd MAC octets, as ?WCBM shows them; empty = not set
-    char     meshPass[40] = {};      // the WCBs' ?WCBP, at most 39 characters; never printed
+    char     meshMac[6] = {};        // "3C:4E": the 2nd and 3rd MAC octets (?MAC,2 / ?MAC,3 in ?BACKUP); empty = not set
+    char     meshPass[40] = {};      // the WCBs' mesh password (?EPASS in ?BACKUP), at most 39 characters; never printed
     uint8_t  meshReserved[11] = {};
 };
 static_assert(sizeof(Settings) == 288, "Settings layout changed: append at the end (1-byte types), keep the size a multiple of 4, bump kSettingsSchema");
@@ -144,9 +144,9 @@ inline bool parseMeshMac(const char* t, uint8_t& oct2, uint8_t& oct3) {
 // The mesh starts only with everything it needs; otherwise it says what is missing.
 inline const char* meshMissing(const Settings& s) {
     uint8_t a, b;
-    if (!parseMeshMac(s.meshMac, a, b)) return "#PMESHMAC (the WCBs' MAC octets, ?WCBM)";
-    if (s.meshPass[0] == '\0') return "#PMESHPASS (the WCBs' password, ?WCBP; type it into the page)";
-    if (s.meshQty == 0) return "#PMESHQTY (how many WCBs, ?WCBQ)";
+    if (!parseMeshMac(s.meshMac, a, b)) return "#PMESHMAC (the WCBs' MAC octets 2 and 3, from a WCB's ?BACKUP)";
+    if (s.meshPass[0] == '\0') return "#PMESHPASS (the WCBs' mesh password; type it into the page)";
+    if (s.meshQty == 0) return "#PMESHQTY (how many WCBs)";
     if (s.meshId == 0) return "#PMESHID (this board's id, 1-19, not used by any other board)";
     return nullptr;
 }
@@ -348,9 +348,9 @@ inline const SettingKey kSettingKeys[] = {
     { "THEME",      [](const Settings& s) { return (int32_t)s.theme; },           [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.theme = (uint8_t)v; return true; }, "web UI: 0 paper (light), 1 dark" },
     { "RANDOMLIGHT", [](const Settings& s) { return (int32_t)s.randomLight; },   [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 8)) return false; s.randomLight = (uint8_t)v; return true; }, "light kit in random mode: 0 leave alone, 1-7 that mode, 8 a new one each action; off when it ends" },
     { "COMMISSIONED", [](const Settings& s) { return (int32_t)s.commissioned; },  [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 2)) return false; s.commissioned = (uint8_t)v; return true; }, "0 locked, 1 bench unlock, 2 commissioned" },
-    { "MESHQTY",    [](const Settings& s) { return (int32_t)s.meshQty; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 19)) return false; s.meshQty = (uint8_t)v; return true; }, "how many WCBs (?WCBQ); after #PRESTART" },
+    { "MESHQTY",    [](const Settings& s) { return (int32_t)s.meshQty; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 19)) return false; s.meshQty = (uint8_t)v; return true; }, "how many WCBs (?WCBQ in a WCB's ?BACKUP); after #PRESTART" },
     { "MESHID",     [](const Settings& s) { return (int32_t)s.meshId; },          [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 19)) return false; s.meshId = (uint8_t)v; return true; }, "this board's mesh id 1-19, unused by any other board; after #PRESTART" },
-    { "MESHCHAN",   [](const Settings& s) { return (int32_t)s.meshChannel; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 1, 11)) return false; s.meshChannel = (uint8_t)v; return true; }, "the WCBs' WiFi channel 1-11 (?WCBCH, usually 1); after #PRESTART" },
+    { "MESHCHAN",   [](const Settings& s) { return (int32_t)s.meshChannel; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 1, 11)) return false; s.meshChannel = (uint8_t)v; return true; }, "the WCBs' WiFi channel 1-11 (?WCBCH in a WCB's ?BACKUP, usually 1); after #PRESTART" },
     { "MESHCRC",    [](const Settings& s) { return (int32_t)s.meshCrc; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.meshCrc = (uint8_t)v; return true; }, "0/1 as the WCBs' checksum setting (on by default); after #PRESTART" },
     { "MESHHB",     [](const Settings& s) { return (int32_t)s.meshHbS; },         [](Settings& s, int32_t v) { if (!setkey::inRange(v, 5, 300)) return false; s.meshHbS = (uint16_t)v; return true; }, "seconds between &PERI,HB heartbeats, 5-300" },
     { "MESH",       [](const Settings& s) { return (int32_t)s.meshEnabled; },     [](Settings& s, int32_t v) { if (!setkey::inRange(v, 0, 1)) return false; s.meshEnabled = (uint8_t)v; return true; }, "0/1 join the WCB mesh (the home network is then not joined); after #PRESTART" },
@@ -363,8 +363,8 @@ inline const StringKey kStringKeys[] = {
     { "SSID",   offsetof(Settings, staSsid), sizeof(Settings::staSsid), false, "home network name; empty = access point only; after #PRESTART" },
     { "PASS",   offsetof(Settings, staPass), sizeof(Settings::staPass), true,  "home network password; after #PRESTART" },
     { "APPASS", offsetof(Settings, apPass),  sizeof(Settings::apPass),  true,  "access point password, 8+ characters; after #PRESTART" },
-    { "MESHMAC",  offsetof(Settings, meshMac),  sizeof(Settings::meshMac),  false, "the WCBs' MAC octets 2 and 3 as ?WCBM shows them, e.g. 3C:4E; after #PRESTART" },
-    { "MESHPASS", offsetof(Settings, meshPass), sizeof(Settings::meshPass), true,  "the WCBs' mesh password (?WCBP), at most 39 characters; after #PRESTART" },
+    { "MESHMAC",  offsetof(Settings, meshMac),  sizeof(Settings::meshMac),  false, "the WCBs' MAC octets 2 and 3 (?MAC,2 and ?MAC,3 in a WCB's ?BACKUP), e.g. 3C:4E; after #PRESTART" },
+    { "MESHPASS", offsetof(Settings, meshPass), sizeof(Settings::meshPass), true,  "the WCBs' mesh password (?EPASS in a WCB's ?BACKUP), at most 39 characters; after #PRESTART" },
 };
 constexpr int kStringKeyCount = static_cast<int>(sizeof(kStringKeys) / sizeof(kStringKeys[0]));
 inline const StringKey* findStringKey(const char* name, size_t len) {
@@ -394,7 +394,7 @@ inline void canonicalStringValue(const StringKey& k, const char* v, char* out, s
 // What an out-of-range text value is told (nothing was changed).
 inline const char* stringValueRule(const StringKey& k) {
     if (std::strcmp(k.name, "APPASS") == 0) return "WPA2 needs 8 or more characters";
-    if (std::strcmp(k.name, "MESHMAC") == 0) return "two hex octets as ?WCBM shows them, e.g. 3C:4E";
+    if (std::strcmp(k.name, "MESHMAC") == 0) return "two hex octets, e.g. 3C:4E";
     if (std::strcmp(k.name, "MESHPASS") == 0) return "at most 39 characters";
     return "not accepted";
 }

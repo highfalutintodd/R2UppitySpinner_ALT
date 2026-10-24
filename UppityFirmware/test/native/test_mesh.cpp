@@ -342,3 +342,35 @@ TEST(mesh_channel_is_the_librarys_1_to_11) {
     Settings s; CHECK(k->set(s, 11)); CHECK(!k->set(s, 12)); CHECK(!k->set(s, 13)); CHECK_EQ(s.meshChannel, 11);
     s.meshChannel = 13; sanitize(s); CHECK_EQ(s.meshChannel, 1);
 }
+
+// ---------------------------------------------------------------- bench 2026-10-24 (WCBs on 7.0.1)
+
+// The &STATUS answer (heartbeat, state, acknowledgement) left in one millisecond and WCB1 printed two of
+// the three: broadcasts are not acknowledged on the air. The board's own broadcasts now leave in order,
+// kMeshTxGapMs apart; a lone line still goes at once.
+TEST(mesh_broadcasts_leave_in_order_and_spaced) {
+    MeshTxPacer p; std::vector<std::pair<Ms, std::string>> sent;
+    auto send = [&](Ms now) { p.service(now, [&](const char* t) { sent.emplace_back(now, t); }); };
+    MeshReporter r; Radio burst; r.start(0, 300);
+    r.burst(snapAt(100, 0), 500, 0, "4.0.0", burst);
+    for (auto& l : burst.bcast) CHECK(p.push(l.c_str()));
+    char ack[kMeshPacketMax + 1]; CHECK(formatMeshAck(ack, sizeof ack, MeshMsg::Status) > 0); CHECK(p.push(ack));
+    for (Ms t = 500; t < 700; ++t) send(t);
+    CHECK_EQ(sent.size(), static_cast<size_t>(3));
+    if (sent.size() == 3) {
+        CHECK(sent[0].second.find("&PERI,HB,") == 0);
+        CHECK(sent[1].second == "&PERI,STATE,IDLE");
+        CHECK(sent[2].second == "&PERI,ACK,STATUS");
+        CHECK_EQ(sent[0].first, 500u);
+        CHECK(sent[1].first - sent[0].first >= kMeshTxGapMs);
+        CHECK(sent[2].first - sent[1].first >= kMeshTxGapMs);
+    }
+    sent.clear();                                                            // later, a lone heartbeat is not held back
+    CHECK(p.push("&PERI,HB,4.0.0,10,IDLE,100,0,1")); send(10500);
+    CHECK_EQ(sent.size(), static_cast<size_t>(1)); CHECK_EQ(p.pending(), 0);
+    for (int i = 0; i < MeshTxPacer::kSlots; ++i) CHECK(p.push("x"));      // a full queue drops the newest, never cuts one
+    CHECK(!p.push("y")); CHECK_EQ(p.dropped(), 1u); CHECK_EQ(p.pending(), MeshTxPacer::kSlots);
+    std::string longest(kMeshPacketMax, 'a');
+    MeshTxPacer q; CHECK(q.push(longest.c_str()));
+    q.service(0, [&](const char* t) { CHECK_EQ(std::strlen(t), kMeshPacketMax); });
+}
