@@ -82,6 +82,7 @@ class Net {
     uint32_t stalledDropped_ = 0, estopHits_ = 0, webEstops_ = 0;
     char apSsid_[24] = "R2Uppity";
     bool up_ = false, portalUp_ = false, staPauseLogged_ = false, meshOn_ = false;
+    bool apDefault_ = false;                      // the access point runs on the published default password
     std::atomic<uint8_t> staState_{0};            // 0 off/idle, 1 joining, 2 connected
     std::atomic<bool> staEvent_{false};
     std::atomic<uint8_t> staReason_{0};

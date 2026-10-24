@@ -48,7 +48,7 @@ class Sim:
         self.jogUntil = 0; self.jog = None
         self.cm = {"step": 0, "active": False, "run": "idle", "msg": "", "detail": 0, "prevSafeSpin": 0}
         self.enabledUntil = 0
-        self.log = "Uppity Spinner ALT v4.0.0-dev  phase 5  build %s  (dev server)\nHAL=ok\nEXPANDER=ok (drivers off, lights off)\nSETTINGS=loaded schema 4\nREADY (type #PHELP)\n" % self.build
+        self.log = "Uppity Spinner ALT v4.0.0-beta.1  build %s  (dev server)\nHAL=ok\nEXPANDER=ok (drivers off, lights off)\nSETTINGS=loaded schema 4\nREADY (type #PHELP)\n" % self.build
         threading.Thread(target=self.run, daemon=True).start()
 
     # ---- helpers
@@ -198,7 +198,7 @@ class Sim:
             st = "STOPPED" if self.estop else "LOCKED" if self.cfg["COMMISSIONED"] == 0 else "FAULT" if self.faults & ~4096 else "MOVING" if self.job != "NONE" else "IDLE"
             tr = self.travel(); ovr = max(0, int(self.override_until - time.time() + 0.999))
             rotHome = self.rotKnown and min(self.rot % 360, 360 - self.rot % 360) < 3
-            return {"fw": "4.0.0-dev", "up": int(self.now()), "state": st,
+            return {"fw": "4.0.0-beta.1", "up": int(self.now()), "state": st,
                     "lifter": {"ticks": int(self.lifter), "pct": self.pct(), "travel": tr, "conf": "KNOWN" if self.lifterKnown else "UNKNOWN"},
                     "rotary": {"ticks": int(self.rot * 1185.5 / 360), "deg": int(self.rot) % 360, "conf": ("SWITCH_LIVE" if rotHome else "LATCHED") if self.rotKnown else "UNKNOWN", "prov": self.homeProv, "tpr": self.cfg["ROTARYTPR"] / 10, "off": bool(self.cfg["ROTARYOFF"])},
                     "limits": {"top": self.lifter >= tr - 1, "bot": self.lifter <= 1, "home": rotHome},
@@ -213,7 +213,7 @@ class Sim:
                     "commission": {"step": self.cm["step"], "name": STEPS[self.cm["step"]], "active": self.cm["active"], "run": self.cm["run"], "msg": self.cm["msg"], "detail": self.cm["detail"], "prevSafeSpin": self.cm["prevSafeSpin"]},
                     "log": len(self.log),
                     "mesh": self.mesh_json(),
-                    "wifi": {"ap": "R2Uppity-SIM0", "clients": 1, "sta": "up", "ssid": self.strings["SSID"], "ip": "127.0.0.1", "rssi": -61, "host": "uppity", "estopPort": 81, "estopHits": 0, "webEstops": 0, "stalled": 0}}
+                    "wifi": {"ap": "R2Uppity-SIM0", "apDefault": not self.strings["APPASS"], "clients": 1, "sta": "up", "ssid": self.strings["SSID"], "ip": "127.0.0.1", "rssi": -61, "host": "uppity", "estopPort": 81, "estopHits": 0, "webEstops": 0, "stalled": 0}}
 
     def config(self):
         with self.lock:
@@ -225,7 +225,7 @@ class Sim:
             c["pw"] = {"floorUp": self.cfg["MINUP"] or (self.cal["minUp"] // 10 if cal else prof), "floorDown": self.cfg["MINDOWN"] or (self.cal["minDown"] // 10 if cal else prof),
                        "slowUp": self.cal["minUp"] // 10 if cal else prof, "slowDown": self.cal["minDown"] // 10 if cal else prof, "cap": cap,
                        "rotaryMin": self.cfg["ROTARYMIN"], "rotarySlow": max(12, self.cfg["ROTARYMIN"] * 2 // 3), "profile": PROFILES[m], "travel": self.travel()}
-            c["fw"] = "4.0.0-dev"; c["build"] = self.build
+            c["fw"] = "4.0.0-beta.1"; c["build"] = self.build
             return c
 
     # ---- commands (the console's answers)
@@ -278,9 +278,9 @@ class Sim:
         m = re.match(r"#P([A-Z]+)=(.*)$", line)
         if m and m.group(1) not in ("SEQNAME",): self.setkey(m.group(1), m.group(2)); return
         if line == "#PSTATE": say("STATE=%s lifter=%d/%d(%d%%) rotary %ddeg" % (self.job, self.lifter, self.travel(), self.pct(), self.rot)); return
-        if line == "#PSTATUS": say("VERSION=4.0.0-dev phase5 build %s\nWIFI=ap \"R2Uppity-SIM0\" 192.168.4.1 clients=1 home=WordNet up 127.0.0.1" % self.build); return
+        if line == "#PSTATUS": say("VERSION=4.0.0-beta.1 build %s\nWIFI=ap \"R2Uppity-SIM0\" 192.168.4.1 clients=1 home=WordNet up 127.0.0.1" % self.build); return
         if line == "#PCONFIG":
-            say("CONFIG=begin v4.0.0-dev schema=4 (every #P line below can be pasted back)")
+            say("CONFIG=begin v4.0.0-beta.1 schema=5 (every #P line below can be pasted back)")
             for k in ["MOTOR", "INVERT", "TRAVEL", "SAFESPIN", "ROTARYTPR", "HOMEOFFSET", "HOMEPARK", "WIGGLE", "MINUP", "MINDOWN", "APPROACH", "EXPERT", "DRIFT", "ROTARYMIN", "ROTARYOFF", "DRIVESIGN", "AGGRESSION", "ID", "BAUD", "DEDUP", "DEBUG", "CMDTX", "LIFTERNC", "ROTARYNC", "WIFI", "APCHANNEL", "THEME", "RANDOMLIGHT", "COMMISSIONED"]:
                 say("#P%s=%d" % (k, self.cfg[k]))
             say("#PSSID=%s\nINFO=PASS set, APPASS default (passwords are never printed)\nSEQ=none stored\nCONFIG=end travel_in_use=%d (#PTRAVEL)" % (self.strings["SSID"], self.travel())); return
@@ -381,7 +381,7 @@ class Sim:
     def restart(self):
         def later():
             time.sleep(0.8)
-            with self.lock: self.build = "%08x" % random.getrandbits(32); self.t0 = time.time(); self.log += "\nUppity Spinner ALT v4.0.0-dev  phase 5  build %s  (dev server, restarted)\nREADY\n" % self.build
+            with self.lock: self.build = "%08x" % random.getrandbits(32); self.t0 = time.time(); self.log += "\nUppity Spinner ALT v4.0.0-beta.1  build %s  (dev server, restarted)\nREADY\n" % self.build
         threading.Thread(target=later, daemon=True).start()
 
     def stop(self):

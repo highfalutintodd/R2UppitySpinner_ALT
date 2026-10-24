@@ -1,405 +1,288 @@
 # R2 Uppity Spinner ALT
 
-**A community fork of [reeltwo/R2UppitySpinnerV3](https://github.com/reeltwo/R2UppitySpinnerV3) — the ESP32 firmware for the Uppity Spinner periscope lifter PCB.**
+**Firmware for the Uppity Spinner periscope board in an R2-D2 dome: the lifter that raises the
+periscope and the rotary that turns it.** Version 4 is a clean-sheet rewrite of the community
+fork of [reeltwo/R2UppitySpinnerV3](https://github.com/reeltwo/R2UppitySpinnerV3). It runs on
+the same board, with the same wiring, and accepts every `:P…` and `#P…` serial command v3 does.
+
+> **4.0.0-beta.1 is a beta.** It has been run end to end on one droid: Todd's, with a 19:1
+> lifter, Sabé and three WCBs. It has not yet run on a 6.3:1 or IA-Parts lifter, or on anyone
+> else's rotary. If you test it, please report what happened (see
+> [Reporting a problem](#reporting-a-problem)). For an event where you cannot afford surprises,
+> v3.6.0 is still the stable release, and you can go back to it at any time.
 
 [![Uppity Spinner Demo](https://i.vimeocdn.com/video/1153816619-d_640x360)](https://vimeo.com/558277516)
 
 ---
 
-## What Is This?
+## What v4 is about
 
-The [Uppity Spinner](https://astromech.net/forums/) is a community-designed PCB for R2-D2 builders that controls the periscope — the motorized pop-up that raises the dome's center section, rotates it, and lowers it back down. It runs on an ESP32 microcontroller, drives two TB9051FTG motor controllers (one for the lifter, one for the rotary), and accepts commands over serial (Marcduino protocol) or via a built-in WiFi web interface.
+The old firmware had two parts of the chip that could both drive the motors, blocking moves that
+froze everything else, and several different ideas of where "home" was. In September 2026 that
+cost a full day at an event and a periscope head that hit its frame. v4 is built so that cannot
+happen again:
 
-This fork started as a "hey, wouldn't it be cool if..." project while working through the real-world challenges of getting a periscope mechanism working reliably — tight tolerances, metal dome EMI, high-friction lead screws, and the general chaos of droid builds. After throwing the original codebase at Claude Code and asking a lot of questions, it turned into something worth sharing.
+- **One part of the firmware moves the motors.** The serial ports, the web page, the mesh,
+  stored sequences and random mode all ask; a single controller decides and drives. Anything can
+  *stop* the motors at any moment.
+- **The safety rules live in one place, and nothing gets around them.** The head never goes down
+  into the dome unless it is turned home. It never turns unless the mast is high enough to clear
+  the dome. If the firmware does not know where the mast is, it only allows upward moves until a
+  limit switch tells it.
+- **Heights are measured, never guessed.** Before the motors run for everyday use, commissioning
+  measures your lifter's travel, your rotary's ticks per turn, and the height at which *your*
+  head clears *your* dome, with you watching.
+- **E-STOP latches.** After an E-STOP from anywhere, nothing moves until you release it on
+  purpose.
+- **It is tested before it reaches the droid.** A simulated periscope runs the real control
+  code on a computer (235 tests), and every fault found on the bench became one of those tests.
 
-**This is a drop-in replacement for the stock firmware.** All original Marcduino serial commands are fully preserved. If you're already running the stock firmware, you can flash this and your existing sequences and wiring will work exactly as before.
+## What stays the same
 
----
+- The board and the wiring. No hardware changes. (The SD-card board variant is not supported;
+  stay on v3 for that one.)
+- Every `:P…` and `#P…` command and chaining with `:`, the board ID prefix, the light kit modes,
+  random mode (gentle, medium, aggressive), the three lifter motor profiles, expert mode for the
+  19:1, the trigger inputs, the status LED.
+- The board's own WiFi network and the web page at `http://192.168.4.1`.
 
-## What's Different
-
-### Redesigned Web Interface
-
-The web UI has been completely rebuilt as a responsive phone/tablet/desktop interface. Instead of the original static pages, you get a canvas joystick for lifter control, a rotary dial for rotation, live position feedback, and a dedicated Rescue page for manual recovery — all without needing a USB connection.
-
-The status bar has been expanded to six columns (Height / Rotation / Safety / Motors / Last Command / Firmware Version) so you can see at a glance what's going on — motor state, limit switches, last commands received, everything. Rotary position displays in degrees (0–359) rather than raw encoder ticks.
-
-### Rotary Homes Before Descent
-
-The `:PH` command now raises the periscope first, homes the rotary, *then* lowers — in that order. On the original firmware, it was possible to command a descent with the rotary in an arbitrary position, which can cause the periscope head to catch on tight dome panel openings on the way down. This sequence enforces safe geometry every time.
-
-### Three-Pass Rotary Homing
-
-Getting the rotary to land in exactly the same position repeatably is harder than it sounds. This fork uses a three-pass approach: an encoder-based move to get close, a slow creep until the limit switch triggers, then a back-off and re-approach at minimum speed for a clean, repeatable final position. The result is a rotary that homes accurately every single time rather than landing "somewhere near zero."
-
-### Pulsed Drive for Soft Stops
-
-All vertical motion uses a 3ms on / 1ms off pulse pattern throughout the move. Because a lead screw self-locks when power is cut, each pulse moves roughly one encoder tick and the mechanism brakes mechanically in the off period. This prevents the violent impacts at the limit switches that continuous-drive firmware causes when momentum builds up over a long travel — the mechanism slows itself down by physics, not just by a speed ramp.
-
-### Safe Random Mode — With Aggressiveness Levels
-
-Sending a bare `:PM` fires a randomized auto-sequence that cycles through 6 action types — raises, rotations, pauses, and combinations — all enforcing safe rotary height and homing as needed between moves. It's designed to run at events without operator intervention and without putting the mechanism in a state it can't recover from.
-
-Three aggressiveness levels (**Gentle / Medium / Aggressive**) scale lift speeds, rotary speeds, action mix, and inter-action delay so the same one command can read as a calm idle loop or a frantic alert. Set the global default on the Parameters page, or override per run from the web UI buttons or via `:PMG` / `:PMM` / `:PMA`. Rotary safety is enforced at every level — every descent still homes the rotary first regardless of aggressiveness.
-
-### E-STOP That Actually Stops
-
-In the original firmware, the web E-STOP (`/api/estop`) set an abort flag — but the rotary homing functions didn't check it, so the rotary would keep spinning through its full homing sequence even after you hit stop. This fork adds abort checks inside all movement loops so active seeks and rotations truly halt immediately. The abort flag is also cleared properly afterward so the next command isn't silently dropped.
-
-### Comprehensive Diagnostics
-
-A 60-second heartbeat logs the current state of limit switches, encoder positions, motor fault lines, and WiFi status — output to both USB serial and the web log page. When you're debugging a periscope that's misbehaving, having a running log of what the hardware thinks is happening is invaluable. Combined with the expanded web status bar, you can usually figure out what's wrong without pulling the dome.
-
----
-
-## Additional Reliability Improvements
-
-Beyond the headline features, several under-the-hood changes help in real-world builds:
-
-**Stall detection that works with slower motors.** The original stall detection requires a minimum encoder tick rate that slower motors at moderate power can fail to meet, causing false stall trips that corrupt position tracking over time. This fork replaces the tick-rate check with a position-change timeout — any movement resets the timer.
-
-**Breakaway boost for high-friction mechanisms.** Lead-screw lifters with tight belts or 3D-printed mounts can have significant static friction. This fork adds a short continuous-power burst at startup to break static friction before transitioning to the pulsed drive pattern. Short seeks skip it entirely.
-
-**EMI-resilient calibration.** Metal domes cause interference on encoder wires. During calibration, measured travel distance is validated against the stored value and implausible readings are rejected. Run calibration once with the dome off and the stored baseline is protected from future EMI corruption.
-
-**Encoder drift correction.** After a seek completes, the firmware periodically checks for drift and re-seeks if needed, giving up after three consecutive failures to avoid infinite retry loops.
-
-**Firmware version visible everywhere.** Shown in the serial boot banner, web status bar, `/api/status` JSON, and `#PCONFIG` output.
+The full command list is in [docs/COMMANDS.md](docs/COMMANDS.md).
 
 ---
 
 ## Hardware
 
-Same hardware as stock — no changes required from the standard Uppity Spinner PCB setup.
+- **Board:** the Uppity Spinner PCB with an ESP32-WROOM-32 (standard variant, not the SD-card one).
+- **Motor drivers:** two TB9051FTG, one for the lifter and one for the rotary.
+- **Lifter motor profiles** (`#PMOTOR`, or step 1 of commissioning):
 
-- **Microcontroller:** ESP32-WROOM-32 (dual-core: WiFi/web on Core 0, motor control on Core 1)
-- **Motor drivers:** Two TB9051FTG (lifter + rotary)
-- **Optional:** PCF8574 I2C GPIO expander (remaps limit switches to free ESP32 pins for SD card use)
+  | Profile | Typical travel | Notes |
+  |---|---|---|
+  | Pololu 4757, 6.3:1 | ~450 ticks | the original fast lifter |
+  | Pololu 4751, 19:1 | ~1,350 ticks | more torque for stiff lead screws; gentle at the top of travel |
+  | IA-Parts | ~845 ticks | |
 
-### Tested Lifter Mechanisms
+  The profile only sets starting values. Commissioning measures your lifter's real numbers.
+- **Rotary:** any of the usual motors. Builders' rotaries range from about 250 to 1,200 encoder
+  ticks per turn; commissioning measures yours.
+- **Recommended motors (Pololu):** 12 V [#4841](https://www.pololu.com/product/4841) lifter and
+  [#4847](https://www.pololu.com/product/4847) rotary; 6 V [#4801](https://www.pololu.com/product/4801)
+  and [#4807](https://www.pololu.com/product/4807).
 
-| Mechanism | Min Power | Seek-to-Bottom Power | Full Travel |
-|---|---|---|---|
-| Greg Hulette | 65% | 40% | ~450 ticks |
-| IA-Parts | 30% | 30% | ~845 ticks |
+For assembling the board from scratch, the original videos are still the best reference:
+[Part 1](https://www.youtube.com/watch?v=x4_3irdV4C8), [Part 2](https://www.youtube.com/watch?v=MdSRJsYx1T8).
 
-Both are auto-detected during calibration.
+---
 
-### Recommended Motors (Pololu)
+## Installing
 
-| Voltage | Lifter | Rotary |
+Download the release from the
+[Releases page](https://github.com/highfalutintodd/R2UppitySpinner_ALT/releases). The download
+has three ways in; `FLASHING.txt` inside it has the exact commands. Pick one:
+
+| Your board runs… | Use | Keeps settings? |
 |---|---|---|
-| 12V | [#4841](https://www.pololu.com/product/4841) | [#4847](https://www.pololu.com/product/4847) |
-| 6V | [#4801](https://www.pololu.com/product/4801) | [#4807](https://www.pololu.com/product/4807) |
+| v4 already | `…-update.bin`, from the page: **Setup → Firmware → Choose File → Upload** | yes |
+| v3 (3.x), and you want v4 to copy its settings | the four files in `upgrade-from-v3/`, over USB, each at the address in its name | v3's settings are copied once, then commissioning |
+| nothing yet, or you want a clean start | `…-full.bin`, over USB, at address `0x0` | no: everything is erased |
 
-6V motors give a snappier, faster periscope. 12V motors are slower and more deliberate.
+**USB flashing without installing anything:** Espressif's own page,
+[espressif.github.io/esptool-js](https://espressif.github.io/esptool-js/), works in Chrome or
+Edge. Connect, pick the board's port, add each file at its address, and press **Program**.
+(Command-line users: `esptool.py`, with the commands in `FLASHING.txt`.)
 
-**The 19:1 lifter motor ([Pololu #4751](https://www.pololu.com/product/4751)) is now a fully tested and supported option in v3.5.0.** Select it from the first-run setup wizard or with `#PMOTOR1`. It ships with its own tuned profile — 0.75 throttle ceiling, 700ms stall timeout, 15% top-of-travel soft-approach ramp — that prevents the frame stress the higher gear ratio would otherwise cause. The 19:1 trades top speed for substantially more torque, which is helpful on stiff or high-friction lifter mechanisms where a 6.3:1 motor struggles to break free of static friction.
+**Why the first install from v3 needs USB:** v4 is bigger than v3 and needs a different split of
+the board's flash. After that first USB install, every update goes through the page.
+
+**What v4 takes from v3:** on its first boot, v4 reads v3's saved settings once and keeps the
+ones it trusts (motor profile, minimum powers, a measured travel, a safe-spin height you set,
+the rotary's ticks per turn, drift, aggressiveness, expert mode). It prints a `V3 import: …`
+line for each, including the ones it skipped and why. It does **not** copy v3's stored
+sequences: list them on v3 first (`#PL`) and type them back in on v4.
+
+**Building it yourself:** the sketch is `UppityFirmware/`, pinned to the ESP32 Arduino core
+3.3.4 by `UppityFirmware/sketch.yaml`. In Arduino IDE 2.3 or later, pick the **uppity** profile.
+From the command line, in the repository folder:
+
+```
+arduino-cli compile --profile uppity UppityFirmware
+arduino-cli upload --profile uppity -p <your port> UppityFirmware
+```
+
+No extra libraries to install: the one v4 needs (WCB_Client, for the mesh) is in the sketch
+folder. `tools/release.sh` builds the same three sets of files the Releases page carries.
+
+(The v3 sketch, its `libraries/` and `menus/` folders are still in the repository root during
+the beta, for reference. They are not used by v4.)
 
 ---
 
-## Libraries Required
+## First-time setup
 
-**Important:** This fork requires a patched version of Reeltwo for ESP32 Arduino core 3.x / ESP-IDF v5.5 compatibility. All three required libraries are included in the `libraries/` folder of this repo — copy them to your Arduino `libraries/` folder (or symlink them).
+1. **Join the board's WiFi.** Its name is `R2Uppity-` followed by four characters from the
+   board's own address, for example `R2Uppity-1390`. The password is `Astromech`. Open
+   `http://192.168.4.1` (most phones open it by themselves).
+2. **Change that password.** Everyone who has read a README knows `Astromech`, so anyone near
+   your droid could join and drive the periscope. The page shows a warning banner until you do:
+   **Setup → WiFi**, the board's own network password (8 to 32 characters), then **Restart to
+   apply**, and join again with the new password. Set it
+   on the page, not in a serial monitor: monitors that log keep every line you type.
+3. **Commission the board** (**Setup → Commissioning → Start**). Until it is done, the board is
+   LOCKED and neither motor moves. The checklist remembers where you were through a page reload
+   or a power cycle, and an E-STOP pauses it. Seven steps:
 
-* **Reeltwo (patched)** — Core droid framework (WiFi, web server, OTA, SMQ remote)
-* **Adafruit NeoPixel** — RGB status LED
-* **PCF8574** — I2C GPIO expander (optional)
+   | Step | What happens |
+   |---|---|
+   | 1 Profile | pick the lifter motor profile and confirm the checklist |
+   | 2 Wiring check | the page shows each switch and the motor drivers live; it passes when nothing contradicts itself |
+   | 3 Lift test | the first motion: a slow creep **up** to the top switch |
+   | 4 Rotary | at the top, three slow turns to measure ticks per turn, then a home |
+   | 5 Calibration | bottom, top, bottom, top, bottom, measuring travel and how the lifter brakes |
+   | 6 Safe-spin height | the head turns 90° at the top; you lower it in small steps, watching, until it is just above where it would touch; the board stores that height plus a margin |
+   | 7 Acceptance | home, 0 %, 50 %, 100 %, home, and one gentle random action |
 
----
+   **Step 6 is the one that matters most.** It is the height above which the head may turn.
+   Do it with the dome on, the way the droid will run. Lower in small steps, and stop as soon as
+   anything looks close. Until it is set, the board treats only the very top as clear.
 
-## Getting Started
+   There is one bypass, at the bottom of the commissioning card, for an emergency at an event
+   ("Unlock without commissioning"). The motors then run on the profile's guesses, and only the
+   top counts as clear for turning the head.
 
-1. Wire the ESP32, motor drivers, encoders, and limit switches per the Uppity Spinner PCB documentation.
-2. Copy the three libraries from this repo's `libraries/` folder into your Arduino `libraries/` folder.
-3. Flash the firmware via USB (first time) or OTA (subsequent updates — see below).
-4. Connect to the WiFi access point: **SSID: `R2Uppity` / Password: `Astromech`**
-5. Open `http://192.168.4.1/` in a browser.
-6. Run calibration from the Setup page (or send `#PSC` over serial).
-
-Default serial baud rate: **9600**. Default I2C address: **0x20**.
-
----
-
-## Updating Firmware
-
-There are two ways to flash a new firmware version: **USB cable** (always works, ~1 minute) or **WiFi OTA** (no cable, but only reliable on stable WiFi).
-
-### Initial Jump from v3.5.0 → v3.5.2: Use USB
-
-**Important:** if you're currently running v3.5.0 (or earlier) and want to upgrade to v3.5.2, **flash via USB**. The OTA endpoint in v3.5.0 has been observed to stall mid-upload when the laptop is connected directly to the droid's `R2Uppity` access point — the upload page can sit at "please wait" indefinitely with no progress feedback or timeout. After a USB flash to v3.5.2, future OTA updates between v3.5.2 and later releases are more reliable because the upload UI in v3.5.2 provides progress reporting and clearer error states.
-
-**USB flash steps:**
-
-1. Open the sketch in Arduino IDE (or download a pre-compiled binary from the [Releases page](../../releases) and use [esptool](https://github.com/espressif/esptool) directly).
-2. Connect the ESP32 to your computer with a USB cable.
-3. Select the correct board and port in Arduino IDE.
-4. Click **Upload**. Takes about a minute.
-5. The device reboots into the new firmware automatically.
-
-USB flashing always works regardless of OTA endpoint state, and it's the recommended fallback any time OTA fails.
-
-### OTA Updates (v3.5.2 and Later)
-
-Once you're running v3.5.2 or later, you can update to subsequent releases over WiFi without a cable.
-
-1. **Download the `.bin` file** from the [Releases page](../../releases). Each release attaches a single file named like `R2UppitySpinnerV3-v3.5.2.bin`.
-2. **Connect to the periscope's WiFi.** SSID `R2Uppity`, password `Astromech` (or your configured network if you've set the droid up in station mode — see below).
-3. **Open the web UI** at `http://192.168.4.1/` (or your configured IP).
-4. **Navigate to Setup → Firmware.**
-5. **Choose File**, pick the `.bin` you downloaded, then click **Flash firmware**.
-6. Wait for the upload to complete and the device to reboot. Typical upload time is ~30 seconds for a small firmware.
-7. The firmware version in the status bar (bottom right) reflects the new version once it's back up.
-
-**No re-calibration needed** for routine updates — stored calibration, motor profile, and parameters all survive the flash. The one exception is when release notes explicitly call for it (e.g. enabling Expert Mode for the first time on a 19:1 lifter motor).
-
-### Station Mode Is More Reliable Than AP Mode for OTA
-
-OTA over the droid's own access point (`R2Uppity` SSID, AP mode) shares one ESP32 core between the WiFi radio, the HTTP server, and the flash writer. Under sustained load, that contention can stall the upload mid-stream. **OTA over your home WiFi (station mode) is significantly more reliable** because the home router handles wireless link management and your laptop keeps a stable connection.
-
-To switch the droid to station mode: open the web UI, **Setup → WiFi**, uncheck "Access point mode," enter your home network's SSID and password, save and reboot. The droid's IP on your home network will appear in your router's DHCP table or in the serial boot log.
-
-### If OTA Hangs
-
-If the firmware upload page sits at "please wait" for more than a few minutes:
-
-1. **Don't power-cycle yet** — the device may still be writing.
-2. **After 5 minutes with no progress**, you can safely power-cycle. The bootloader and any successfully-flashed sectors persist; the device will boot into either the old or new firmware (whichever was last written cleanly), but it won't be bricked.
-3. **Fall back to USB flashing** to recover. The OTA endpoint and the bootloader are independent — a stalled OTA never affects USB recovery.
-4. **Optionally report the failure** with details (which firmware version was running, AP vs station mode, browser, file size) via [GitHub Issues](../../issues) so the OTA path can be hardened.
-
-### For Builders (Producing the `.bin`)
-
-If you want to build your own `.bin` from source (or are publishing a release):
-
-1. Open the sketch in the Arduino IDE.
-2. Make sure the right ESP32 board and partition scheme are selected.
-3. **Sketch → Export Compiled Binary.** This produces several files in the sketch folder. **Use only `R2UppitySpinnerV3.ino.bin`** for OTA — that's the application binary. Ignore `merged.bin`, `bootloader.bin`, `partitions.bin`, `.elf`, and `.map`. Those are for first-time USB flashing or debugging.
-4. Optionally rename to something version-tagged, e.g. `R2UppitySpinnerV3-v3.5.2.bin`, and attach to a GitHub Release.
-
-### Test Branch Releases
-
-In-development features land on `vX.Y.Z-test` branches before they merge to `main`. Pre-built binaries are attached to releases tagged `vX.Y.Z-test-r1`, `-r2`, etc. Try them at your own risk — feedback welcome via GitHub Issues. The stable build is whatever's currently on `main`.
+4. **Optional: join your home WiFi** (**Setup → WiFi**). The board's own network stays up too, and
+   the page is then also at `http://uppity.local` or the address the board prints at boot.
 
 ---
 
-## Serial Command Reference
+## Everyday use
 
-All commands use the Marcduino protocol. Multiple commands can be chained with colons:
+**The web page** has four parts:
 
-```
-:PP100:W2:P0    ← raise, wait 2 seconds, lower
-```
+- **Operate:** up, down and the height presets; home and the rotary presets; random mode
+  (gentle, medium, aggressive), Stop, and the light kit modes.
+- **Setup:** commissioning, motor and calibration, tuning, the serial port, WiFi, the mesh,
+  firmware upload, and the light or dark theme.
+- **Diagnostics:** the switches and encoders live, the rotary test, the board's log, and the full
+  configuration in a form you can paste back.
+- **Rescue:** for a stuck periscope. A 60-second safety override, hold-to-jog for each motor, small
+  measured nudges, and "set home here".
 
-### Command Chain Ordering
+The **E-STOP** button is at the top of every page. After an E-STOP, the page shows a red banner
+and nothing moves until you press **Reset** there (or send `#PRESUME` over serial, or `&ESTOP,RESET`
+over the mesh). `:PX`, `?STOP`, `&ESTOP` and `&SABE,ESTOP` latch it from any serial port, even in
+the middle of a chain.
 
-The dispatcher runs chained commands sequentially, but blocking actions (seeks, rotations) hold up everything queued behind them. A few practical rules:
+**Serial control** is unchanged from v3: the command port runs at 9600 baud by default, the USB
+port at 115200. Lines starting `:P` move, lines starting `#P` configure or ask, and lines for other
+boards are ignored without a word. See [docs/COMMANDS.md](docs/COMMANDS.md).
 
-**Set lights before blocking motion, not after.** `:PL<n>` is the only command that doesn't auto-cancel random/move mode and that completes instantly (it just writes GPIO pins). Blocking commands like `:PP` (seek), `:PA` / `:PD` (rotate), and `:PH` (home) hold up everything queued behind them until the motion finishes — so chain lights ahead of the seek if you want them visible during the move.
+**Trigger inputs:** the three inputs, read as a number from 1 to 7, play the stored sequence with
+that number (`:PS1` … `:PS7`).
 
-```
-:PL5:PP100      ✓ lights change instantly, then lifter raises to 100%
-:PP100:PL5      ✓ but lights don't fire until the lifter finishes raising
-:PL5:PM         ✓ lights change instantly, then random mode starts
-:PL5:PMA        ✓ lights, then aggressive random
-:PM:PL5         ✓ random mode starts (non-blocking), lights change immediately after
-```
+**Updating:** **Setup → Firmware → Choose File** with the `…-update.bin` from a release, then
+**Upload**. The page refuses while a motor is running. (The board also answers `espota.py`, with
+the board's own network password as the update password.)
 
-**`:PH` turns off the light kit.** The home command explicitly clears the light kit (sends `kLightKit_Off`) before lowering, so any active light show ends when you home. If you want lights on after homing, send `:PH:W2:PL5` (home, wait, then re-light).
+---
 
-**`:PH` does not pre-empt an in-progress motion.** `:PH` and `:PM`'s random actions both run on the same microcontroller core, so a queued `:PH` waits until the current `seekToPosition` or rotation finishes before it starts homing. To interrupt mid-motion, use `:PX` (Emergency Stop) or the web UI's E-STOP button — both fire from outside the motor-control loop and pre-empt seeks immediately.
+## The WCB mesh (optional, off by default)
 
-### Emergency Stop — `:PX`
+If your droid uses Greg Hulette's [Wireless Communication Boards](https://github.com/greghulette/Wireless_Communication_Board-WCB),
+the periscope can join their ESP-NOW network as a board of its own (**Setup → Mesh**). Tested with
+WCB firmware 7.0.1; 6.2.0 or newer is required.
 
-`:PX` is a true serial ESTOP: it aborts any seek, rotation, or random action mid-flight, ends move mode, and stops both motors. Use it as the "panic" command from a controller during a scream / event when something is going haywire and you don't have time to load the web UI.
+**What it gives you:** the periscope sends `&PERI` heartbeats (state, height, angle, head home)
+every 10 seconds to every board, position updates and fault reports to your controller (board 20,
+for example Sabé), and it takes `:P` moves, E-STOPs and status questions sent to its board number.
+A board numbered above the WCBs' quantity works on WCB 7.0.1: the WCBs learn it from its
+announcements.
 
-Two paths get the same end result:
-- **The fast path** is automatic. The UART RX callback scans incoming bytes for the `:PX` signature on a separate task from the motor-control loop. The instant `:PX<CR>` or `:PX<LF>` is detected, it sets the abort flag — so an in-progress seek bails out immediately, the same way the web `/api/estop` does. This works on USB Serial **and** the Marcduino UART2 input (`PIN_RXD2`).
-- **The dispatcher path** runs after the abort already happened. It logs `ESTOP` to the serial monitor and clears any leftover state.
+**What it costs:** while the mesh is on, the board does not join your home WiFi. The page is then
+only on the board's own network, at `http://192.168.4.1`. Turning the mesh off brings everything
+back after a restart.
 
-Because `:PX` is a standard Marcduino-style command, you can wire it to a button on any controller that already speaks Marcduino — just bind the button to the string `:PX\r`. It can also live inside a stored sequence (`#PS9:PX`) for one-tap panic.
+**What the mesh may not do:** change settings, run commissioning, unlock, restart, or use the
+rescue override. Those come only from the USB port or the page. Every move from the mesh goes
+through the same safety rules as everything else.
 
-### Lifter / Rotary Commands
+**Setting it up:** copy the values from a WCB's `?BACKUP` listing: the octets (its `?MAC,2` and
+`?MAC,3` lines), the password (`?EPASS`), the quantity (`?WCBQ`) and the channel (`?WCBCH`).
+**Do not type those commands on a WCB to look a value up: on WCB firmware they change it.** Pick
+a board number nothing else uses, save, and restart. From a WCB's console, `;W5:PP100` then sends
+`:PP100` to board 5. On WCB 7.0.1, a `?STOP` typed on a WCB stays on that WCB; use `;W5&ESTOP` to
+stop the periscope.
 
-| Command | Description |
-|---|---|
-| `:PP<0-100>[,speed]` | Move lifter to position % (0 = down, 100 = up) |
-| `:PPR[,speed]` | Random position |
-| `:PH[speed]` | Home (raise, rotate to 0°, lower) |
-| `:PA<degrees>[,speed][,maxspeed]` | Rotate to absolute degrees |
-| `:PAR[,speed][,maxspeed]` | Random absolute rotation |
-| `:PD<degrees>[,speed][,maxspeed]` | Rotate relative degrees (+ = CCW, − = CW) |
-| `:PDR[,speed][,maxspeed]` | Random relative rotation |
-| `:PR<speed>` | Continuous spin (+ = CCW, − = CW; 0 = stop/home) |
-| `:PM[,liftSpd,rotSpd,minInt,maxInt]` | Safe random animation mode (uses default aggressiveness) |
-| `:PMG` / `:PMM` / `:PMA` | Random animation, one-shot Gentle / Medium / Aggressive override |
-| `:PX` | **Emergency stop** — aborts any in-progress motion (see below) |
-| `:PW[R]<seconds>` | Wait (R = randomize 1..N seconds) |
-| `:PL<0-7>` | Light kit mode |
-| `:PS<0-100>` | Play stored sequence |
+---
 
-### Configuration Commands
+## What changed from v3
 
-| Command | Description |
-|---|---|
-| `#PSC` | Run calibration |
-| `#PCONFIG` | Display full configuration (includes firmware version) |
-| `#PSTATUS` | Show WiFi/remote status |
-| `#PMOTOR<n>` | Query (no arg) or set lifter motor profile (0=6.3:1, 1=19:1, 2=IA-Parts) |
-| `#PAGGRESSION[<0-2>]` | Query or set default random aggressiveness (0=Gentle, 1=Medium, 2=Aggressive) |
-| `#PFACTORY` | Factory reset (clear all preferences and sequences) |
-| `#PS<n>:<seq>` | Store sequence (e.g. `#PS1:H`) |
-| `#PL` | List stored sequences |
-| `#PD<n>` | Delete sequence n |
-| `#PROTARYTEST[<1-10>]` | Measure the rotary drivetrain and home switch (default 3 revolutions) |
-| `#PDEBUG[0|1]` | Enable/disable verbose debug output |
-| `#PRESTART` | Reboot |
-
-### Example Stored Sequences
-
-```
-#PS1:H                              ← home
-#PS2:P100                           ← periscope up
-#PS3:P100:L5:R30                    ← searchlight, spin CCW
-#PS4:P100,100:L7:M,80,80,2,4       ← random fast with sparkle
-#PS5:P100:L7:M,50,40,5,5           ← random slow with sparkle
-#PS6:A0                             ← face forward
-#PS7:P100:L5:R-30                   ← searchlight, spin CW
-#PS8:H:P50:W2:P85,35:A90,25:W2:A270,20,100:W2:P100,100:L5:R50:W4:H  ← sneaky periscope
-```
+- **E-STOP latches** until it is released (above). A controller button that sends `:PX` needs a
+  second button that releases it, or the page's Reset.
+- **Every board is commissioned once.** The motors are locked until then (or until the bypass).
+- **No "safety maneuver" on the first command after power-up.** The board works out where the mast
+  is from the limit switches. If it cannot tell, it allows only upward moves until it can.
+- **`:PH` does not loop** raise, home, lower for a minute when the home switch is not found. It
+  stops raised, says why, and waits.
+- **A turned head stops at the safe-spin height** instead of going lower. A second descent is
+  refused until the head is home.
+- **Short moves move, and every move lands close to where it was sent.** The lifter brakes by the
+  speed it actually reached, using its own calibration.
+- **Dropped:** the SMQ Droid Remote and its OLED menus, RC/PPM input, the SD-card board variant,
+  Marcduino over WiFi (TCP port 2000), and the patched ReelTwo library.
+- **Not in this beta:** a sequence editor on the page. Stored sequences work as before, over
+  serial (`#PS…`).
 
 ---
 
 ## Troubleshooting
 
-**Periscope hesitates or stalls on startup** — If your lead screw has high static friction, check the serial output for `BREAKAWAY` messages. You should see Phase 1 (burst) and Phase 2 (ramp) completing. If it consistently times out, increase minimum power on the Parameters web page.
+**The page says LOCKED and nothing moves.** The board has not been commissioned (or its settings
+were erased). Run **Setup → Commissioning**.
 
-**Periscope won't lower** — The safety system blocks descent if the rotary isn't homed. Use the Rescue page's 3-second long-press safety override to bypass for 60 seconds.
+**Nothing moves and the page shows a red banner.** E-STOP is latched. Press **Reset**.
 
-**Erratic behavior with a metal dome** — Twist encoder and limit switch wires tightly and route them away from dome surfaces. The software mitigations (distance rejection, drift correction, position clamping) provide a second layer of protection, but good wiring is the foundation.
+**It refuses to go down.** The head may be turned, or the board cannot confirm it is home: the
+banner says which. **Home the head** (it rises first if it needs to), then lower.
 
-**Calibration distance seems wrong** — If the measured distance differs more than 20% from stored, it's automatically rejected. Run calibration with the dome removed to establish a clean baseline.
+**After power-up it only goes up.** The mast was somewhere between the switches, so the board does
+not know its height. Send it up once; the top switch tells it.
 
-**Light kit powers on but cycles through all modes and ignores `:PL<n>` commands** — If you're running the [drolsen r2-periscope-lighting](https://github.com/drolsen/r2-periscope-lighting) Pro Mini sketch, open `PeriscopeLightsCode.ino` and set `COMTYPE = 0` (ABC mode), then re-upload to the light kit. The Uppity Spinner only drives the light kit over the parallel ABC pins on the PCF8574 expander — it does not send serial commands to the light kit. In the sketch's default `COMTYPE = 1` (RX/TX) mode, the A and B pins are repurposed as serial lines, so the kit never sees the mode bits and falls back to auto-cycling through every sequence. The firmware will still print `LIGHT: <n>` on the serial monitor when you send `:PL<n>` because it's correctly writing the ABC pins — the kit just isn't listening on that interface.
+**The page is not at 192.168.4.1.** Check that your phone joined the board's own network, not your
+home WiFi. With the mesh on, the board is never on your home WiFi.
+
+**The light kit cycles through every mode and ignores `:PL<n>`.** If you run the
+[drolsen r2-periscope-lighting](https://github.com/drolsen/r2-periscope-lighting) sketch, set
+`COMTYPE = 0` (ABC mode) in `PeriscopeLightsCode.ino`. The board drives the light kit over the
+parallel A/B/C pins only.
+
+**Erratic readings with a metal dome.** Twist the encoder and switch wires and keep them away from
+the dome. Good wiring is the foundation; the software's checks are a second layer.
 
 ---
 
-## PCB Assembly Videos
+## Reporting a problem
 
-For builders starting from scratch, the original assembly walkthroughs are still the best reference:
+Open an [issue](https://github.com/highfalutintodd/R2UppitySpinner_ALT/issues) with:
 
-- [Part 1](https://www.youtube.com/watch?v=x4_3irdV4C8)
-- [Part 2](https://www.youtube.com/watch?v=MdSRJsYx1T8)
+- your lifter and rotary motors and mechanism, and what you did when it went wrong;
+- the board's log (**Diagnostics → Log**, or a serial monitor at 115200 from power-up);
+- the output of `#PSTATUS` and `#PCONFIG`. Passwords are never printed, so these are safe to share.
 
----
+## Going back to v3
 
-## Changelog
-
-### v3.6.0 — Rotary homing rebuilt around what the hardware can actually do
-
-Homing had become unreliable to the point where the periscope would not retract: a failed
-home blocks descent below the safe rotary height, so the mast parked at 66% and stayed
-there. Diagnosing it turned up several separate faults.
-
-**The home switch is a spherical cam.** A pointed set screw on the rotating head presses a
-ball bearing into a microswitch whose lever has been removed. Plunger depression peaks at
-the ball's apex and tapers off either side, so near the edges of the contact zone the switch
-sits right at its actuation threshold and chatters — around seven make/break events per
-pass. That is geometry, not a worn switch. It also means the switch only holds closed within
-a couple of encoder ticks of centre, which is **finer than the drivetrain's smallest
-movement** (a single pulse burst shifts the head 5–20 ticks).
-
-- **The switch is now an edge detector, not a resting state.** Homing succeeds when the
-  switch fires *while sweeping past it*; the encoder is zeroed at that moment and a
-  "homed" latch is set. "Are we at home?" is then answered from the encoder angle, which
-  measures 1184–1186 ticks/rev against a stored 1191 — inside 2%. Previously the code
-  demanded a live switch reading after stopping, which the mechanism cannot reliably give,
-  so good homes were thrown away. An un-homed droid still requires a real switch reading
-  before it will lower.
-- **The creep is closed-loop on the encoder.** It used to pulse 3ms on / 1ms off, which
-  produced 1–2 degrees per second on the test droid — the 10-second timeout expired after
-  about 10 degrees of arc and the switch was never reached. It now targets a fixed *angular*
-  step per pulse, derived from your own measured ticks-per-revolution, and adapts the pulse
-  width until it achieves it. **The rotary has no motor profile** (the `#PMOTOR` profiles are
-  lifter-only) and measured rotary revolutions across builds run from ~250 to 1191 ticks, so
-  nothing here is tuned to one droid.
-- **Home search gives up by distance, not by clock** — about 1.25 revolutions, so every
-  droid does the same amount of searching.
-- **Removed the "precision re-approach" third pass.** It backed off a home it had already
-  found and could not creep back, converting successes into failures.
-- **Pass 1 brakes instead of coasting**, so the head cannot drift off a switch it just
-  reached.
-- **Removed a hard-coded 1000-tick floor** on the rotary revolution count, present at five
-  sites. Builders whose rotary measures fewer than 1000 ticks/rev — one community build
-  measures ~250 — had the safety maneuver reject the reading as bad, retry, and abort. The
-  floor is now 100 ticks in one named constant.
-- **New `#PROTARYTEST[1-10]`.** Spins the head slowly and reports ticks per revolution and
-  its repeatability, the home switch's contact arc, raw contact-closure count, and whether
-  the creep step fits inside the contact window. **Run this first** if homing misbehaves.
-- **Command serial no longer trips over other boards' chatter.** Peers on the Marcduino bus
-  (SABE, Roam-A-Dome and similar) emit `&<NAME>,HB,...` heartbeats several times a second.
-  The old filter only ignored foreign bytes while the shared buffer was empty, so a
-  heartbeat arriving mid-command was appended to it — and its trailing carriage return then
-  executed whatever that produced. Foreign lines are now discarded whole, and the command
-  serial assembles into its own buffer so it can never mix with the console.
-- **Honest logs.** A failed home used to print `HOME (encoder only ...)`, which read like
-  success. Removed a leftover `ch: X [nn]` debug print that echoed every command byte.
-
-Verified on hardware: 21 consecutive homing attempts from a wide spread of starting angles,
-all successful, every retract reaching the bottom limit, including a sustained auto-mode
-soak at Medium and Aggressive.
-
-### v3.5.3 — Chained `:P*` commands actually run
-- **Chain dispatcher fix.** Chained Marcduino lifter commands past the first one were silently no-op'ing — `:PL7:PP100` set the lights but never raised the periscope, `:PP100:PL5` raised the periscope but never changed the lights, and so on for every `:PA`, `:PD`, `:PH`, `:PW` chained after a first command. Root cause: the chained-command path stripped only the leading `:` before dispatching, but the dispatcher's switch consumes the next character as the command letter — so the `P` in `:PP100` got eaten as the verb, and the parser then tried (and failed) to read `P100` as a position number. The fix mirrors the firstCommand path: skip `:P`, parse the optional ID, then dispatch. The bug had been present since the original upstream code; this fork's earlier "chain refactor" only touched the safety-maneuver pre-gate and didn't fix this part. Behavior change is strictly additive — chains that worked still work; chains that previously vanished now execute.
-- **README chain-rules examples** updated to match the fixed behavior. The old `:PM:PL5` ✗ example was reasoning from the broken dispatch path; replaced with examples that distinguish blocking motion (`:PP`/`:PA`/`:PD`/`:PH` — chained commands wait) from non-blocking move-mode start (`:PM` — chained commands fire immediately after).
-- **Fork attribution in the `.ino` header.** Added a `Forked by highfalutintodd` line beneath Mimir Reynisson's authorship line so builders flashing this fork don't think they're running upstream firmware. Mimir's authorship and the LGPL block are unchanged.
-
-### v3.5.2 — Expert mode for the 19:1 lifter
-- **Optional 100% throttle on the 19:1 motor.** The Pololu 4751 19:1 profile ships with `fMaxCommandedThrottle = 0.75` and a calibration sweep cap of 85%, both there to keep mid-bring-up frames from cracking under full power. A new opt-in **Expert Mode** toggle lifts both ceilings to 1.0 / 100% — but only when the active motor is the 19:1. For every other motor profile, the toggle is a no-op (and the Parameters card hides itself).
-- **Three control surfaces:** Parameters page checkbox (with a frame-damage `confirm()` modal on enable + a re-calibration banner that links to `/calibrate`), `#PEXPERT0` / `#PEXPERT1` Marcduino command (with the same warning text on serial), and `expert` field in the `/api/params` JSON. State persists to flash.
-- **Wizard creep deliberately untouched.** `wizardCreepToLimit` still uses the profile-safe 0.75 ceiling so the breakaway-friction-validation step the wizard relies on doesn't get unstable at 100%. Only the user-commanded motion path, calibration sweep, and aggressive-random upper bound respect Expert Mode.
-- **Graceful re-calibration.** Enabling Expert Mode without re-running calibration is safe — seeks above 85% just fall back to the highest calibrated slot (from the v3.5.0 Speed=100 fallback work). The web UI surfaces a yellow re-cal banner so it's not a silent step.
-
-### v3.5.1 — Serial ESTOP (`:PX`) + chain & web fixes
-- **Real mid-motion ESTOP from serial.** New `:PX` command aborts any in-flight seek, rotation, or random action and stops both motors. Detection runs in the UART RX callback (separate task from the motor-control loop), so it fires the abort flag the moment the bytes arrive — even while a `seekToPosition` is blocking. Works on USB Serial and on the Marcduino UART2 input.
-- Dispatcher-path `:PX` (e.g. inside a stored sequence) logs `ESTOP` and ends move mode for clean state.
-- Refactored serial reading: bytes now flow UART → onReceive callback → software FIFO → `loop()` dispatcher. The callback scans for `:PX<EOL>` with a 4-state machine and sets the existing `sWebAbort` flag the same way the web E-STOP does.
-- **Chain dispatcher: dropped the safety-maneuver pre-gate.** Previously, every chained-after-the-first command was gated on `sSafetyManeuver==true`, which meant chains like `:PL7:PP100:...` aborted on a fresh boot because `:PL` (lights) doesn't trigger the maneuver and the chained `:PP100` was rejected before it could. Motion handlers already call `ensureSafetyManeuver()` themselves, so the pre-gate was redundant — and it was incorrectly blocking non-motion chained commands like `:PL` and `:W`.
-- **Web E-STOP now actually stops calibration.** The calibration sweep ran nested loops; the inner break consumed `sWebAbort`, but the outer speed-sweep `for (...; sCalibrating && ...)` kept right on going. `serialAbort()` now also clears `sCalibrating` so all nested loops bail in the same pass.
-- **Desktop nav rendered server-side.** The sidebar nav was being built by inline JS only when `window.innerWidth>=1024`. When that script didn't fire (some browser/timing setups), desktop users got an empty sidebar and the bottom tab bar was hidden by CSS — so no visible nav at all. The sidebar HTML is now emitted by the firmware directly; CSS alone toggles between bottom tab bar (phone/tablet) and sidebar (desktop). No JS, no race.
-
-### v3.5.0 — Aggressiveness levels + Parameters page rebuild
-- **Selectable random aggressiveness.** The auto-move mode now has Gentle / Medium / Aggressive profiles that scale lift speed bands, rotary speed bands, action mix, and inter-action delay. Gentle skips the two highest-energy switch cases entirely. Rotary safety is preserved at every level — every descent path still homes the rotary first regardless of aggressiveness.
-- **Per-invocation overrides.** New `:PMG` / `:PMM` / `:PMA` Marcduino commands launch a one-shot run at the specified level without touching the global default. New Periscope-tab buttons (Gentle / Medium / Aggressive / Stop) call a `/api/movemode?level=g|m|a` endpoint.
-- **Global default in Preferences.** The Parameters page has a new Aggressiveness dropdown that sets what bare `:PM` and the "random (default)" web button use. Settable from serial via `#PAGGRESSION<n>` (0/1/2). Persisted to flash.
-- **Parameters page rebuilt.** Restyled to match the Calibrate / Periscope card layout — motor thresholds, safe-spin height (with "use current" capture), drift correction, rotary disable, aggressiveness, and load-defaults buttons all in one consistent UI. Backed by a new JSON `/api/params` + `/api/params/save` pair.
-- **Speed=100 no longer silently fails.** Seeks now fall back gracefully to the highest calibrated slot when the requested speed lands above the calibration sweep cap (e.g. requesting 100% on a 19:1 motor whose calibration intentionally tops out at 85%). The Periscope-tab lift speed slider also auto-caps to the active motor's `maxThrottle` so you can't slide past what the motor profile allows.
-- **Lifter direction invert** exposed in the web UI for builds where the lifter wiring runs in reverse.
-
-### v3.4.0 — Multi-motor support + first-run wizard
-- **19:1 lifter motor support.** Added user-selectable motor type (Pololu 4757 6.3:1 / Pololu 4751 19:1 / IA-Parts). Each motor ships with its own tuned profile: throttle ceiling, stall timeout, pulse timing, calibration sweep cap, soft-approach ramp. The 19:1 profile is locked at 0.75 throttle with a 700ms stall timeout and 15% top-of-travel ramp to prevent the frame damage Greg Hulette hit during early 19:1 bring-up.
-- **First-run setup wizard** (`/wizard`). Motion is gated until the builder walks through motor select → sensor check → low-power creep test → calibration → acceptance seeks. Existing calibrated installs auto-promote on boot so firmware upgrades don't force a re-calibration.
-- **`#PMOTOR<n>` Marcduino command** to query or switch motor type. `#PCONFIG` now reports active motor profile and wizard state.
-- Stall timeouts in calibration and seek-to-bottom paths now honor the active motor profile instead of hard-coded 2000ms.
-
-### v3.3.5 — Code-review fixes
-- Fixed duplicate `rotateHome()` call causing the rotary home-spam bug.
-- `volatile`-qualified `sRotaryCircleEncoderCount` to protect the cross-core read.
-- Widened stall-detect tick-rate math to int64 to prevent integer overflow on long-duration seeks.
-- ESTOP checks added inside rotary creep loops so `/api/estop` halts active homing sequences.
-- Snapshot `sRescueOverrideExpiry` before comparing to avoid torn cross-core reads.
-
-### v3.3.4 — Initial fork
-Baseline fork of reeltwo/R2UppitySpinnerV3. See "What's Different" above for the feature set.
+Flash v3.6.0 over USB the way you always did. v4 keeps its settings apart from v3's, so v3 finds
+its own where it left them.
 
 ---
 
 ## Credits
 
-Original firmware by [reeltwo / Skelmir](https://github.com/reeltwo/R2UppitySpinnerV3). This fork is maintained by [highfalutintodd](https://github.com/highfalutintodd) with contributions from the R2 Builders Club community.
-
----
+Original firmware by [reeltwo / Skelmir](https://github.com/reeltwo/R2UppitySpinnerV3). This fork is
+maintained by [highfalutintodd](https://github.com/highfalutintodd), with help from the R2 Builders
+Club community. The WCB mesh client is Greg Hulette's
+[WCBClient](https://github.com/greghulette/WCBClient) (MIT), included in `UppityFirmware/libs/`.
+History of every release: [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-LGPL-2.1 — see [LICENSE](LICENSE) for details.
+LGPL-2.1, see [LICENSE](LICENSE).

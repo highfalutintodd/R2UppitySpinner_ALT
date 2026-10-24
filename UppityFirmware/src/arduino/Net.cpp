@@ -46,7 +46,10 @@ bool Net::begin(const Deps& d) {
     WiFi.setSleep(false);
     WiFi.softAP(apSsid_, d_.settings->apPass, channel);
     bool defaultPass = std::strcmp(d_.settings->apPass, "Astromech") == 0;
+    apDefault_ = defaultPass;
     d_.console->printf("WIFI AP \"%s\" password %s -> http://%s  (http://%s.local)", apSsid_, defaultPass ? "\"Astromech\" (the default; #PAPPASS=<yours> to change)" : "<yours>", WiFi.softAPIP().toString().c_str(), kHost);
+    // Everyone has read the default in a README: at an event, anyone in range could join and drive the periscope.
+    if (defaultPass) d_.console->line("WIFI WARNING: the board's own network uses the published default password; anyone nearby can join it and drive the periscope. Set your own on the page: Setup -> WiFi (8-32 characters; takes effect after a restart).");
     WiFi.onEvent([](WiFiEvent_t ev, WiFiEventInfo_t info) {
         Net* n = gNetSelf; if (!n) return;
         switch (ev) {
@@ -279,7 +282,7 @@ void Net::handleState() {
 
 void Net::writeWifiJson(JsonWriter& j) {
     j.beginObject();
-    j.kv("ap", apSsid_); j.kv("clients", static_cast<int>(apClients_.load()));
+    j.kv("ap", apSsid_); j.kv("apDefault", apDefault_); j.kv("clients", static_cast<int>(apClients_.load()));
     uint8_t st = staState_.load();
     j.kv("sta", meshOn_ ? "mesh" : staSsid_[0] == '\0' ? "off" : st == 2 ? "up" : st == 1 ? "joining" : "down");
     j.kv("ssid", staSsid_);
