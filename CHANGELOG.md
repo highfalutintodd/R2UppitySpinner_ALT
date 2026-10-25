@@ -42,11 +42,12 @@ Nothing is copied from the v3 code or the ReelTwo library.
 Marcduino over WiFi (TCP 2000), PlatformIO and the reeltwo Makefile, the patched ReelTwo library.
 
 **Tested:** on one droid (19:1 inverted lifter, rotary about 1,185 ticks per turn, Sabé, three
-WCBs on 7.0.1) through the bench procedures in `docs/BENCH-PHASE1.md` … `BENCH-PHASE5.md`; 235
-host tests on a simulated periscope. **Not yet run on hardware:** the 6.3:1 and IA-Parts lifters,
-other builders' rotaries, the command serial port driven by another board, the trigger inputs, the
-same command arriving over the serial bus and the mesh, and a fresh-board install from the full
-image.
+WCBs on 7.0.1) through the bench procedures in `docs/BENCH-PHASE1.md` … `BENCH-PHASE5.md` and
+`BENCH-BETA.md`, the last including the command serial port driven by a WCB, the same command over
+the serial bus and the mesh (runs once), E-STOPs over the mesh from a WCB and from Sabé, and a
+fresh install from the full image followed by commissioning from scratch; 235 host tests on a
+simulated periscope. **Not yet run on hardware:** the 6.3:1 and IA-Parts lifters, other builders'
+rotaries, and the trigger inputs.
 
 **Known gaps:** no sequence editor on the page (stored sequences work over serial); v3's stored
 sequences are not copied.

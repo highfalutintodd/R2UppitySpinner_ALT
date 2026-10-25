@@ -32,7 +32,7 @@ the iPhone for the page, except in step 3, where the laptop joins `R2Uppity-1390
    (If it says the folder already exists, drag that folder to the Trash and run it again.)
 3. In a second Terminal window, the monitor (leave it running for the whole bench):
    ```
-   arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-beta-log.txt
+   arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee -a ~/Desktop/uppity-bench-beta-log.txt
    ```
    Opening it restarts the board, as usual.
 4. Upload the update file from the page, as a tester would. Join the **laptop** to `R2Uppity-1390`
@@ -160,7 +160,7 @@ without touching, but **844 is the lowest a turned head goes in this procedure.*
     *Success:* it writes 4 MB, verifies, and resets the board (`Hash of data verified`).
 18. **The monitor again**, with a new log file:
     ```
-    arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee ~/Desktop/uppity-bench-beta-fresh-log.txt
+    arduino-cli monitor -p /dev/cu.wchusbserial110 -c baudrate=115200 | tee -a ~/Desktop/uppity-bench-beta-fresh-log.txt
     ```
     *Success (the boot):* `SETTINGS=none (first boot of v4)`, `V3 import: no v3 settings in flash
     (nothing to take)`, a `CONFIG` line with `commissioned=0`, `WIFI AP "R2Uppity-1390" password "Astromech" (the
@@ -298,3 +298,39 @@ it moved; it did not happen again in the remaining ~14 minutes. What the firmwar
 **Not run yet:** Part 4 (the fresh install from the full image, then commissioning from scratch)
 and Part 5 (putting back the tuned numbers and the mesh, and the board's own WiFi password). Until
 Part 5 the board runs the mesh with the published default access-point password.
+
+## Results 2026-10-24 (evening), Parts 4-5: a fresh install on the droid (build 6bf45839, dome on)
+
+Both passed. The log is `uppity-bench-beta-fresh-log.txt` on Todd's Desktop; the pre-erase
+backup is `uppity-backup-before-erase-2026-10-24.txt` next to it.
+
+- **15, backup:** `#PCONFIG` and `#PCAL` saved before the erase (and copied to their own file,
+  because the monitor's `tee` had already emptied `uppity-bench-beta-log.txt` once that evening by
+  reusing its name; Parts 1-3 had been written up already).
+- **16-17, the full image:** the release's `…-full.bin` flashed at `0x0` and verified.
+- **18-19, a blank board:** `inverted=0 travel=1350 (profile guess) safespin=0 tpr=0.0
+  commissioned=0`, no calibration, `MESH=off`, `password "Astromech" (the default…)` with the
+  `WIFI WARNING` line; the iPhone showed the LOCKED and default-password banners.
+- **20, commissioning from scratch, all seven steps:**
+  - 1-2: profile 19:1 kept; **Flip** set `#PINVERT=1 (saved) (re-referenced from the limit switches)`.
+  - 3: creep up to the top switch (1151 ticks counted from the resting spot).
+  - 4: **1185.0 ticks/rev**, spread 0.2 %, contact arc 56, confident; home found.
+  - 5: **travel 1138**, spread 0.0 %, lowest power **25 % up / 15 % down**, **rest 37**.
+  - 6: head turned 90° at the top, override on; eight **Lower 3 %** (29-32 each, asked 34) to about
+    900, six **Lower 1 %** (10-11 each) to about 836 at the lowest, two **Raise 1 %** (+8 each) to
+    about 852, the head clearly clear throughout. That lowest point is about 8 under the 844 the
+    procedure gave as a floor, and some 36 above the ~800 the turned head reached without touching
+    on 2026-10-04. Stored **`SAFESPIN=886`** (measured 852 + 34 margin), 8 above the old 878.
+  - 7: home, 0 %, 50 % (rest 563 for 569), 100 %, home, one gentle random turn at the top;
+    `COMMISSIONED=2`, LOCKED → IDLE.
+- **21-24, put back:** `#PMINUP=50`, `#PMINDOWN=50`, `#PRANDOMLIGHT=7`, the eight mesh keys, WordNet
+  (stored for when the mesh is off) and the board's own password, all from the page except the
+  first three; one restart: `password <yours>`, no `WIFI WARNING`, `MESH=joined as id 5`, all four
+  boards online, no banners on the page.
+- **25, compare:** `#PCONFIG` against the backup differs only in the measured numbers (safe-spin
+  878 → 886, ticks/rev 1185.3 → 1185.0, travel 1137 → 1138) and `APPASS default` → `custom`.
+
+**The pre-beta bench is complete.** What it leaves for the record: the light lens scrape in Part 3
+(centring home with `#PHOMEOFFSET` is optional, not done), and that a turned head was lowered a few
+ticks past the procedure's floor in step 6 without contact. For later bench docs: start the monitor
+with `tee -a`, so a reused file name appends instead of emptying the file.
