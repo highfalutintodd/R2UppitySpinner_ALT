@@ -1,9 +1,12 @@
 # R2 Uppity Spinner ALT
 
 **Firmware for the Uppity Spinner periscope board in an R2-D2 dome: the lifter that raises the
-periscope and the rotary that turns it.** Version 4 is a clean-sheet rewrite of the community
-fork of [reeltwo/R2UppitySpinnerV3](https://github.com/reeltwo/R2UppitySpinnerV3). It runs on
-the same board, with the same wiring, and accepts every `:P…` and `#P…` serial command v3 does.
+periscope and the rotary that turns it.**
+
+**Version 4 is a clean-sheet rewrite.** It is written from scratch and no longer uses the
+ReelTwo library or any of the original code. It runs on the same board with the same wiring, and
+every `:P…` and `#P…` serial command from v3 still works, so your Marcduino sequences, Sabé
+buttons, WCB stored commands and DroidNet buttons carry over.
 
 > **4.0.0-beta.1 is a beta.** It has been run end to end on one droid: Todd's, with a 19:1
 > lifter, Sabé and three WCBs. It has not yet run on a 6.3:1 or IA-Parts lifter, or on anyone
@@ -11,31 +14,44 @@ the same board, with the same wiring, and accepts every `:P…` and `#P…` seri
 > [Reporting a problem](#reporting-a-problem)). For an event where you cannot afford surprises,
 > v3.6.0 is still the stable release, and you can go back to it at any time.
 
-[![Uppity Spinner Demo](https://i.vimeocdn.com/video/1153816619-d_640x360)](https://vimeo.com/558277516)
-
 ---
 
-## What v4 is about
+## What's in v4
 
-The old firmware had two parts of the chip that could both drive the motors, blocking moves that
-froze everything else, and several different ideas of where "home" was. In September 2026 that
-cost a full day at an event and a periscope head that hit its frame. v4 is built so that cannot
-happen again:
-
-- **One part of the firmware moves the motors.** The serial ports, the web page, the mesh,
-  stored sequences and random mode all ask; a single controller decides and drives. Anything can
-  *stop* the motors at any moment.
-- **The safety rules live in one place, and nothing gets around them.** The head never goes down
-  into the dome unless it is turned home. It never turns unless the mast is high enough to clear
-  the dome. If the firmware does not know where the mast is, it only allows upward moves until a
-  limit switch tells it.
-- **Heights are measured, never guessed.** Before the motors run for everyday use, commissioning
-  measures your lifter's travel, your rotary's ticks per turn, and the height at which *your*
-  head clears *your* dome, with you watching.
-- **E-STOP latches.** After an E-STOP from anywhere, nothing moves until you release it on
-  purpose.
-- **It is tested before it reaches the droid.** A simulated periscope runs the real control
-  code on a computer (235 tests), and every fault found on the bench became one of those tests.
+- **Safety built in, in one place.** The head is never lowered into the dome unless it is turned
+  home, and never turns below the height at which your head clears your dome. If the board does
+  not know where the mast is, it allows only upward moves until a limit switch tells it. Nothing
+  (a script, a stored sequence, the mesh, random mode) gets around these rules.
+- **A real E-STOP.** `:PX`, the page's E-STOP button, Sabé or the WCB mesh stop both motors at
+  once, even mid-sequence. The mast is braked to a stop rather than left to coast, and nothing
+  moves again until you release it on purpose.
+- **Commissioning measures your periscope.** A guided, seven-step setup measures your lifter's
+  travel, your rotary's ticks per turn, how your lifter brakes, and, with you watching, the
+  height at which your head clears your dome. Nothing is taken from a profile guess.
+- **A completely new web interface.** Four pages (Operate, Setup, Diagnostics and Rescue) that
+  work on a phone, with firmware updates from the page, live switches and encoders, the board's
+  log, and light or dark themes. Rescue has a 60-second safety override, hold-to-jog for each
+  motor, measured nudges and "set home here".
+- **WCB mesh membership (optional).** The periscope can join Greg Hulette's WCB network as a
+  board of its own: it takes moves, E-STOPs and status questions by board number, and sends its
+  height, angle, state and faults as `&PERI` messages that Sabé and DroidNet can show.
+- **More precise motion.** Every move brakes by the speed it actually reached, using your own
+  calibration, so short moves move and every move lands within a few ticks of where it was sent.
+  Homing is rebuilt around how the home switch really behaves, and learns your rotary's real
+  ticks per turn.
+- **The long-standing v3 problems are fixed**, among them:
+  - two parts of the chip that could both drive the motors at once;
+  - a web page that froze during moves, and an E-STOP the setup wizard could make unreachable;
+  - the rescue override that was cancelled a moment after you pressed it;
+  - four different ideas of where "home" was, and a failed home that re-zeroed the encoder;
+  - homing that looped for a minute when it could not find the switch;
+  - an E-STOP that a queued sequence step could undo;
+  - stored sequences that broke after their first step;
+  - `:PD` stopping at 180° and ignoring its speed;
+  - the lifter count starting at zero at power-up wherever the mast was;
+  - calibration that may never have been saved.
+- **Tested before it reaches the droid.** A simulated periscope runs the real control code on a
+  computer (235 tests), and every fault found on the bench became one of those tests.
 
 ## What stays the same
 
@@ -231,6 +247,14 @@ stop the periscope.
   Marcduino over WiFi (TCP port 2000), and the patched ReelTwo library.
 - **Not in this beta:** a sequence editor on the page. Stored sequences work as before, over
   serial (`#PS…`).
+
+### Why a rewrite
+
+v3 grew out of the original firmware and the ReelTwo library. Two parts of the chip could drive
+the motors at once, long moves blocked everything else, and there were several ideas of where
+"home" was. In September 2026 that cost a full day at an event, and each patch moved the problems
+somewhere else. v4 starts again on one principle: one part of the firmware drives the motors,
+anything can stop them, and the safety rules live in one place that nothing bypasses.
 
 ---
 
