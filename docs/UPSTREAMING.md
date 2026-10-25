@@ -31,6 +31,13 @@ PWMDecoder) and #19 (ServoDispatchPrivate) landed the other half of the local ES
 
 ## In flight / to do 🔜
 
+### 0. DroidNet catalog entry for 4.0.0-beta.1 → travisccook/Droidnet-Command-Library ([#13](https://github.com/travisccook/Droidnet-Command-Library/pull/13), opened 2026-10-24)
+
+The board file in `tools/droidnet/` (six v4 commands marked "(v4)", `:PX`/`:PH` renamed, `#PRC` kept
+as "v3 only", firmware `v4.0.0-beta.1`), library 4.6.0 → 4.7.0 with its version pins. Validator
+and 498 tests passed locally; waiting on Travis's CI and review. Sent from Todd's fork after it
+was synced with upstream (the GitHub CLI needed the `workflow` scope for that, granted by Todd).
+
 ### 1. `core/AnalogWrite.h` LEDC fix → reeltwo/Reeltwo (needs rework before PR)
 The local patch calls `ledcAttach` / pin-based `ledcChangeFrequency` **unconditionally**,
 which breaks pre-3.0 cores — can't land as-is against the maintainer's dual-path house
