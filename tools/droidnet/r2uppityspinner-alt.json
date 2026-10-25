@@ -1,6 +1,6 @@
 {
   "$schema": "droidnet-command-library/library/v1",
-  "generatedFrom": "Uppity Spinner ALT v4.0.0 (the clean-sheet rewrite, highfalutintodd/R2UppitySpinner_ALT); based on the community v3.5.3 entry",
+  "generatedFrom": "Uppity Spinner ALT v4.0.0-beta.1 (the clean-sheet rewrite, highfalutintodd/R2UppitySpinner_ALT); based on the community v3.5.3 entry",
   "enums": {
     "uppity.lightMode": {
       "label": "Light Kit Mode",
@@ -177,14 +177,14 @@
       "name": "R2 Uppity Spinner ALT (Periscope)",
       "kind": "device-native",
       "confidence": "community",
-      "firmware": "v4.0.0",
+      "firmware": "v4.0.0-beta.1",
       "routing": {
         "class": "broadcast",
         "nativeWrapper": "none",
         "durationSuffix": {
           "supported": false
         },
-        "notes": "v4: the same :P/#P grammar on the command serial (Marcduino bus), the USB console and, when the builder turns it on, the WCB mesh as its own client device (off by default). :PX, ?STOP and &ESTOP latch an E-STOP that only #PRESUME, the board's web page or &ESTOP,RESET releases. With the mesh on it sends &PERI,HB/POS/STATE/FAULT telemetry. Settings, unlocking and rescue commands are refused from the mesh; the bus refuses the rescue override."
+        "notes": "Every v3 :P/#P command keeps its syntax, so this entry also drives boards on v3.5.3 and later; the commands marked (v4) are new in 4.0, and RC mode is v3 only. v4: the same :P/#P grammar on the command serial (Marcduino bus), the USB console and, when the builder turns it on, the WCB mesh as its own client device (off by default). :PX, ?STOP and &ESTOP latch an E-STOP that only #PRESUME, the board's web page or &ESTOP,RESET releases. With the mesh on it sends &PERI,HB/POS/STATE/FAULT telemetry. Settings, unlocking and rescue commands are refused from the mesh; the bus refuses the rescue override."
       },
       "commands": [
         {
@@ -316,7 +316,7 @@
         },
         {
           "id": "uppity.estop",
-          "name": "Emergency Stop (latches until released)",
+          "name": "Emergency Stop (on v4 it latches until released)",
           "safety": "power",
           "encoder": "template",
           "template": ":PX",
@@ -906,6 +906,27 @@
           "category": "Config"
         },
         {
+          "id": "uppity.cfg.rc",
+          "name": "RC (PPM) Mode (v3 only)",
+          "safety": "config",
+          "encoder": "template",
+          "template": "#PRC{state}",
+          "params": [
+            {
+              "name": "state",
+              "enum": "uppity.onOff",
+              "required": true,
+              "default": "0"
+            }
+          ],
+          "examples": [
+            "#PRC0",
+            "#PRC1"
+          ],
+          "commentLabel": "Uppity RC mode (v3 only; v4 has no RC input and ignores it)",
+          "category": "Setup"
+        },
+        {
           "id": "uppity.cfg.rotaryToggle",
           "name": "Toggle Rotary Enabled (reboots)",
           "safety": "config",
@@ -985,7 +1006,7 @@
         },
         {
           "id": "uppity.cfg.resume",
-          "name": "Release E-STOP",
+          "name": "Release E-STOP (v4)",
           "category": "Power",
           "safety": "power",
           "encoder": "template",
@@ -998,7 +1019,7 @@
         },
         {
           "id": "uppity.cfg.state",
-          "name": "Report State",
+          "name": "Report State (v4)",
           "category": "Config",
           "safety": "cosmetic",
           "encoder": "template",
@@ -1011,7 +1032,7 @@
         },
         {
           "id": "uppity.cfg.clearFault",
-          "name": "Clear Fault",
+          "name": "Clear Fault (v4)",
           "category": "Power",
           "safety": "config",
           "encoder": "template",
@@ -1024,7 +1045,7 @@
         },
         {
           "id": "uppity.cfg.rotaryTest",
-          "name": "Rotary Test (measure ticks per turn, then home)",
+          "name": "Rotary Test (v4: measure ticks per turn, then home)",
           "category": "Setup",
           "safety": "movement",
           "encoder": "template",
@@ -1046,7 +1067,7 @@
         },
         {
           "id": "uppity.cfg.randomLight",
-          "name": "Light Kit During Random Mode",
+          "name": "Light Kit During Random Mode (v4)",
           "category": "Setup",
           "safety": "config",
           "encoder": "template",
@@ -1067,7 +1088,7 @@
         },
         {
           "id": "uppity.cfg.meshHeartbeat",
-          "name": "Mesh Heartbeat Period",
+          "name": "Mesh Heartbeat Period (v4)",
           "category": "Setup",
           "safety": "config",
           "encoder": "template",
